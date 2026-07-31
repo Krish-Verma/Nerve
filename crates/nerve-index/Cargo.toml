@@ -1,0 +1,24 @@
+[package]
+name = "nerve-index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nerve indexing pipeline: discovery, parsing, extraction, persistence."
+
+[dependencies]
+nerve-core.workspace = true
+nerve-store.workspace = true
+blake3.workspace = true
+ignore.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tree-sitter.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-typescript.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

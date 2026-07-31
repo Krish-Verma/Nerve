@@ -1,0 +1,24 @@
+[package]
+name = "nerve-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Nerve command-line interface."
+
+[[bin]]
+name = "nerve"
+path = "src/main.rs"
+
+[dependencies]
+nerve-core.workspace = true
+nerve-index.workspace = true
+nerve-store.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

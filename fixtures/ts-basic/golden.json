@@ -1,0 +1,3451 @@
+{
+  "schema_version": 1,
+  "project_id": "00000000000000000000000000000001",
+  "state_ids": [
+    "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+  ],
+  "entities": [
+    {
+      "entity_id": "class_b36d5b25a509533027d0b28f4aa5ba78",
+      "kind": "class",
+      "name": "Rectangle",
+      "scope_path": "",
+      "language": "typescript",
+      "meta": {
+        "abstract": false
+      }
+    },
+    {
+      "entity_id": "class_e6a17966045f2904b10d88a024130444",
+      "kind": "class",
+      "name": "Circle",
+      "scope_path": "",
+      "language": "typescript",
+      "meta": {
+        "abstract": false
+      }
+    },
+    {
+      "entity_id": "dir_1efbfad626d32cc292ed7126bc2d68a8",
+      "kind": "directory",
+      "name": "src",
+      "scope_path": "",
+      "language": null,
+      "meta": null
+    },
+    {
+      "entity_id": "file_08fd8a0c2a672361f4efbc25fbdb4be3",
+      "kind": "file",
+      "name": "widget.tsx",
+      "scope_path": "src",
+      "language": "tsx",
+      "meta": {
+        "extension": "tsx",
+        "size_bytes": 387
+      }
+    },
+    {
+      "entity_id": "file_093a0ef1927376b553a8cb9444a5605c",
+      "kind": "file",
+      "name": "math.ts",
+      "scope_path": "src",
+      "language": "typescript",
+      "meta": {
+        "extension": "ts",
+        "size_bytes": 466
+      }
+    },
+    {
+      "entity_id": "file_31d9cbb7875c8060bcce2f74d0e28e3f",
+      "kind": "file",
+      "name": "alias.ts",
+      "scope_path": "src",
+      "language": "typescript",
+      "meta": {
+        "extension": "ts",
+        "size_bytes": 380
+      }
+    },
+    {
+      "entity_id": "file_8f57922bdf7ac1696f9ba0e9d05b4690",
+      "kind": "file",
+      "name": "unresolved.ts",
+      "scope_path": "src",
+      "language": "typescript",
+      "meta": {
+        "extension": "ts",
+        "size_bytes": 236
+      }
+    },
+    {
+      "entity_id": "file_b563498c461b9be5abb75c9fa3160237",
+      "kind": "file",
+      "name": "index.ts",
+      "scope_path": "src",
+      "language": "typescript",
+      "meta": {
+        "extension": "ts",
+        "size_bytes": 215
+      }
+    },
+    {
+      "entity_id": "file_c831703cf2cd93c2f850df796fe5bc43",
+      "kind": "file",
+      "name": "legacy.cjs",
+      "scope_path": "src",
+      "language": "javascript",
+      "meta": {
+        "extension": "cjs",
+        "size_bytes": 180
+      }
+    },
+    {
+      "entity_id": "file_d128deded61d0b96f5c8057d9cee1ec1",
+      "kind": "file",
+      "name": "ambiguous.ts",
+      "scope_path": "src",
+      "language": "typescript",
+      "meta": {
+        "extension": "ts",
+        "size_bytes": 537
+      }
+    },
+    {
+      "entity_id": "file_f4aeb94e89c0bd88068c7f2c46326a88",
+      "kind": "file",
+      "name": "shapes.ts",
+      "scope_path": "src",
+      "language": "typescript",
+      "meta": {
+        "extension": "ts",
+        "size_bytes": 649
+      }
+    },
+    {
+      "entity_id": "fn_0b2a2184c63f5e9d6b5a094b5cf7d260",
+      "kind": "function",
+      "name": "Badge",
+      "scope_path": "",
+      "language": "tsx",
+      "meta": {
+        "async": false,
+        "form": "arrow",
+        "generator": false
+      }
+    },
+    {
+      "entity_id": "fn_20adac1f9e26875061d4cc9fda858529",
+      "kind": "function",
+      "name": "shared",
+      "scope_path": "outerA",
+      "language": "typescript",
+      "meta": {
+        "async": false,
+        "form": "declaration",
+        "generator": false
+      }
+    },
+    {
+      "entity_id": "fn_389cc1cd57b48cc3be17397545ed7875",
+      "kind": "function",
+      "name": "outerB",
+      "scope_path": "",
+      "language": "typescript",
+      "meta": {
+        "async": false,
+        "form": "declaration",
+        "generator": false
+      }
+    },
+    {
+      "entity_id": "fn_47c496811eec5ab4226c6c3c4dfdfae7",
+      "kind": "function",
+      "name": "shared",
+      "scope_path": "outerB",
+      "language": "typescript",
+      "meta": {
+        "async": false,
+        "form": "declaration",
+        "generator": false
+      }
+    },
+    {
+      "entity_id": "fn_58962e68008f88e68f8f3eb6595b4620",
+      "kind": "function",
+      "name": "scale",
+      "scope_path": "",
+      "language": "typescript",
+      "meta": {
+        "async": false,
+        "form": "arrow",
+        "generator": false
+      }
+    },
+    {
+      "entity_id": "fn_7f3775539da31f2e3b22e4f24427e0dd",
+      "kind": "function",
+      "name": "loadDynamic",
+      "scope_path": "",
+      "language": "typescript",
+      "meta": {
+        "async": true,
+        "form": "declaration",
+        "generator": false
+      }
+    },
+    {
+      "entity_id": "fn_85333468a781d0a247edd8b97eb1a81c",
+      "kind": "function",
+      "name": "marker",
+      "scope_path": "",
+      "language": "typescript",
+      "meta": {
+        "async": false,
+        "form": "arrow",
+        "generator": false
+      }
+    },
+    {
+      "entity_id": "fn_9ec9f6f7c019d625d7a693a32ad174e1",
+      "kind": "function",
+      "name": "add",
+      "scope_path": "",
+      "language": "typescript",
+      "meta": {
+        "async": false,
+        "form": "declaration",
+        "generator": false
+      }
+    },
+    {
+      "entity_id": "fn_a253d3637b01fea45e3d396c8a5071e9",
+      "kind": "function",
+      "name": "normalize",
+      "scope_path": "add",
+      "language": "typescript",
+      "meta": {
+        "async": false,
+        "form": "declaration",
+        "generator": false
+      }
+    },
+    {
+      "entity_id": "fn_b050a5fddfa23c8c7d0076dea4fff3ed",
+      "kind": "function",
+      "name": "legacyAdd",
+      "scope_path": "",
+      "language": "javascript",
+      "meta": {
+        "async": false,
+        "form": "declaration",
+        "generator": false
+      }
+    },
+    {
+      "entity_id": "fn_bf6afcee6a437be0849dfe8bd010185c",
+      "kind": "function",
+      "name": "Widget",
+      "scope_path": "",
+      "language": "tsx",
+      "meta": {
+        "async": false,
+        "form": "declaration",
+        "generator": false
+      }
+    },
+    {
+      "entity_id": "fn_c943de2f6352af22ab0299a41078ff59",
+      "kind": "function",
+      "name": "outerA",
+      "scope_path": "",
+      "language": "typescript",
+      "meta": {
+        "async": false,
+        "form": "declaration",
+        "generator": false
+      }
+    },
+    {
+      "entity_id": "fn_f0b1d3743c1a2120253dc366692bd370",
+      "kind": "function",
+      "name": "subtract",
+      "scope_path": "",
+      "language": "typescript",
+      "meta": {
+        "async": false,
+        "form": "declaration",
+        "generator": false
+      }
+    },
+    {
+      "entity_id": "fn_f99df30a291443b5b821293bfa15d1a3",
+      "kind": "function",
+      "name": "describe",
+      "scope_path": "",
+      "language": "typescript",
+      "meta": {
+        "async": false,
+        "form": "declaration",
+        "generator": false
+      }
+    },
+    {
+      "entity_id": "iface_acc9b2253ef76dd50dd0c194fbc5d885",
+      "kind": "interface",
+      "name": "WidgetProps",
+      "scope_path": "",
+      "language": "tsx",
+      "meta": null
+    },
+    {
+      "entity_id": "iface_cb09ace77fb8c70e18f02bd8680eceec",
+      "kind": "interface",
+      "name": "Shape",
+      "scope_path": "",
+      "language": "typescript",
+      "meta": null
+    },
+    {
+      "entity_id": "meth_14736beebe0b2f7bbb511aff36c49b39",
+      "kind": "method",
+      "name": "constructor",
+      "scope_path": "Circle",
+      "language": "typescript",
+      "meta": {
+        "accessor": null,
+        "async": false,
+        "generator": false,
+        "static": false
+      }
+    },
+    {
+      "entity_id": "meth_55a07d83cb2f89a1eb4383422ea428f6",
+      "kind": "method",
+      "name": "constructor",
+      "scope_path": "Rectangle",
+      "language": "typescript",
+      "meta": {
+        "accessor": null,
+        "async": false,
+        "generator": false,
+        "static": false
+      }
+    },
+    {
+      "entity_id": "meth_73d3b7e1ffd74bb0ed5450b15daa50e9",
+      "kind": "method",
+      "name": "unit",
+      "scope_path": "Rectangle",
+      "language": "typescript",
+      "meta": {
+        "accessor": null,
+        "async": false,
+        "generator": false,
+        "static": true
+      }
+    },
+    {
+      "entity_id": "meth_8fecc1c93a40303cc76559dbb1707cca",
+      "kind": "method",
+      "name": "diameter",
+      "scope_path": "Circle",
+      "language": "typescript",
+      "meta": {
+        "accessor": "get",
+        "async": false,
+        "generator": false,
+        "static": false
+      }
+    },
+    {
+      "entity_id": "meth_ed3110c8617b46490aaa5109553083dd",
+      "kind": "method",
+      "name": "area",
+      "scope_path": "Circle",
+      "language": "typescript",
+      "meta": {
+        "accessor": null,
+        "async": false,
+        "generator": false,
+        "static": false
+      }
+    },
+    {
+      "entity_id": "meth_f3478550712739850e546a409cf93006",
+      "kind": "method",
+      "name": "area",
+      "scope_path": "Rectangle",
+      "language": "typescript",
+      "meta": {
+        "accessor": null,
+        "async": false,
+        "generator": false,
+        "static": false
+      }
+    },
+    {
+      "entity_id": "mod_249b60f7e35bf5c10195993743279755",
+      "kind": "module",
+      "name": "shapes",
+      "scope_path": "src/shapes.ts",
+      "language": "typescript",
+      "meta": null
+    },
+    {
+      "entity_id": "mod_465b915e095cd370e398e63489ebe224",
+      "kind": "module",
+      "name": "legacy",
+      "scope_path": "src/legacy.cjs",
+      "language": "javascript",
+      "meta": null
+    },
+    {
+      "entity_id": "mod_4acce59af08bd58a6d0687ec9e1e5dcd",
+      "kind": "module",
+      "name": "ambiguous",
+      "scope_path": "src/ambiguous.ts",
+      "language": "typescript",
+      "meta": null
+    },
+    {
+      "entity_id": "mod_4bafedf0d918805b26d034cfbfe6baf3",
+      "kind": "module",
+      "name": "math",
+      "scope_path": "src/math.ts",
+      "language": "typescript",
+      "meta": null
+    },
+    {
+      "entity_id": "mod_8cab9cd9ce41e98fd4200c247d9f3de6",
+      "kind": "module",
+      "name": "index",
+      "scope_path": "src/index.ts",
+      "language": "typescript",
+      "meta": null
+    },
+    {
+      "entity_id": "mod_c3e1cd844def58e0c48c4d9f931ba95c",
+      "kind": "module",
+      "name": "alias",
+      "scope_path": "src/alias.ts",
+      "language": "typescript",
+      "meta": null
+    },
+    {
+      "entity_id": "mod_f537453124856723aba1a8ba1cd91e0e",
+      "kind": "module",
+      "name": "unresolved",
+      "scope_path": "src/unresolved.ts",
+      "language": "typescript",
+      "meta": null
+    },
+    {
+      "entity_id": "mod_f932b9147299e74fa13c2cccf06e1ac5",
+      "kind": "module",
+      "name": "widget",
+      "scope_path": "src/widget.tsx",
+      "language": "tsx",
+      "meta": null
+    },
+    {
+      "entity_id": "repo_9eeb898e10b377b2d7ff980634eca1b4",
+      "kind": "repository",
+      "name": ".",
+      "scope_path": "",
+      "language": null,
+      "meta": null
+    },
+    {
+      "entity_id": "unres_7208b6348dc934f9eda9d8420d2f13c9",
+      "kind": "unresolved",
+      "name": "./does-not-exist",
+      "scope_path": "src/unresolved.ts",
+      "language": null,
+      "meta": {
+        "importer": "src/unresolved.ts",
+        "raw_specifier": "./does-not-exist",
+        "reason": "relative specifier does not name an indexed file"
+      }
+    },
+    {
+      "entity_id": "unres_8c42e9ecc53522e94cd4273c1483e793",
+      "kind": "unresolved",
+      "name": "some-external-pkg",
+      "scope_path": "src/unresolved.ts",
+      "language": null,
+      "meta": {
+        "importer": "src/unresolved.ts",
+        "raw_specifier": "some-external-pkg",
+        "reason": "non-relative specifier; Slice 1 resolves relative paths only"
+      }
+    }
+  ],
+  "occurrences": [
+    {
+      "entity_id": "class_b36d5b25a509533027d0b28f4aa5ba78",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_byte": 192,
+      "end_byte": 432,
+      "start_line": 8,
+      "start_col": 7,
+      "end_line": 21,
+      "end_col": 1,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5"
+    },
+    {
+      "entity_id": "class_e6a17966045f2904b10d88a024130444",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_byte": 441,
+      "end_byte": 648,
+      "start_line": 23,
+      "start_col": 7,
+      "end_line": 33,
+      "end_col": 1,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5"
+    },
+    {
+      "entity_id": "file_08fd8a0c2a672361f4efbc25fbdb4be3",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/widget.tsx",
+      "start_byte": 0,
+      "end_byte": 387,
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 19,
+      "end_col": 0,
+      "content_hash": "4e37e9eb7adf88200fec61895961f4e096594ef575338e01af8035f32e1ee713"
+    },
+    {
+      "entity_id": "file_093a0ef1927376b553a8cb9444a5605c",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/math.ts",
+      "start_byte": 0,
+      "end_byte": 466,
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 17,
+      "end_col": 0,
+      "content_hash": "ce198a6ed4f95405c040b795200980fed6f7edf14c7b6498d3ac5c17bc9d18c7"
+    },
+    {
+      "entity_id": "file_31d9cbb7875c8060bcce2f74d0e28e3f",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/alias.ts",
+      "start_byte": 0,
+      "end_byte": 380,
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 12,
+      "end_col": 0,
+      "content_hash": "2e3f28fcff33612266eabd2f2d68ee8dd2f37a942914b62a41c5eba28dd78494"
+    },
+    {
+      "entity_id": "file_8f57922bdf7ac1696f9ba0e9d05b4690",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/unresolved.ts",
+      "start_byte": 0,
+      "end_byte": 236,
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 8,
+      "end_col": 0,
+      "content_hash": "c3cce3e54228761410ef1f0a114b0ff5443bddbab4776a692ac4c383979fd041"
+    },
+    {
+      "entity_id": "file_b563498c461b9be5abb75c9fa3160237",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/index.ts",
+      "start_byte": 0,
+      "end_byte": 215,
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 6,
+      "end_col": 0,
+      "content_hash": "6e87e6c768bb78dbb305dae519d1b518a2048a7ccc07f727baf0e9c35295aeef"
+    },
+    {
+      "entity_id": "file_c831703cf2cd93c2f850df796fe5bc43",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/legacy.cjs",
+      "start_byte": 0,
+      "end_byte": 180,
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 10,
+      "end_col": 0,
+      "content_hash": "ca9149b317e25027fbed66873d4f3624ff231ca961845edc0edfa3efe9e46e90"
+    },
+    {
+      "entity_id": "file_d128deded61d0b96f5c8057d9cee1ec1",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/ambiguous.ts",
+      "start_byte": 0,
+      "end_byte": 537,
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 22,
+      "end_col": 0,
+      "content_hash": "057f5b3dd253377649777d8056166e73b8b83dfcd2c826f8eebcb4ef853a2ab0"
+    },
+    {
+      "entity_id": "file_f4aeb94e89c0bd88068c7f2c46326a88",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_byte": 0,
+      "end_byte": 649,
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 34,
+      "end_col": 0,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5"
+    },
+    {
+      "entity_id": "fn_0b2a2184c63f5e9d6b5a094b5cf7d260",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/widget.tsx",
+      "start_byte": 323,
+      "end_byte": 385,
+      "start_line": 18,
+      "start_col": 13,
+      "end_line": 18,
+      "end_col": 75,
+      "content_hash": "4e37e9eb7adf88200fec61895961f4e096594ef575338e01af8035f32e1ee713"
+    },
+    {
+      "entity_id": "fn_20adac1f9e26875061d4cc9fda858529",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/ambiguous.ts",
+      "start_byte": 257,
+      "end_byte": 304,
+      "start_line": 6,
+      "start_col": 2,
+      "end_line": 8,
+      "end_col": 3,
+      "content_hash": "057f5b3dd253377649777d8056166e73b8b83dfcd2c826f8eebcb4ef853a2ab0"
+    },
+    {
+      "entity_id": "fn_389cc1cd57b48cc3be17397545ed7875",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/ambiguous.ts",
+      "start_byte": 334,
+      "end_byte": 432,
+      "start_line": 12,
+      "start_col": 7,
+      "end_line": 17,
+      "end_col": 1,
+      "content_hash": "057f5b3dd253377649777d8056166e73b8b83dfcd2c826f8eebcb4ef853a2ab0"
+    },
+    {
+      "entity_id": "fn_47c496811eec5ab4226c6c3c4dfdfae7",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/ambiguous.ts",
+      "start_byte": 364,
+      "end_byte": 411,
+      "start_line": 13,
+      "start_col": 2,
+      "end_line": 15,
+      "end_col": 3,
+      "content_hash": "057f5b3dd253377649777d8056166e73b8b83dfcd2c826f8eebcb4ef853a2ab0"
+    },
+    {
+      "entity_id": "fn_58962e68008f88e68f8f3eb6595b4620",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/math.ts",
+      "start_byte": 378,
+      "end_byte": 443,
+      "start_line": 14,
+      "start_col": 13,
+      "end_line": 14,
+      "end_col": 78,
+      "content_hash": "ce198a6ed4f95405c040b795200980fed6f7edf14c7b6498d3ac5c17bc9d18c7"
+    },
+    {
+      "entity_id": "fn_7f3775539da31f2e3b22e4f24427e0dd",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/ambiguous.ts",
+      "start_byte": 441,
+      "end_byte": 536,
+      "start_line": 19,
+      "start_col": 7,
+      "end_line": 21,
+      "end_col": 1,
+      "content_hash": "057f5b3dd253377649777d8056166e73b8b83dfcd2c826f8eebcb4ef853a2ab0"
+    },
+    {
+      "entity_id": "fn_85333468a781d0a247edd8b97eb1a81c",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/unresolved.ts",
+      "start_byte": 191,
+      "end_byte": 234,
+      "start_line": 7,
+      "start_col": 13,
+      "end_line": 7,
+      "end_col": 56,
+      "content_hash": "c3cce3e54228761410ef1f0a114b0ff5443bddbab4776a692ac4c383979fd041"
+    },
+    {
+      "entity_id": "fn_9ec9f6f7c019d625d7a693a32ad174e1",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/math.ts",
+      "start_byte": 101,
+      "end_byte": 282,
+      "start_line": 3,
+      "start_col": 7,
+      "end_line": 8,
+      "end_col": 1,
+      "content_hash": "ce198a6ed4f95405c040b795200980fed6f7edf14c7b6498d3ac5c17bc9d18c7"
+    },
+    {
+      "entity_id": "fn_a253d3637b01fea45e3d396c8a5071e9",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/math.ts",
+      "start_byte": 148,
+      "end_byte": 242,
+      "start_line": 4,
+      "start_col": 2,
+      "end_line": 6,
+      "end_col": 3,
+      "content_hash": "ce198a6ed4f95405c040b795200980fed6f7edf14c7b6498d3ac5c17bc9d18c7"
+    },
+    {
+      "entity_id": "fn_b050a5fddfa23c8c7d0076dea4fff3ed",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/legacy.cjs",
+      "start_byte": 93,
+      "end_byte": 146,
+      "start_line": 5,
+      "start_col": 0,
+      "end_line": 7,
+      "end_col": 1,
+      "content_hash": "ca9149b317e25027fbed66873d4f3624ff231ca961845edc0edfa3efe9e46e90"
+    },
+    {
+      "entity_id": "fn_bf6afcee6a437be0849dfe8bd010185c",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/widget.tsx",
+      "start_byte": 172,
+      "end_byte": 308,
+      "start_line": 10,
+      "start_col": 7,
+      "end_line": 16,
+      "end_col": 1,
+      "content_hash": "4e37e9eb7adf88200fec61895961f4e096594ef575338e01af8035f32e1ee713"
+    },
+    {
+      "entity_id": "fn_c943de2f6352af22ab0299a41078ff59",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/ambiguous.ts",
+      "start_byte": 227,
+      "end_byte": 325,
+      "start_line": 5,
+      "start_col": 7,
+      "end_line": 10,
+      "end_col": 1,
+      "content_hash": "057f5b3dd253377649777d8056166e73b8b83dfcd2c826f8eebcb4ef853a2ab0"
+    },
+    {
+      "entity_id": "fn_f0b1d3743c1a2120253dc366692bd370",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/math.ts",
+      "start_byte": 291,
+      "end_byte": 363,
+      "start_line": 10,
+      "start_col": 7,
+      "end_line": 12,
+      "end_col": 1,
+      "content_hash": "ce198a6ed4f95405c040b795200980fed6f7edf14c7b6498d3ac5c17bc9d18c7"
+    },
+    {
+      "entity_id": "fn_f99df30a291443b5b821293bfa15d1a3",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/alias.ts",
+      "start_byte": 202,
+      "end_byte": 379,
+      "start_line": 7,
+      "start_col": 7,
+      "end_line": 11,
+      "end_col": 1,
+      "content_hash": "2e3f28fcff33612266eabd2f2d68ee8dd2f37a942914b62a41c5eba28dd78494"
+    },
+    {
+      "entity_id": "iface_acc9b2253ef76dd50dd0c194fbc5d885",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/widget.tsx",
+      "start_byte": 105,
+      "end_byte": 163,
+      "start_line": 5,
+      "start_col": 7,
+      "end_line": 8,
+      "end_col": 1,
+      "content_hash": "4e37e9eb7adf88200fec61895961f4e096594ef575338e01af8035f32e1ee713"
+    },
+    {
+      "entity_id": "iface_cb09ace77fb8c70e18f02bd8680eceec",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_byte": 146,
+      "end_byte": 183,
+      "start_line": 4,
+      "start_col": 7,
+      "end_line": 6,
+      "end_col": 1,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5"
+    },
+    {
+      "entity_id": "meth_14736beebe0b2f7bbb511aff36c49b39",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_byte": 475,
+      "end_byte": 514,
+      "start_line": 24,
+      "start_col": 2,
+      "end_line": 24,
+      "end_col": 41,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5"
+    },
+    {
+      "entity_id": "meth_55a07d83cb2f89a1eb4383422ea428f6",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_byte": 229,
+      "end_byte": 303,
+      "start_line": 9,
+      "start_col": 2,
+      "end_line": 12,
+      "end_col": 6,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5"
+    },
+    {
+      "entity_id": "meth_73d3b7e1ffd74bb0ed5450b15daa50e9",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_byte": 368,
+      "end_byte": 430,
+      "start_line": 18,
+      "start_col": 2,
+      "end_line": 20,
+      "end_col": 3,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5"
+    },
+    {
+      "entity_id": "meth_8fecc1c93a40303cc76559dbb1707cca",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_byte": 590,
+      "end_byte": 646,
+      "start_line": 30,
+      "start_col": 2,
+      "end_line": 32,
+      "end_col": 3,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5"
+    },
+    {
+      "entity_id": "meth_ed3110c8617b46490aaa5109553083dd",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_byte": 518,
+      "end_byte": 586,
+      "start_line": 26,
+      "start_col": 2,
+      "end_line": 28,
+      "end_col": 3,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5"
+    },
+    {
+      "entity_id": "meth_f3478550712739850e546a409cf93006",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_byte": 307,
+      "end_byte": 364,
+      "start_line": 14,
+      "start_col": 2,
+      "end_line": 16,
+      "end_col": 3,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5"
+    },
+    {
+      "entity_id": "mod_249b60f7e35bf5c10195993743279755",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_byte": 0,
+      "end_byte": 649,
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 34,
+      "end_col": 0,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5"
+    },
+    {
+      "entity_id": "mod_465b915e095cd370e398e63489ebe224",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/legacy.cjs",
+      "start_byte": 0,
+      "end_byte": 180,
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 10,
+      "end_col": 0,
+      "content_hash": "ca9149b317e25027fbed66873d4f3624ff231ca961845edc0edfa3efe9e46e90"
+    },
+    {
+      "entity_id": "mod_4acce59af08bd58a6d0687ec9e1e5dcd",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/ambiguous.ts",
+      "start_byte": 0,
+      "end_byte": 537,
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 22,
+      "end_col": 0,
+      "content_hash": "057f5b3dd253377649777d8056166e73b8b83dfcd2c826f8eebcb4ef853a2ab0"
+    },
+    {
+      "entity_id": "mod_4bafedf0d918805b26d034cfbfe6baf3",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/math.ts",
+      "start_byte": 0,
+      "end_byte": 466,
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 17,
+      "end_col": 0,
+      "content_hash": "ce198a6ed4f95405c040b795200980fed6f7edf14c7b6498d3ac5c17bc9d18c7"
+    },
+    {
+      "entity_id": "mod_8cab9cd9ce41e98fd4200c247d9f3de6",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/index.ts",
+      "start_byte": 0,
+      "end_byte": 215,
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 6,
+      "end_col": 0,
+      "content_hash": "6e87e6c768bb78dbb305dae519d1b518a2048a7ccc07f727baf0e9c35295aeef"
+    },
+    {
+      "entity_id": "mod_c3e1cd844def58e0c48c4d9f931ba95c",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/alias.ts",
+      "start_byte": 0,
+      "end_byte": 380,
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 12,
+      "end_col": 0,
+      "content_hash": "2e3f28fcff33612266eabd2f2d68ee8dd2f37a942914b62a41c5eba28dd78494"
+    },
+    {
+      "entity_id": "mod_f537453124856723aba1a8ba1cd91e0e",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/unresolved.ts",
+      "start_byte": 0,
+      "end_byte": 236,
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 8,
+      "end_col": 0,
+      "content_hash": "c3cce3e54228761410ef1f0a114b0ff5443bddbab4776a692ac4c383979fd041"
+    },
+    {
+      "entity_id": "mod_f932b9147299e74fa13c2cccf06e1ac5",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/widget.tsx",
+      "start_byte": 0,
+      "end_byte": 387,
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 19,
+      "end_col": 0,
+      "content_hash": "4e37e9eb7adf88200fec61895961f4e096594ef575338e01af8035f32e1ee713"
+    },
+    {
+      "entity_id": "unres_7208b6348dc934f9eda9d8420d2f13c9",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/unresolved.ts",
+      "start_byte": 122,
+      "end_byte": 148,
+      "start_line": 4,
+      "start_col": 0,
+      "end_line": 4,
+      "end_col": 26,
+      "content_hash": "c3cce3e54228761410ef1f0a114b0ff5443bddbab4776a692ac4c383979fd041"
+    },
+    {
+      "entity_id": "unres_8c42e9ecc53522e94cd4273c1483e793",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/unresolved.ts",
+      "start_byte": 149,
+      "end_byte": 176,
+      "start_line": 5,
+      "start_col": 0,
+      "end_line": 5,
+      "end_col": 27,
+      "content_hash": "c3cce3e54228761410ef1f0a114b0ff5443bddbab4776a692ac4c383979fd041"
+    }
+  ],
+  "assertions": [
+    {
+      "assertion_id": "0084af45c07bfefd762a68e0441bbd42c9932a675660c0983af30464c3d67e89",
+      "source_entity_id": "mod_4acce59af08bd58a6d0687ec9e1e5dcd",
+      "relation": "DEFINES",
+      "target_entity_id": "fn_47c496811eec5ab4226c6c3c4dfdfae7"
+    },
+    {
+      "assertion_id": "01275f5f36ead6dde845fa52ace66830b0681cd0aed52b0a0c57e0d4d3859cf3",
+      "source_entity_id": "mod_f932b9147299e74fa13c2cccf06e1ac5",
+      "relation": "EXPORTS",
+      "target_entity_id": "iface_acc9b2253ef76dd50dd0c194fbc5d885"
+    },
+    {
+      "assertion_id": "092402b2c0b3585157d0214c9ba39be89c9b53bab17782f5846227758708c5f4",
+      "source_entity_id": "mod_4acce59af08bd58a6d0687ec9e1e5dcd",
+      "relation": "EXPORTS",
+      "target_entity_id": "fn_c943de2f6352af22ab0299a41078ff59"
+    },
+    {
+      "assertion_id": "0d6136980dceb3a299e23f1625379ff628f6619599bb34ecfeb1230d8895642d",
+      "source_entity_id": "mod_f932b9147299e74fa13c2cccf06e1ac5",
+      "relation": "EXPORTS",
+      "target_entity_id": "fn_bf6afcee6a437be0849dfe8bd010185c"
+    },
+    {
+      "assertion_id": "0e00959b3e295d7df58af0dd4b3cfe7dd609d3087bdcb29487060d6a2db7ba3c",
+      "source_entity_id": "mod_8cab9cd9ce41e98fd4200c247d9f3de6",
+      "relation": "EXPORTS",
+      "target_entity_id": "class_b36d5b25a509533027d0b28f4aa5ba78"
+    },
+    {
+      "assertion_id": "1115e6323a5d8aa551413b54a075445745e79a70e9dad5752343e2ee8aad55ed",
+      "source_entity_id": "mod_f932b9147299e74fa13c2cccf06e1ac5",
+      "relation": "DEFINES",
+      "target_entity_id": "iface_acc9b2253ef76dd50dd0c194fbc5d885"
+    },
+    {
+      "assertion_id": "153c9dbb200838a820688a57781e1e4dbcb2326d9437efbfb09ffd8b03fa3618",
+      "source_entity_id": "mod_4bafedf0d918805b26d034cfbfe6baf3",
+      "relation": "DEFINES",
+      "target_entity_id": "fn_58962e68008f88e68f8f3eb6595b4620"
+    },
+    {
+      "assertion_id": "16e7387c3a106a5948e732e6b2784931e8bb037238991a05b19befedc433bd81",
+      "source_entity_id": "class_b36d5b25a509533027d0b28f4aa5ba78",
+      "relation": "DEFINES",
+      "target_entity_id": "meth_55a07d83cb2f89a1eb4383422ea428f6"
+    },
+    {
+      "assertion_id": "184c183738e370fe97ff15e49284ff3ca2c8aa86b0b4b2dc162a0ddadec0584b",
+      "source_entity_id": "dir_1efbfad626d32cc292ed7126bc2d68a8",
+      "relation": "CONTAINS",
+      "target_entity_id": "file_08fd8a0c2a672361f4efbc25fbdb4be3"
+    },
+    {
+      "assertion_id": "1a166cbd73a1ebd698c94dd8e1d85c38eecdeeed27e62753f6ced21f3d83fa4d",
+      "source_entity_id": "mod_8cab9cd9ce41e98fd4200c247d9f3de6",
+      "relation": "EXPORTS",
+      "target_entity_id": "fn_58962e68008f88e68f8f3eb6595b4620"
+    },
+    {
+      "assertion_id": "1e44843c66bfd77e7e8dad4b54a67afc52e65c069c74cd9ed5b6140b595f5251",
+      "source_entity_id": "mod_4bafedf0d918805b26d034cfbfe6baf3",
+      "relation": "DEFINES",
+      "target_entity_id": "fn_9ec9f6f7c019d625d7a693a32ad174e1"
+    },
+    {
+      "assertion_id": "2302b60ff9aebe4e93acec81b4474aed751d9d02c3cc1fd96fe6f362db3436bc",
+      "source_entity_id": "class_b36d5b25a509533027d0b28f4aa5ba78",
+      "relation": "DEFINES",
+      "target_entity_id": "meth_73d3b7e1ffd74bb0ed5450b15daa50e9"
+    },
+    {
+      "assertion_id": "25f11435aea437a6634a39d36742b2700deb10a24060acf12d5742c8d8d61c9f",
+      "source_entity_id": "file_f4aeb94e89c0bd88068c7f2c46326a88",
+      "relation": "DEFINES",
+      "target_entity_id": "mod_249b60f7e35bf5c10195993743279755"
+    },
+    {
+      "assertion_id": "28dbfdc581b1a28220875f987ca3275e7e1e4421a7293f48e6403f8f17c1ae40",
+      "source_entity_id": "dir_1efbfad626d32cc292ed7126bc2d68a8",
+      "relation": "CONTAINS",
+      "target_entity_id": "file_c831703cf2cd93c2f850df796fe5bc43"
+    },
+    {
+      "assertion_id": "2a3275ca351208cdef982e64a800c2aa0e7af1c0b1988110e8f89bcad3bc11e3",
+      "source_entity_id": "mod_c3e1cd844def58e0c48c4d9f931ba95c",
+      "relation": "IMPORTS",
+      "target_entity_id": "mod_249b60f7e35bf5c10195993743279755"
+    },
+    {
+      "assertion_id": "2ba47b3de56cd4bbeb72588a537e70b2d7487604d962c493d159ba061689c086",
+      "source_entity_id": "mod_8cab9cd9ce41e98fd4200c247d9f3de6",
+      "relation": "IMPORTS",
+      "target_entity_id": "mod_249b60f7e35bf5c10195993743279755"
+    },
+    {
+      "assertion_id": "3118d05020e0bda368b96ed0838496c796462bfcb520d7ac173d5a0f8b9f7802",
+      "source_entity_id": "mod_4bafedf0d918805b26d034cfbfe6baf3",
+      "relation": "DEFINES",
+      "target_entity_id": "fn_f0b1d3743c1a2120253dc366692bd370"
+    },
+    {
+      "assertion_id": "331d923929b610a1e0c03b53dab9944bc1cbf565b2b41ab63ea281fbd9c55fb9",
+      "source_entity_id": "class_e6a17966045f2904b10d88a024130444",
+      "relation": "DEFINES",
+      "target_entity_id": "meth_8fecc1c93a40303cc76559dbb1707cca"
+    },
+    {
+      "assertion_id": "33227e362631eef22a556f446b9cca7df6a2931bb79ad853104ed265f78bd391",
+      "source_entity_id": "mod_f932b9147299e74fa13c2cccf06e1ac5",
+      "relation": "DEFINES",
+      "target_entity_id": "fn_0b2a2184c63f5e9d6b5a094b5cf7d260"
+    },
+    {
+      "assertion_id": "355816a6777a0d7c426b091c5783159e71eac195b180cb77945fbbd99fd56d27",
+      "source_entity_id": "file_8f57922bdf7ac1696f9ba0e9d05b4690",
+      "relation": "DEFINES",
+      "target_entity_id": "mod_f537453124856723aba1a8ba1cd91e0e"
+    },
+    {
+      "assertion_id": "36f3f885c116c4f8fa74c6946393382e44777a29704cd337d2b04f2c053c6f10",
+      "source_entity_id": "mod_249b60f7e35bf5c10195993743279755",
+      "relation": "DEFINES",
+      "target_entity_id": "class_e6a17966045f2904b10d88a024130444"
+    },
+    {
+      "assertion_id": "450da7885466505dbab5450c45f0ee7ddd9ecb1a9bd2e31ddd27436ba9bdc9a5",
+      "source_entity_id": "mod_249b60f7e35bf5c10195993743279755",
+      "relation": "EXPORTS",
+      "target_entity_id": "class_e6a17966045f2904b10d88a024130444"
+    },
+    {
+      "assertion_id": "4839ae8a36f4438252c480c57efdfdf8842a37759ebae7dd61f1143f511073d8",
+      "source_entity_id": "dir_1efbfad626d32cc292ed7126bc2d68a8",
+      "relation": "CONTAINS",
+      "target_entity_id": "file_31d9cbb7875c8060bcce2f74d0e28e3f"
+    },
+    {
+      "assertion_id": "4b463419eba75a32391f95e26923f9434c96323d800196ebc959464b637c12b0",
+      "source_entity_id": "mod_f537453124856723aba1a8ba1cd91e0e",
+      "relation": "IMPORTS",
+      "target_entity_id": "unres_7208b6348dc934f9eda9d8420d2f13c9"
+    },
+    {
+      "assertion_id": "4d1a7cefe6d76ae4d19d29aad98f829fdff886b904c943eb16234a8c2e4bde74",
+      "source_entity_id": "mod_8cab9cd9ce41e98fd4200c247d9f3de6",
+      "relation": "EXPORTS",
+      "target_entity_id": "iface_cb09ace77fb8c70e18f02bd8680eceec"
+    },
+    {
+      "assertion_id": "4f259f252b93d74ed8ab5c6f2c5ec6d606886f309f4b8db0f58800e8e62ad686",
+      "source_entity_id": "mod_c3e1cd844def58e0c48c4d9f931ba95c",
+      "relation": "DEFINES",
+      "target_entity_id": "fn_f99df30a291443b5b821293bfa15d1a3"
+    },
+    {
+      "assertion_id": "50b7838d5774366904ae6b760a9d1701c81c9f91d270d7ab9cb919d9122b34ba",
+      "source_entity_id": "mod_4acce59af08bd58a6d0687ec9e1e5dcd",
+      "relation": "EXPORTS",
+      "target_entity_id": "fn_7f3775539da31f2e3b22e4f24427e0dd"
+    },
+    {
+      "assertion_id": "55ae14191303a069ae1806bdc9d4e915808c0cf5c71af1d3fd92112e2e6a08eb",
+      "source_entity_id": "mod_8cab9cd9ce41e98fd4200c247d9f3de6",
+      "relation": "EXPORTS",
+      "target_entity_id": "class_e6a17966045f2904b10d88a024130444"
+    },
+    {
+      "assertion_id": "5fdac41507a64df6670408d446fc253bef30acf65e2f4007e0d7629359574e6b",
+      "source_entity_id": "class_e6a17966045f2904b10d88a024130444",
+      "relation": "DEFINES",
+      "target_entity_id": "meth_ed3110c8617b46490aaa5109553083dd"
+    },
+    {
+      "assertion_id": "6284f78bd589654c4e09915b1884f7260478b3c8f8201d934ff57518ecd3f43d",
+      "source_entity_id": "mod_4bafedf0d918805b26d034cfbfe6baf3",
+      "relation": "DEFINES",
+      "target_entity_id": "fn_a253d3637b01fea45e3d396c8a5071e9"
+    },
+    {
+      "assertion_id": "62e94461cdf17289f432b1410da56ae7a3061f4392d3af3620d2a702d4139955",
+      "source_entity_id": "file_093a0ef1927376b553a8cb9444a5605c",
+      "relation": "DEFINES",
+      "target_entity_id": "mod_4bafedf0d918805b26d034cfbfe6baf3"
+    },
+    {
+      "assertion_id": "6817df4314a4384172f9f388f05a14178d3789a596c4235c36f10e6dadfd1f83",
+      "source_entity_id": "mod_f932b9147299e74fa13c2cccf06e1ac5",
+      "relation": "IMPORTS",
+      "target_entity_id": "mod_249b60f7e35bf5c10195993743279755"
+    },
+    {
+      "assertion_id": "743af55d53e503ceade217403470a238f07d03d8edcec337a4dcc8c135684c49",
+      "source_entity_id": "mod_f932b9147299e74fa13c2cccf06e1ac5",
+      "relation": "EXPORTS",
+      "target_entity_id": "fn_0b2a2184c63f5e9d6b5a094b5cf7d260"
+    },
+    {
+      "assertion_id": "75e8718f0a33c822947fb2269d8718eefbd8c9185dd01c3ec41b3608b89e50c4",
+      "source_entity_id": "file_08fd8a0c2a672361f4efbc25fbdb4be3",
+      "relation": "DEFINES",
+      "target_entity_id": "mod_f932b9147299e74fa13c2cccf06e1ac5"
+    },
+    {
+      "assertion_id": "7981e786fc5290a9ed6165f9849593527e3378de1b087000e15989ce502d6959",
+      "source_entity_id": "mod_4acce59af08bd58a6d0687ec9e1e5dcd",
+      "relation": "EXPORTS",
+      "target_entity_id": "fn_389cc1cd57b48cc3be17397545ed7875"
+    },
+    {
+      "assertion_id": "7bfe0d05df55c96a2f25be72097204d3542db86d4e5e6052abe24fff64263000",
+      "source_entity_id": "file_c831703cf2cd93c2f850df796fe5bc43",
+      "relation": "DEFINES",
+      "target_entity_id": "mod_465b915e095cd370e398e63489ebe224"
+    },
+    {
+      "assertion_id": "85f789cf81dffeb53d25c71c1ce28137d4f0d951d56633167dfd556aea1c7c8a",
+      "source_entity_id": "mod_f537453124856723aba1a8ba1cd91e0e",
+      "relation": "DEFINES",
+      "target_entity_id": "fn_85333468a781d0a247edd8b97eb1a81c"
+    },
+    {
+      "assertion_id": "86bd849a56fb01a254de599b3b41501528dc7518c5fdac06c8c014e5c53d279a",
+      "source_entity_id": "dir_1efbfad626d32cc292ed7126bc2d68a8",
+      "relation": "CONTAINS",
+      "target_entity_id": "file_d128deded61d0b96f5c8057d9cee1ec1"
+    },
+    {
+      "assertion_id": "88dc879da1f9d7992dcb9366b92b9725c18565d54b946ca05a9165973c72d8cb",
+      "source_entity_id": "mod_249b60f7e35bf5c10195993743279755",
+      "relation": "EXPORTS",
+      "target_entity_id": "iface_cb09ace77fb8c70e18f02bd8680eceec"
+    },
+    {
+      "assertion_id": "8ab11034ec799588c234c6d5da11eabfed6b613e5f34ef30f32c68fd1ffb03ac",
+      "source_entity_id": "mod_4acce59af08bd58a6d0687ec9e1e5dcd",
+      "relation": "DEFINES",
+      "target_entity_id": "fn_389cc1cd57b48cc3be17397545ed7875"
+    },
+    {
+      "assertion_id": "8ac814b0e8f279b2050ada5acf62310977534321c68bb46c5467aaa2865c013b",
+      "source_entity_id": "class_b36d5b25a509533027d0b28f4aa5ba78",
+      "relation": "DEFINES",
+      "target_entity_id": "meth_f3478550712739850e546a409cf93006"
+    },
+    {
+      "assertion_id": "8ebbd2d94fc6c675affb907c75a4ce90bed10abb8718525ec7d359c7abd91434",
+      "source_entity_id": "mod_c3e1cd844def58e0c48c4d9f931ba95c",
+      "relation": "EXPORTS",
+      "target_entity_id": "fn_f99df30a291443b5b821293bfa15d1a3"
+    },
+    {
+      "assertion_id": "921050b74601490a5d3321875f185379f2cad905a376a63ff2efb3994598938c",
+      "source_entity_id": "mod_f537453124856723aba1a8ba1cd91e0e",
+      "relation": "IMPORTS",
+      "target_entity_id": "unres_8c42e9ecc53522e94cd4273c1483e793"
+    },
+    {
+      "assertion_id": "935a440a96fc3e97f8d2d5ddf9954652d63981ba7fa862c5f77adf3910503669",
+      "source_entity_id": "dir_1efbfad626d32cc292ed7126bc2d68a8",
+      "relation": "CONTAINS",
+      "target_entity_id": "file_093a0ef1927376b553a8cb9444a5605c"
+    },
+    {
+      "assertion_id": "947f6cd9529f3893782a38d0f03de0ef11433ada49982ee485882de1115f28aa",
+      "source_entity_id": "mod_465b915e095cd370e398e63489ebe224",
+      "relation": "DEFINES",
+      "target_entity_id": "fn_b050a5fddfa23c8c7d0076dea4fff3ed"
+    },
+    {
+      "assertion_id": "994e8201fafa5f5bf5b6237ff8f9f9a664ed4a5392d6776d9e4fc39b38c84418",
+      "source_entity_id": "mod_4bafedf0d918805b26d034cfbfe6baf3",
+      "relation": "EXPORTS",
+      "target_entity_id": "fn_9ec9f6f7c019d625d7a693a32ad174e1"
+    },
+    {
+      "assertion_id": "998e7b39807a7a34e4a737485c083227deec533e09d32831ae92e03d79ef67fe",
+      "source_entity_id": "mod_4bafedf0d918805b26d034cfbfe6baf3",
+      "relation": "EXPORTS",
+      "target_entity_id": "fn_f0b1d3743c1a2120253dc366692bd370"
+    },
+    {
+      "assertion_id": "b31eec01e78cba00ad0170f5a90d77984fe4f26554e1347b06f90e39d04118cb",
+      "source_entity_id": "dir_1efbfad626d32cc292ed7126bc2d68a8",
+      "relation": "CONTAINS",
+      "target_entity_id": "file_f4aeb94e89c0bd88068c7f2c46326a88"
+    },
+    {
+      "assertion_id": "b63592db5939a3536e7a3d7eefc8149f6fdf7cfdd105603cd502d778e8502615",
+      "source_entity_id": "class_e6a17966045f2904b10d88a024130444",
+      "relation": "DEFINES",
+      "target_entity_id": "meth_14736beebe0b2f7bbb511aff36c49b39"
+    },
+    {
+      "assertion_id": "b695c9924698e67b555dec069edc8460dcaab6a416aead6f9a8e10faa8e21437",
+      "source_entity_id": "mod_249b60f7e35bf5c10195993743279755",
+      "relation": "DEFINES",
+      "target_entity_id": "iface_cb09ace77fb8c70e18f02bd8680eceec"
+    },
+    {
+      "assertion_id": "bd8dbeb1ebf6039da9222ae64df3fb4b278133ab66122ff6e284b2c8bb06b655",
+      "source_entity_id": "mod_465b915e095cd370e398e63489ebe224",
+      "relation": "IMPORTS",
+      "target_entity_id": "mod_4bafedf0d918805b26d034cfbfe6baf3"
+    },
+    {
+      "assertion_id": "c0271f7ef77aa83ed3e1fe83b65caacd53ccfe956ac2d9b57dde1c5fce071bac",
+      "source_entity_id": "mod_8cab9cd9ce41e98fd4200c247d9f3de6",
+      "relation": "EXPORTS",
+      "target_entity_id": "fn_9ec9f6f7c019d625d7a693a32ad174e1"
+    },
+    {
+      "assertion_id": "c10c44fe73adae0f403cde04d8db90d124f0fcbe8cb5edc6d0c44e58daae4971",
+      "source_entity_id": "mod_4bafedf0d918805b26d034cfbfe6baf3",
+      "relation": "EXPORTS",
+      "target_entity_id": "fn_58962e68008f88e68f8f3eb6595b4620"
+    },
+    {
+      "assertion_id": "c2070f73991f511fc18e2d15e61c84953eb1031ef2e44d9228a15912e878272a",
+      "source_entity_id": "mod_8cab9cd9ce41e98fd4200c247d9f3de6",
+      "relation": "IMPORTS",
+      "target_entity_id": "mod_4bafedf0d918805b26d034cfbfe6baf3"
+    },
+    {
+      "assertion_id": "cd4c9cb72e696d062d92ca17630b02366647d9d4254bd062d1c1f8094f75ac6d",
+      "source_entity_id": "dir_1efbfad626d32cc292ed7126bc2d68a8",
+      "relation": "CONTAINS",
+      "target_entity_id": "file_8f57922bdf7ac1696f9ba0e9d05b4690"
+    },
+    {
+      "assertion_id": "d1a8eeb796cd9846630c78246b75975a5fda688bcf4cbf3430e41b39798feacf",
+      "source_entity_id": "mod_f537453124856723aba1a8ba1cd91e0e",
+      "relation": "EXPORTS",
+      "target_entity_id": "fn_85333468a781d0a247edd8b97eb1a81c"
+    },
+    {
+      "assertion_id": "d2a41d193c95caaf367868c88bd4b72dff086ea347622f0a1bf309e86431655b",
+      "source_entity_id": "mod_4acce59af08bd58a6d0687ec9e1e5dcd",
+      "relation": "DEFINES",
+      "target_entity_id": "fn_20adac1f9e26875061d4cc9fda858529"
+    },
+    {
+      "assertion_id": "d67e6fd9446c1366cb4146faf9312d22082c75e51a3c2c1bd5f560078e38eda2",
+      "source_entity_id": "file_b563498c461b9be5abb75c9fa3160237",
+      "relation": "DEFINES",
+      "target_entity_id": "mod_8cab9cd9ce41e98fd4200c247d9f3de6"
+    },
+    {
+      "assertion_id": "e2ceaf4c6ab97c26d5eafe0493c8be7406bd4c3c07e3f4be487b74476c3bae8c",
+      "source_entity_id": "repo_9eeb898e10b377b2d7ff980634eca1b4",
+      "relation": "CONTAINS",
+      "target_entity_id": "dir_1efbfad626d32cc292ed7126bc2d68a8"
+    },
+    {
+      "assertion_id": "e7f6e40abe5f6504b98ae2d6b160afda8b265f6d26ac2f4151d70aa33337f66d",
+      "source_entity_id": "mod_249b60f7e35bf5c10195993743279755",
+      "relation": "DEFINES",
+      "target_entity_id": "class_b36d5b25a509533027d0b28f4aa5ba78"
+    },
+    {
+      "assertion_id": "ec61c4132a51e12496dcfd51fd887413148d1ef0d9a7e860ded1bbb2e92a3c4c",
+      "source_entity_id": "file_31d9cbb7875c8060bcce2f74d0e28e3f",
+      "relation": "DEFINES",
+      "target_entity_id": "mod_c3e1cd844def58e0c48c4d9f931ba95c"
+    },
+    {
+      "assertion_id": "ed6250a67c215f070e89b0e5d4e0fd9122f07b89f7300af8f9b8477f5e027918",
+      "source_entity_id": "mod_4acce59af08bd58a6d0687ec9e1e5dcd",
+      "relation": "DEFINES",
+      "target_entity_id": "fn_7f3775539da31f2e3b22e4f24427e0dd"
+    },
+    {
+      "assertion_id": "ef22c4cc2c628997bce1413858c4c7d5c10aad9d5812eb4b4078fdc64ed462f1",
+      "source_entity_id": "mod_4acce59af08bd58a6d0687ec9e1e5dcd",
+      "relation": "DEFINES",
+      "target_entity_id": "fn_c943de2f6352af22ab0299a41078ff59"
+    },
+    {
+      "assertion_id": "f0d306a3fd0d392a03f11615f7843a16b61633898c2428fd4b4cbc3b9ab5ccf6",
+      "source_entity_id": "dir_1efbfad626d32cc292ed7126bc2d68a8",
+      "relation": "CONTAINS",
+      "target_entity_id": "file_b563498c461b9be5abb75c9fa3160237"
+    },
+    {
+      "assertion_id": "f369d756a36b44f3aaa90cd6078ab5aee9c44187959809dda310895bf09032a1",
+      "source_entity_id": "file_d128deded61d0b96f5c8057d9cee1ec1",
+      "relation": "DEFINES",
+      "target_entity_id": "mod_4acce59af08bd58a6d0687ec9e1e5dcd"
+    },
+    {
+      "assertion_id": "f721362f185991b3d68363190cd382563d146865121f31a15c46ff96901764d6",
+      "source_entity_id": "mod_c3e1cd844def58e0c48c4d9f931ba95c",
+      "relation": "IMPORTS",
+      "target_entity_id": "mod_4bafedf0d918805b26d034cfbfe6baf3"
+    },
+    {
+      "assertion_id": "f9e51746f3d6a8cd16f57fc24ee41d3aa22693e8e5de6bd7f515d75b18bd7507",
+      "source_entity_id": "mod_249b60f7e35bf5c10195993743279755",
+      "relation": "EXPORTS",
+      "target_entity_id": "class_b36d5b25a509533027d0b28f4aa5ba78"
+    },
+    {
+      "assertion_id": "ff464805e670934f721208103b8cdd29636488363ab85da3e4fc65e58ad2da3a",
+      "source_entity_id": "mod_f932b9147299e74fa13c2cccf06e1ac5",
+      "relation": "DEFINES",
+      "target_entity_id": "fn_bf6afcee6a437be0849dfe8bd010185c"
+    }
+  ],
+  "observations": [
+    {
+      "assertion_id": "0084af45c07bfefd762a68e0441bbd42c9932a675660c0983af30464c3d67e89",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/ambiguous.ts",
+      "start_line": 13,
+      "end_line": 15,
+      "content_hash": "057f5b3dd253377649777d8056166e73b8b83dfcd2c826f8eebcb4ef853a2ab0",
+      "environment": null,
+      "details": {
+        "declaration_kind": "function",
+        "definer": "module",
+        "scope_path": "outerB"
+      }
+    },
+    {
+      "assertion_id": "01275f5f36ead6dde845fa52ace66830b0681cd0aed52b0a0c57e0d4d3859cf3",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/widget.tsx",
+      "start_line": 5,
+      "end_line": 8,
+      "content_hash": "4e37e9eb7adf88200fec61895961f4e096594ef575338e01af8035f32e1ee713",
+      "environment": null,
+      "details": {
+        "export_kind": "named",
+        "exported_name": "WidgetProps"
+      }
+    },
+    {
+      "assertion_id": "092402b2c0b3585157d0214c9ba39be89c9b53bab17782f5846227758708c5f4",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/ambiguous.ts",
+      "start_line": 5,
+      "end_line": 10,
+      "content_hash": "057f5b3dd253377649777d8056166e73b8b83dfcd2c826f8eebcb4ef853a2ab0",
+      "environment": null,
+      "details": {
+        "export_kind": "named",
+        "exported_name": "outerA"
+      }
+    },
+    {
+      "assertion_id": "0d6136980dceb3a299e23f1625379ff628f6619599bb34ecfeb1230d8895642d",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/widget.tsx",
+      "start_line": 10,
+      "end_line": 16,
+      "content_hash": "4e37e9eb7adf88200fec61895961f4e096594ef575338e01af8035f32e1ee713",
+      "environment": null,
+      "details": {
+        "export_kind": "named",
+        "exported_name": "Widget"
+      }
+    },
+    {
+      "assertion_id": "0e00959b3e295d7df58af0dd4b3cfe7dd609d3087bdcb29487060d6a2db7ba3c",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "RESOLVED",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/index.ts",
+      "start_line": 5,
+      "end_line": 5,
+      "content_hash": "6e87e6c768bb78dbb305dae519d1b518a2048a7ccc07f727baf0e9c35295aeef",
+      "environment": null,
+      "details": {
+        "export_kind": "re-export",
+        "exported_name": "Rectangle",
+        "raw_specifier": "./shapes",
+        "resolved_path": "src/shapes.ts"
+      }
+    },
+    {
+      "assertion_id": "1115e6323a5d8aa551413b54a075445745e79a70e9dad5752343e2ee8aad55ed",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/widget.tsx",
+      "start_line": 5,
+      "end_line": 8,
+      "content_hash": "4e37e9eb7adf88200fec61895961f4e096594ef575338e01af8035f32e1ee713",
+      "environment": null,
+      "details": {
+        "declaration_kind": "interface",
+        "definer": "module",
+        "scope_path": ""
+      }
+    },
+    {
+      "assertion_id": "153c9dbb200838a820688a57781e1e4dbcb2326d9437efbfb09ffd8b03fa3618",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/math.ts",
+      "start_line": 14,
+      "end_line": 14,
+      "content_hash": "ce198a6ed4f95405c040b795200980fed6f7edf14c7b6498d3ac5c17bc9d18c7",
+      "environment": null,
+      "details": {
+        "declaration_kind": "function",
+        "definer": "module",
+        "scope_path": ""
+      }
+    },
+    {
+      "assertion_id": "16e7387c3a106a5948e732e6b2784931e8bb037238991a05b19befedc433bd81",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_line": 9,
+      "end_line": 12,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5",
+      "environment": null,
+      "details": {
+        "declaration_kind": "method",
+        "definer": "class",
+        "scope_path": "Rectangle"
+      }
+    },
+    {
+      "assertion_id": "184c183738e370fe97ff15e49284ff3ca2c8aa86b0b4b2dc162a0ddadec0584b",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/widget.tsx",
+      "start_line": 0,
+      "end_line": 0,
+      "content_hash": "4e37e9eb7adf88200fec61895961f4e096594ef575338e01af8035f32e1ee713",
+      "environment": null,
+      "details": {
+        "child_kind": "file"
+      }
+    },
+    {
+      "assertion_id": "1a166cbd73a1ebd698c94dd8e1d85c38eecdeeed27e62753f6ced21f3d83fa4d",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "RESOLVED",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/index.ts",
+      "start_line": 4,
+      "end_line": 4,
+      "content_hash": "6e87e6c768bb78dbb305dae519d1b518a2048a7ccc07f727baf0e9c35295aeef",
+      "environment": null,
+      "details": {
+        "export_kind": "re-export",
+        "exported_name": "scale",
+        "raw_specifier": "./math",
+        "resolved_path": "src/math.ts"
+      }
+    },
+    {
+      "assertion_id": "1e44843c66bfd77e7e8dad4b54a67afc52e65c069c74cd9ed5b6140b595f5251",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/math.ts",
+      "start_line": 3,
+      "end_line": 8,
+      "content_hash": "ce198a6ed4f95405c040b795200980fed6f7edf14c7b6498d3ac5c17bc9d18c7",
+      "environment": null,
+      "details": {
+        "declaration_kind": "function",
+        "definer": "module",
+        "scope_path": ""
+      }
+    },
+    {
+      "assertion_id": "2302b60ff9aebe4e93acec81b4474aed751d9d02c3cc1fd96fe6f362db3436bc",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_line": 18,
+      "end_line": 20,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5",
+      "environment": null,
+      "details": {
+        "declaration_kind": "method",
+        "definer": "class",
+        "scope_path": "Rectangle"
+      }
+    },
+    {
+      "assertion_id": "25f11435aea437a6634a39d36742b2700deb10a24060acf12d5742c8d8d61c9f",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_line": 1,
+      "end_line": 34,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5",
+      "environment": null,
+      "details": {
+        "language": "typescript"
+      }
+    },
+    {
+      "assertion_id": "28dbfdc581b1a28220875f987ca3275e7e1e4421a7293f48e6403f8f17c1ae40",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/legacy.cjs",
+      "start_line": 0,
+      "end_line": 0,
+      "content_hash": "ca9149b317e25027fbed66873d4f3624ff231ca961845edc0edfa3efe9e46e90",
+      "environment": null,
+      "details": {
+        "child_kind": "file"
+      }
+    },
+    {
+      "assertion_id": "2a3275ca351208cdef982e64a800c2aa0e7af1c0b1988110e8f89bcad3bc11e3",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "RESOLVED",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/alias.ts",
+      "start_line": 4,
+      "end_line": 4,
+      "content_hash": "2e3f28fcff33612266eabd2f2d68ee8dd2f37a942914b62a41c5eba28dd78494",
+      "environment": null,
+      "details": {
+        "form": "static",
+        "raw_specifier": "./shapes",
+        "resolved_path": "src/shapes.ts",
+        "specifiers": [
+          {
+            "imported": "*",
+            "kind": "namespace",
+            "local": "shapes"
+          }
+        ],
+        "type_only": false
+      }
+    },
+    {
+      "assertion_id": "2a3275ca351208cdef982e64a800c2aa0e7af1c0b1988110e8f89bcad3bc11e3",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "RESOLVED",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/alias.ts",
+      "start_line": 5,
+      "end_line": 5,
+      "content_hash": "2e3f28fcff33612266eabd2f2d68ee8dd2f37a942914b62a41c5eba28dd78494",
+      "environment": null,
+      "details": {
+        "form": "static",
+        "raw_specifier": "./shapes",
+        "resolved_path": "src/shapes.ts",
+        "specifiers": [
+          {
+            "imported": "Shape",
+            "kind": "named",
+            "local": "Shape"
+          }
+        ],
+        "type_only": true
+      }
+    },
+    {
+      "assertion_id": "2ba47b3de56cd4bbeb72588a537e70b2d7487604d962c493d159ba061689c086",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "RESOLVED",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/index.ts",
+      "start_line": 5,
+      "end_line": 5,
+      "content_hash": "6e87e6c768bb78dbb305dae519d1b518a2048a7ccc07f727baf0e9c35295aeef",
+      "environment": null,
+      "details": {
+        "form": "re-export",
+        "raw_specifier": "./shapes",
+        "resolved_path": "src/shapes.ts",
+        "specifiers": [
+          {
+            "imported": "*",
+            "kind": "re-export",
+            "local": null
+          }
+        ],
+        "type_only": false
+      }
+    },
+    {
+      "assertion_id": "3118d05020e0bda368b96ed0838496c796462bfcb520d7ac173d5a0f8b9f7802",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/math.ts",
+      "start_line": 10,
+      "end_line": 12,
+      "content_hash": "ce198a6ed4f95405c040b795200980fed6f7edf14c7b6498d3ac5c17bc9d18c7",
+      "environment": null,
+      "details": {
+        "declaration_kind": "function",
+        "definer": "module",
+        "scope_path": ""
+      }
+    },
+    {
+      "assertion_id": "331d923929b610a1e0c03b53dab9944bc1cbf565b2b41ab63ea281fbd9c55fb9",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_line": 30,
+      "end_line": 32,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5",
+      "environment": null,
+      "details": {
+        "declaration_kind": "method",
+        "definer": "class",
+        "scope_path": "Circle"
+      }
+    },
+    {
+      "assertion_id": "33227e362631eef22a556f446b9cca7df6a2931bb79ad853104ed265f78bd391",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/widget.tsx",
+      "start_line": 18,
+      "end_line": 18,
+      "content_hash": "4e37e9eb7adf88200fec61895961f4e096594ef575338e01af8035f32e1ee713",
+      "environment": null,
+      "details": {
+        "declaration_kind": "function",
+        "definer": "module",
+        "scope_path": ""
+      }
+    },
+    {
+      "assertion_id": "355816a6777a0d7c426b091c5783159e71eac195b180cb77945fbbd99fd56d27",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/unresolved.ts",
+      "start_line": 1,
+      "end_line": 8,
+      "content_hash": "c3cce3e54228761410ef1f0a114b0ff5443bddbab4776a692ac4c383979fd041",
+      "environment": null,
+      "details": {
+        "language": "typescript"
+      }
+    },
+    {
+      "assertion_id": "36f3f885c116c4f8fa74c6946393382e44777a29704cd337d2b04f2c053c6f10",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_line": 23,
+      "end_line": 33,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5",
+      "environment": null,
+      "details": {
+        "declaration_kind": "class",
+        "definer": "module",
+        "scope_path": ""
+      }
+    },
+    {
+      "assertion_id": "450da7885466505dbab5450c45f0ee7ddd9ecb1a9bd2e31ddd27436ba9bdc9a5",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_line": 23,
+      "end_line": 33,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5",
+      "environment": null,
+      "details": {
+        "export_kind": "named",
+        "exported_name": "Circle"
+      }
+    },
+    {
+      "assertion_id": "4839ae8a36f4438252c480c57efdfdf8842a37759ebae7dd61f1143f511073d8",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/alias.ts",
+      "start_line": 0,
+      "end_line": 0,
+      "content_hash": "2e3f28fcff33612266eabd2f2d68ee8dd2f37a942914b62a41c5eba28dd78494",
+      "environment": null,
+      "details": {
+        "child_kind": "file"
+      }
+    },
+    {
+      "assertion_id": "4b463419eba75a32391f95e26923f9434c96323d800196ebc959464b637c12b0",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/unresolved.ts",
+      "start_line": 4,
+      "end_line": 4,
+      "content_hash": "c3cce3e54228761410ef1f0a114b0ff5443bddbab4776a692ac4c383979fd041",
+      "environment": null,
+      "details": {
+        "form": "static",
+        "raw_specifier": "./does-not-exist",
+        "resolved_path": null,
+        "specifiers": [
+          {
+            "imported": null,
+            "kind": "side-effect",
+            "local": null
+          }
+        ],
+        "type_only": false
+      }
+    },
+    {
+      "assertion_id": "4d1a7cefe6d76ae4d19d29aad98f829fdff886b904c943eb16234a8c2e4bde74",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "RESOLVED",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/index.ts",
+      "start_line": 5,
+      "end_line": 5,
+      "content_hash": "6e87e6c768bb78dbb305dae519d1b518a2048a7ccc07f727baf0e9c35295aeef",
+      "environment": null,
+      "details": {
+        "export_kind": "re-export",
+        "exported_name": "Shape",
+        "raw_specifier": "./shapes",
+        "resolved_path": "src/shapes.ts"
+      }
+    },
+    {
+      "assertion_id": "4f259f252b93d74ed8ab5c6f2c5ec6d606886f309f4b8db0f58800e8e62ad686",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/alias.ts",
+      "start_line": 7,
+      "end_line": 11,
+      "content_hash": "2e3f28fcff33612266eabd2f2d68ee8dd2f37a942914b62a41c5eba28dd78494",
+      "environment": null,
+      "details": {
+        "declaration_kind": "function",
+        "definer": "module",
+        "scope_path": ""
+      }
+    },
+    {
+      "assertion_id": "50b7838d5774366904ae6b760a9d1701c81c9f91d270d7ab9cb919d9122b34ba",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/ambiguous.ts",
+      "start_line": 19,
+      "end_line": 21,
+      "content_hash": "057f5b3dd253377649777d8056166e73b8b83dfcd2c826f8eebcb4ef853a2ab0",
+      "environment": null,
+      "details": {
+        "export_kind": "named",
+        "exported_name": "loadDynamic"
+      }
+    },
+    {
+      "assertion_id": "55ae14191303a069ae1806bdc9d4e915808c0cf5c71af1d3fd92112e2e6a08eb",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "RESOLVED",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/index.ts",
+      "start_line": 5,
+      "end_line": 5,
+      "content_hash": "6e87e6c768bb78dbb305dae519d1b518a2048a7ccc07f727baf0e9c35295aeef",
+      "environment": null,
+      "details": {
+        "export_kind": "re-export",
+        "exported_name": "Circle",
+        "raw_specifier": "./shapes",
+        "resolved_path": "src/shapes.ts"
+      }
+    },
+    {
+      "assertion_id": "5fdac41507a64df6670408d446fc253bef30acf65e2f4007e0d7629359574e6b",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_line": 26,
+      "end_line": 28,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5",
+      "environment": null,
+      "details": {
+        "declaration_kind": "method",
+        "definer": "class",
+        "scope_path": "Circle"
+      }
+    },
+    {
+      "assertion_id": "6284f78bd589654c4e09915b1884f7260478b3c8f8201d934ff57518ecd3f43d",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/math.ts",
+      "start_line": 4,
+      "end_line": 6,
+      "content_hash": "ce198a6ed4f95405c040b795200980fed6f7edf14c7b6498d3ac5c17bc9d18c7",
+      "environment": null,
+      "details": {
+        "declaration_kind": "function",
+        "definer": "module",
+        "scope_path": "add"
+      }
+    },
+    {
+      "assertion_id": "62e94461cdf17289f432b1410da56ae7a3061f4392d3af3620d2a702d4139955",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/math.ts",
+      "start_line": 1,
+      "end_line": 17,
+      "content_hash": "ce198a6ed4f95405c040b795200980fed6f7edf14c7b6498d3ac5c17bc9d18c7",
+      "environment": null,
+      "details": {
+        "language": "typescript"
+      }
+    },
+    {
+      "assertion_id": "6817df4314a4384172f9f388f05a14178d3789a596c4235c36f10e6dadfd1f83",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "RESOLVED",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/widget.tsx",
+      "start_line": 3,
+      "end_line": 3,
+      "content_hash": "4e37e9eb7adf88200fec61895961f4e096594ef575338e01af8035f32e1ee713",
+      "environment": null,
+      "details": {
+        "form": "static",
+        "raw_specifier": "./shapes",
+        "resolved_path": "src/shapes.ts",
+        "specifiers": [
+          {
+            "imported": "Shape",
+            "kind": "named",
+            "local": "Shape"
+          }
+        ],
+        "type_only": true
+      }
+    },
+    {
+      "assertion_id": "743af55d53e503ceade217403470a238f07d03d8edcec337a4dcc8c135684c49",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/widget.tsx",
+      "start_line": 18,
+      "end_line": 18,
+      "content_hash": "4e37e9eb7adf88200fec61895961f4e096594ef575338e01af8035f32e1ee713",
+      "environment": null,
+      "details": {
+        "export_kind": "named",
+        "exported_name": "Badge"
+      }
+    },
+    {
+      "assertion_id": "75e8718f0a33c822947fb2269d8718eefbd8c9185dd01c3ec41b3608b89e50c4",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/widget.tsx",
+      "start_line": 1,
+      "end_line": 19,
+      "content_hash": "4e37e9eb7adf88200fec61895961f4e096594ef575338e01af8035f32e1ee713",
+      "environment": null,
+      "details": {
+        "language": "tsx"
+      }
+    },
+    {
+      "assertion_id": "7981e786fc5290a9ed6165f9849593527e3378de1b087000e15989ce502d6959",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/ambiguous.ts",
+      "start_line": 12,
+      "end_line": 17,
+      "content_hash": "057f5b3dd253377649777d8056166e73b8b83dfcd2c826f8eebcb4ef853a2ab0",
+      "environment": null,
+      "details": {
+        "export_kind": "named",
+        "exported_name": "outerB"
+      }
+    },
+    {
+      "assertion_id": "7bfe0d05df55c96a2f25be72097204d3542db86d4e5e6052abe24fff64263000",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/legacy.cjs",
+      "start_line": 1,
+      "end_line": 10,
+      "content_hash": "ca9149b317e25027fbed66873d4f3624ff231ca961845edc0edfa3efe9e46e90",
+      "environment": null,
+      "details": {
+        "language": "javascript"
+      }
+    },
+    {
+      "assertion_id": "85f789cf81dffeb53d25c71c1ce28137d4f0d951d56633167dfd556aea1c7c8a",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/unresolved.ts",
+      "start_line": 7,
+      "end_line": 7,
+      "content_hash": "c3cce3e54228761410ef1f0a114b0ff5443bddbab4776a692ac4c383979fd041",
+      "environment": null,
+      "details": {
+        "declaration_kind": "function",
+        "definer": "module",
+        "scope_path": ""
+      }
+    },
+    {
+      "assertion_id": "86bd849a56fb01a254de599b3b41501528dc7518c5fdac06c8c014e5c53d279a",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/ambiguous.ts",
+      "start_line": 0,
+      "end_line": 0,
+      "content_hash": "057f5b3dd253377649777d8056166e73b8b83dfcd2c826f8eebcb4ef853a2ab0",
+      "environment": null,
+      "details": {
+        "child_kind": "file"
+      }
+    },
+    {
+      "assertion_id": "88dc879da1f9d7992dcb9366b92b9725c18565d54b946ca05a9165973c72d8cb",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_line": 4,
+      "end_line": 6,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5",
+      "environment": null,
+      "details": {
+        "export_kind": "named",
+        "exported_name": "Shape"
+      }
+    },
+    {
+      "assertion_id": "8ab11034ec799588c234c6d5da11eabfed6b613e5f34ef30f32c68fd1ffb03ac",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/ambiguous.ts",
+      "start_line": 12,
+      "end_line": 17,
+      "content_hash": "057f5b3dd253377649777d8056166e73b8b83dfcd2c826f8eebcb4ef853a2ab0",
+      "environment": null,
+      "details": {
+        "declaration_kind": "function",
+        "definer": "module",
+        "scope_path": ""
+      }
+    },
+    {
+      "assertion_id": "8ac814b0e8f279b2050ada5acf62310977534321c68bb46c5467aaa2865c013b",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_line": 14,
+      "end_line": 16,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5",
+      "environment": null,
+      "details": {
+        "declaration_kind": "method",
+        "definer": "class",
+        "scope_path": "Rectangle"
+      }
+    },
+    {
+      "assertion_id": "8ebbd2d94fc6c675affb907c75a4ce90bed10abb8718525ec7d359c7abd91434",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/alias.ts",
+      "start_line": 7,
+      "end_line": 11,
+      "content_hash": "2e3f28fcff33612266eabd2f2d68ee8dd2f37a942914b62a41c5eba28dd78494",
+      "environment": null,
+      "details": {
+        "export_kind": "named",
+        "exported_name": "describe"
+      }
+    },
+    {
+      "assertion_id": "921050b74601490a5d3321875f185379f2cad905a376a63ff2efb3994598938c",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/unresolved.ts",
+      "start_line": 5,
+      "end_line": 5,
+      "content_hash": "c3cce3e54228761410ef1f0a114b0ff5443bddbab4776a692ac4c383979fd041",
+      "environment": null,
+      "details": {
+        "form": "static",
+        "raw_specifier": "some-external-pkg",
+        "resolved_path": null,
+        "specifiers": [
+          {
+            "imported": null,
+            "kind": "side-effect",
+            "local": null
+          }
+        ],
+        "type_only": false
+      }
+    },
+    {
+      "assertion_id": "935a440a96fc3e97f8d2d5ddf9954652d63981ba7fa862c5f77adf3910503669",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/math.ts",
+      "start_line": 0,
+      "end_line": 0,
+      "content_hash": "ce198a6ed4f95405c040b795200980fed6f7edf14c7b6498d3ac5c17bc9d18c7",
+      "environment": null,
+      "details": {
+        "child_kind": "file"
+      }
+    },
+    {
+      "assertion_id": "947f6cd9529f3893782a38d0f03de0ef11433ada49982ee485882de1115f28aa",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/legacy.cjs",
+      "start_line": 5,
+      "end_line": 7,
+      "content_hash": "ca9149b317e25027fbed66873d4f3624ff231ca961845edc0edfa3efe9e46e90",
+      "environment": null,
+      "details": {
+        "declaration_kind": "function",
+        "definer": "module",
+        "scope_path": ""
+      }
+    },
+    {
+      "assertion_id": "994e8201fafa5f5bf5b6237ff8f9f9a664ed4a5392d6776d9e4fc39b38c84418",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/math.ts",
+      "start_line": 3,
+      "end_line": 8,
+      "content_hash": "ce198a6ed4f95405c040b795200980fed6f7edf14c7b6498d3ac5c17bc9d18c7",
+      "environment": null,
+      "details": {
+        "export_kind": "named",
+        "exported_name": "add"
+      }
+    },
+    {
+      "assertion_id": "994e8201fafa5f5bf5b6237ff8f9f9a664ed4a5392d6776d9e4fc39b38c84418",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/math.ts",
+      "start_line": 16,
+      "end_line": 16,
+      "content_hash": "ce198a6ed4f95405c040b795200980fed6f7edf14c7b6498d3ac5c17bc9d18c7",
+      "environment": null,
+      "details": {
+        "export_kind": "default",
+        "exported_name": "default"
+      }
+    },
+    {
+      "assertion_id": "998e7b39807a7a34e4a737485c083227deec533e09d32831ae92e03d79ef67fe",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/math.ts",
+      "start_line": 10,
+      "end_line": 12,
+      "content_hash": "ce198a6ed4f95405c040b795200980fed6f7edf14c7b6498d3ac5c17bc9d18c7",
+      "environment": null,
+      "details": {
+        "export_kind": "named",
+        "exported_name": "subtract"
+      }
+    },
+    {
+      "assertion_id": "b31eec01e78cba00ad0170f5a90d77984fe4f26554e1347b06f90e39d04118cb",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_line": 0,
+      "end_line": 0,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5",
+      "environment": null,
+      "details": {
+        "child_kind": "file"
+      }
+    },
+    {
+      "assertion_id": "b63592db5939a3536e7a3d7eefc8149f6fdf7cfdd105603cd502d778e8502615",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_line": 24,
+      "end_line": 24,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5",
+      "environment": null,
+      "details": {
+        "declaration_kind": "method",
+        "definer": "class",
+        "scope_path": "Circle"
+      }
+    },
+    {
+      "assertion_id": "b695c9924698e67b555dec069edc8460dcaab6a416aead6f9a8e10faa8e21437",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_line": 4,
+      "end_line": 6,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5",
+      "environment": null,
+      "details": {
+        "declaration_kind": "interface",
+        "definer": "module",
+        "scope_path": ""
+      }
+    },
+    {
+      "assertion_id": "bd8dbeb1ebf6039da9222ae64df3fb4b278133ab66122ff6e284b2c8bb06b655",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "RESOLVED",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/legacy.cjs",
+      "start_line": 3,
+      "end_line": 3,
+      "content_hash": "ca9149b317e25027fbed66873d4f3624ff231ca961845edc0edfa3efe9e46e90",
+      "environment": null,
+      "details": {
+        "form": "require",
+        "raw_specifier": "./math",
+        "resolved_path": "src/math.ts",
+        "specifiers": [
+          {
+            "imported": null,
+            "kind": "require",
+            "local": null
+          }
+        ],
+        "type_only": false
+      }
+    },
+    {
+      "assertion_id": "c0271f7ef77aa83ed3e1fe83b65caacd53ccfe956ac2d9b57dde1c5fce071bac",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "RESOLVED",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/index.ts",
+      "start_line": 4,
+      "end_line": 4,
+      "content_hash": "6e87e6c768bb78dbb305dae519d1b518a2048a7ccc07f727baf0e9c35295aeef",
+      "environment": null,
+      "details": {
+        "export_kind": "re-export",
+        "exported_name": "plus",
+        "raw_specifier": "./math",
+        "resolved_path": "src/math.ts"
+      }
+    },
+    {
+      "assertion_id": "c10c44fe73adae0f403cde04d8db90d124f0fcbe8cb5edc6d0c44e58daae4971",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/math.ts",
+      "start_line": 14,
+      "end_line": 14,
+      "content_hash": "ce198a6ed4f95405c040b795200980fed6f7edf14c7b6498d3ac5c17bc9d18c7",
+      "environment": null,
+      "details": {
+        "export_kind": "named",
+        "exported_name": "scale"
+      }
+    },
+    {
+      "assertion_id": "c2070f73991f511fc18e2d15e61c84953eb1031ef2e44d9228a15912e878272a",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "RESOLVED",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/index.ts",
+      "start_line": 4,
+      "end_line": 4,
+      "content_hash": "6e87e6c768bb78dbb305dae519d1b518a2048a7ccc07f727baf0e9c35295aeef",
+      "environment": null,
+      "details": {
+        "form": "re-export",
+        "raw_specifier": "./math",
+        "resolved_path": "src/math.ts",
+        "specifiers": [
+          {
+            "imported": "add",
+            "kind": "re-export",
+            "local": "plus"
+          },
+          {
+            "imported": "scale",
+            "kind": "re-export",
+            "local": "scale"
+          }
+        ],
+        "type_only": false
+      }
+    },
+    {
+      "assertion_id": "cd4c9cb72e696d062d92ca17630b02366647d9d4254bd062d1c1f8094f75ac6d",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/unresolved.ts",
+      "start_line": 0,
+      "end_line": 0,
+      "content_hash": "c3cce3e54228761410ef1f0a114b0ff5443bddbab4776a692ac4c383979fd041",
+      "environment": null,
+      "details": {
+        "child_kind": "file"
+      }
+    },
+    {
+      "assertion_id": "d1a8eeb796cd9846630c78246b75975a5fda688bcf4cbf3430e41b39798feacf",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/unresolved.ts",
+      "start_line": 7,
+      "end_line": 7,
+      "content_hash": "c3cce3e54228761410ef1f0a114b0ff5443bddbab4776a692ac4c383979fd041",
+      "environment": null,
+      "details": {
+        "export_kind": "named",
+        "exported_name": "marker"
+      }
+    },
+    {
+      "assertion_id": "d2a41d193c95caaf367868c88bd4b72dff086ea347622f0a1bf309e86431655b",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/ambiguous.ts",
+      "start_line": 6,
+      "end_line": 8,
+      "content_hash": "057f5b3dd253377649777d8056166e73b8b83dfcd2c826f8eebcb4ef853a2ab0",
+      "environment": null,
+      "details": {
+        "declaration_kind": "function",
+        "definer": "module",
+        "scope_path": "outerA"
+      }
+    },
+    {
+      "assertion_id": "d67e6fd9446c1366cb4146faf9312d22082c75e51a3c2c1bd5f560078e38eda2",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/index.ts",
+      "start_line": 1,
+      "end_line": 6,
+      "content_hash": "6e87e6c768bb78dbb305dae519d1b518a2048a7ccc07f727baf0e9c35295aeef",
+      "environment": null,
+      "details": {
+        "language": "typescript"
+      }
+    },
+    {
+      "assertion_id": "e2ceaf4c6ab97c26d5eafe0493c8be7406bd4c3c07e3f4be487b74476c3bae8c",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src",
+      "start_line": 0,
+      "end_line": 0,
+      "content_hash": "bc9484ce4b0ea31009da9f1aec62527e7d2fd97088bc8b648c55639dd1aacb76",
+      "environment": null,
+      "details": {
+        "child_kind": "directory"
+      }
+    },
+    {
+      "assertion_id": "e7f6e40abe5f6504b98ae2d6b160afda8b265f6d26ac2f4151d70aa33337f66d",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_line": 8,
+      "end_line": 21,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5",
+      "environment": null,
+      "details": {
+        "declaration_kind": "class",
+        "definer": "module",
+        "scope_path": ""
+      }
+    },
+    {
+      "assertion_id": "ec61c4132a51e12496dcfd51fd887413148d1ef0d9a7e860ded1bbb2e92a3c4c",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/alias.ts",
+      "start_line": 1,
+      "end_line": 12,
+      "content_hash": "2e3f28fcff33612266eabd2f2d68ee8dd2f37a942914b62a41c5eba28dd78494",
+      "environment": null,
+      "details": {
+        "language": "typescript"
+      }
+    },
+    {
+      "assertion_id": "ed6250a67c215f070e89b0e5d4e0fd9122f07b89f7300af8f9b8477f5e027918",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/ambiguous.ts",
+      "start_line": 19,
+      "end_line": 21,
+      "content_hash": "057f5b3dd253377649777d8056166e73b8b83dfcd2c826f8eebcb4ef853a2ab0",
+      "environment": null,
+      "details": {
+        "declaration_kind": "function",
+        "definer": "module",
+        "scope_path": ""
+      }
+    },
+    {
+      "assertion_id": "ef22c4cc2c628997bce1413858c4c7d5c10aad9d5812eb4b4078fdc64ed462f1",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/ambiguous.ts",
+      "start_line": 5,
+      "end_line": 10,
+      "content_hash": "057f5b3dd253377649777d8056166e73b8b83dfcd2c826f8eebcb4ef853a2ab0",
+      "environment": null,
+      "details": {
+        "declaration_kind": "function",
+        "definer": "module",
+        "scope_path": ""
+      }
+    },
+    {
+      "assertion_id": "f0d306a3fd0d392a03f11615f7843a16b61633898c2428fd4b4cbc3b9ab5ccf6",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/index.ts",
+      "start_line": 0,
+      "end_line": 0,
+      "content_hash": "6e87e6c768bb78dbb305dae519d1b518a2048a7ccc07f727baf0e9c35295aeef",
+      "environment": null,
+      "details": {
+        "child_kind": "file"
+      }
+    },
+    {
+      "assertion_id": "f369d756a36b44f3aaa90cd6078ab5aee9c44187959809dda310895bf09032a1",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/ambiguous.ts",
+      "start_line": 1,
+      "end_line": 22,
+      "content_hash": "057f5b3dd253377649777d8056166e73b8b83dfcd2c826f8eebcb4ef853a2ab0",
+      "environment": null,
+      "details": {
+        "language": "typescript"
+      }
+    },
+    {
+      "assertion_id": "f721362f185991b3d68363190cd382563d146865121f31a15c46ff96901764d6",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "RESOLVED",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/alias.ts",
+      "start_line": 3,
+      "end_line": 3,
+      "content_hash": "2e3f28fcff33612266eabd2f2d68ee8dd2f37a942914b62a41c5eba28dd78494",
+      "environment": null,
+      "details": {
+        "form": "static",
+        "raw_specifier": "./math",
+        "resolved_path": "src/math.ts",
+        "specifiers": [
+          {
+            "imported": "add",
+            "kind": "named",
+            "local": "plus"
+          },
+          {
+            "imported": "subtract",
+            "kind": "named",
+            "local": "subtract"
+          }
+        ],
+        "type_only": false
+      }
+    },
+    {
+      "assertion_id": "f9e51746f3d6a8cd16f57fc24ee41d3aa22693e8e5de6bd7f515d75b18bd7507",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/shapes.ts",
+      "start_line": 8,
+      "end_line": 21,
+      "content_hash": "24ddd1114f046b3c91290df5809c0b83840d05f6fe53a7d9a32454a5f77443a5",
+      "environment": null,
+      "details": {
+        "export_kind": "named",
+        "exported_name": "Rectangle"
+      }
+    },
+    {
+      "assertion_id": "ff464805e670934f721208103b8cdd29636488363ab85da3e4fc65e58ad2da3a",
+      "evidence_source_type": "AST_DIRECT",
+      "directness": "DIRECT",
+      "extractor_id": "ts-js-structural",
+      "extractor_version": "1.0.0",
+      "match_quality": null,
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "file_path": "src/widget.tsx",
+      "start_line": 10,
+      "end_line": 16,
+      "content_hash": "4e37e9eb7adf88200fec61895961f4e096594ef575338e01af8035f32e1ee713",
+      "environment": null,
+      "details": {
+        "declaration_kind": "function",
+        "definer": "module",
+        "scope_path": ""
+      }
+    }
+  ],
+  "assertion_states": [
+    {
+      "assertion_id": "0084af45c07bfefd762a68e0441bbd42c9932a675660c0983af30464c3d67e89",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "01275f5f36ead6dde845fa52ace66830b0681cd0aed52b0a0c57e0d4d3859cf3",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "092402b2c0b3585157d0214c9ba39be89c9b53bab17782f5846227758708c5f4",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "0d6136980dceb3a299e23f1625379ff628f6619599bb34ecfeb1230d8895642d",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "0e00959b3e295d7df58af0dd4b3cfe7dd609d3087bdcb29487060d6a2db7ba3c",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "1115e6323a5d8aa551413b54a075445745e79a70e9dad5752343e2ee8aad55ed",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "153c9dbb200838a820688a57781e1e4dbcb2326d9437efbfb09ffd8b03fa3618",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "16e7387c3a106a5948e732e6b2784931e8bb037238991a05b19befedc433bd81",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "184c183738e370fe97ff15e49284ff3ca2c8aa86b0b4b2dc162a0ddadec0584b",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "1a166cbd73a1ebd698c94dd8e1d85c38eecdeeed27e62753f6ced21f3d83fa4d",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "1e44843c66bfd77e7e8dad4b54a67afc52e65c069c74cd9ed5b6140b595f5251",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "2302b60ff9aebe4e93acec81b4474aed751d9d02c3cc1fd96fe6f362db3436bc",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "25f11435aea437a6634a39d36742b2700deb10a24060acf12d5742c8d8d61c9f",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "28dbfdc581b1a28220875f987ca3275e7e1e4421a7293f48e6403f8f17c1ae40",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "2a3275ca351208cdef982e64a800c2aa0e7af1c0b1988110e8f89bcad3bc11e3",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 2,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "2ba47b3de56cd4bbeb72588a537e70b2d7487604d962c493d159ba061689c086",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "3118d05020e0bda368b96ed0838496c796462bfcb520d7ac173d5a0f8b9f7802",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "331d923929b610a1e0c03b53dab9944bc1cbf565b2b41ab63ea281fbd9c55fb9",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "33227e362631eef22a556f446b9cca7df6a2931bb79ad853104ed265f78bd391",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "355816a6777a0d7c426b091c5783159e71eac195b180cb77945fbbd99fd56d27",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "36f3f885c116c4f8fa74c6946393382e44777a29704cd337d2b04f2c053c6f10",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "450da7885466505dbab5450c45f0ee7ddd9ecb1a9bd2e31ddd27436ba9bdc9a5",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "4839ae8a36f4438252c480c57efdfdf8842a37759ebae7dd61f1143f511073d8",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "4b463419eba75a32391f95e26923f9434c96323d800196ebc959464b637c12b0",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "UNRESOLVED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 1,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "4d1a7cefe6d76ae4d19d29aad98f829fdff886b904c943eb16234a8c2e4bde74",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "4f259f252b93d74ed8ab5c6f2c5ec6d606886f309f4b8db0f58800e8e62ad686",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "50b7838d5774366904ae6b760a9d1701c81c9f91d270d7ab9cb919d9122b34ba",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "55ae14191303a069ae1806bdc9d4e915808c0cf5c71af1d3fd92112e2e6a08eb",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "5fdac41507a64df6670408d446fc253bef30acf65e2f4007e0d7629359574e6b",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "6284f78bd589654c4e09915b1884f7260478b3c8f8201d934ff57518ecd3f43d",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "62e94461cdf17289f432b1410da56ae7a3061f4392d3af3620d2a702d4139955",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "6817df4314a4384172f9f388f05a14178d3789a596c4235c36f10e6dadfd1f83",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "743af55d53e503ceade217403470a238f07d03d8edcec337a4dcc8c135684c49",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "75e8718f0a33c822947fb2269d8718eefbd8c9185dd01c3ec41b3608b89e50c4",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "7981e786fc5290a9ed6165f9849593527e3378de1b087000e15989ce502d6959",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "7bfe0d05df55c96a2f25be72097204d3542db86d4e5e6052abe24fff64263000",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "85f789cf81dffeb53d25c71c1ce28137d4f0d951d56633167dfd556aea1c7c8a",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "86bd849a56fb01a254de599b3b41501528dc7518c5fdac06c8c014e5c53d279a",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "88dc879da1f9d7992dcb9366b92b9725c18565d54b946ca05a9165973c72d8cb",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "8ab11034ec799588c234c6d5da11eabfed6b613e5f34ef30f32c68fd1ffb03ac",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "8ac814b0e8f279b2050ada5acf62310977534321c68bb46c5467aaa2865c013b",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "8ebbd2d94fc6c675affb907c75a4ce90bed10abb8718525ec7d359c7abd91434",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "921050b74601490a5d3321875f185379f2cad905a376a63ff2efb3994598938c",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "UNRESOLVED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 1,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "935a440a96fc3e97f8d2d5ddf9954652d63981ba7fa862c5f77adf3910503669",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "947f6cd9529f3893782a38d0f03de0ef11433ada49982ee485882de1115f28aa",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "994e8201fafa5f5bf5b6237ff8f9f9a664ed4a5392d6776d9e4fc39b38c84418",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 2,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "998e7b39807a7a34e4a737485c083227deec533e09d32831ae92e03d79ef67fe",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "b31eec01e78cba00ad0170f5a90d77984fe4f26554e1347b06f90e39d04118cb",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "b63592db5939a3536e7a3d7eefc8149f6fdf7cfdd105603cd502d778e8502615",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "b695c9924698e67b555dec069edc8460dcaab6a416aead6f9a8e10faa8e21437",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "bd8dbeb1ebf6039da9222ae64df3fb4b278133ab66122ff6e284b2c8bb06b655",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "c0271f7ef77aa83ed3e1fe83b65caacd53ccfe956ac2d9b57dde1c5fce071bac",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "c10c44fe73adae0f403cde04d8db90d124f0fcbe8cb5edc6d0c44e58daae4971",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "c2070f73991f511fc18e2d15e61c84953eb1031ef2e44d9228a15912e878272a",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "cd4c9cb72e696d062d92ca17630b02366647d9d4254bd062d1c1f8094f75ac6d",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "d1a8eeb796cd9846630c78246b75975a5fda688bcf4cbf3430e41b39798feacf",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "d2a41d193c95caaf367868c88bd4b72dff086ea347622f0a1bf309e86431655b",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "d67e6fd9446c1366cb4146faf9312d22082c75e51a3c2c1bd5f560078e38eda2",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "e2ceaf4c6ab97c26d5eafe0493c8be7406bd4c3c07e3f4be487b74476c3bae8c",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "e7f6e40abe5f6504b98ae2d6b160afda8b265f6d26ac2f4151d70aa33337f66d",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "ec61c4132a51e12496dcfd51fd887413148d1ef0d9a7e860ded1bbb2e92a3c4c",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "ed6250a67c215f070e89b0e5d4e0fd9122f07b89f7300af8f9b8477f5e027918",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "ef22c4cc2c628997bce1413858c4c7d5c10aad9d5812eb4b4078fdc64ed462f1",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "f0d306a3fd0d392a03f11615f7843a16b61633898c2428fd4b4cbc3b9ab5ccf6",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "f369d756a36b44f3aaa90cd6078ab5aee9c44187959809dda310895bf09032a1",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "f721362f185991b3d68363190cd382563d146865121f31a15c46ff96901764d6",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "f9e51746f3d6a8cd16f57fc24ee41d3aa22693e8e5de6bd7f515d75b18bd7507",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    },
+    {
+      "assertion_id": "ff464805e670934f721208103b8cdd29636488363ab85da3e4fc65e58ad2da3a",
+      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
+      "status": "SUPPORTED",
+      "strongest_source_type": "AST_DIRECT",
+      "source_type_mask": 1,
+      "observation_count": 1,
+      "is_unresolved": 0,
+      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+    }
+  ]
+}
