@@ -124,3 +124,4 @@ derived from a competitor:
 | Slice | Date | Clean-room check performed | Result |
 |---|---|---|---|
 | 1 | 2026-07-31 | Dependency audit; source-tree scan for competitor names; confirmation that no competitor DB/API is read | Pass |
+| 2a | 2026-07-31 | Scan of new resolver sources and fixtures for competitor names; confirmed no new dependency (`Cargo.lock` byte-identical); confirmed no network surface in `bind.rs`/`refs.rs`/`exports.rs`; no competitor skill invoked | Pass |

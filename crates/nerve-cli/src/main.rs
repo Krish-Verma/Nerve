@@ -236,6 +236,13 @@ fn run_index(output: &Output, path: Option<PathBuf>) -> i32 {
                 "  unresolved     {} entities, {} assertions",
                 outcome.unresolved_entities, outcome.unresolved_assertions
             ));
+            output.line(format!(
+                "  unmodelled     {} call/heritage sites",
+                outcome.unmodelled_call_sites
+            ));
+            for (form, count) in &outcome.unmodelled_by_form {
+                output.line(format!("    {form:<18} {count}"));
+            }
             output.line(format!("  duration_ms    {}", outcome.duration_ms));
             if partial {
                 output.line(format!(
@@ -259,6 +266,8 @@ fn run_index(output: &Output, path: Option<PathBuf>) -> i32 {
                 "skipped_symlinks": outcome.skipped_symlinks,
                 "denied_secrets": outcome.denied_secrets,
                 "dynamic_imports_without_specifier": outcome.dynamic_imports_without_specifier,
+                "unmodelled_call_sites": outcome.unmodelled_call_sites,
+                "unmodelled_by_form": outcome.unmodelled_by_form,
                 "entities_total": outcome.entities_total,
                 "entities_by_kind": outcome.entities_by_kind,
                 "assertions_total": outcome.assertions_total,
@@ -285,6 +294,20 @@ fn open_existing(path: &Path) -> Result<(PathBuf, nerve_store::Connection), Stri
     }
     let conn = nerve_store::open(&db_path).map_err(|err| err.to_string())?;
     Ok((db_path, conn))
+}
+
+fn run_json(run: &nerve_store::ExtractorRunSummary) -> serde_json::Value {
+    json!({
+        "run_id": run.run_id,
+        "state_id": run.state_id,
+        "extractor_id": run.extractor_id,
+        "extractor_version": run.extractor_version,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+        "files_processed": run.files_processed,
+        "files_failed": run.files_failed,
+        "status": run.status,
+    })
 }
 
 fn run_status(output: &Output, path: &Path) -> i32 {
@@ -352,6 +375,18 @@ fn run_status(output: &Output, path: &Path) -> i32 {
         }
         None => output.line("  last_run       (never indexed)"),
     }
+    output.line(format!("  runs           {}", report.runs.len()));
+    for run in &report.runs {
+        output.line(format!(
+            "    {:<18} {:<7} {} ({}), {} processed, {} failed",
+            run.extractor_id,
+            run.extractor_version,
+            run.finished_at.as_deref().unwrap_or(&run.started_at),
+            run.status,
+            run.files_processed,
+            run.files_failed
+        ));
+    }
     output.line(format!(
         "  healthy        {}",
         if healthy { "yes" } else { "no" }
@@ -378,17 +413,8 @@ fn run_status(output: &Output, path: &Path) -> i32 {
         "assertion_states_total": report.assertion_states_total,
         "unresolved_entities": report.unresolved_entities,
         "unresolved_assertions": report.unresolved_assertions,
-        "last_run": report.last_run.as_ref().map(|run| json!({
-            "run_id": run.run_id,
-            "state_id": run.state_id,
-            "extractor_id": run.extractor_id,
-            "extractor_version": run.extractor_version,
-            "started_at": run.started_at,
-            "finished_at": run.finished_at,
-            "files_processed": run.files_processed,
-            "files_failed": run.files_failed,
-            "status": run.status,
-        })),
+        "last_run": report.last_run.as_ref().map(run_json),
+        "runs": report.runs.iter().map(run_json).collect::<Vec<_>>(),
     }));
 
     if healthy {

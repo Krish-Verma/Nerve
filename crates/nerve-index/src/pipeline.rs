@@ -1,7 +1,12 @@
 //! `nerve index`: discover, read, parse, extract, persist, derive.
 //!
-//! Slice 1 parses serially. That is a determinism decision, not an oversight: the canonical
-//! dump must be byte-identical across runs, and an ordered parallel merge is Slice 3 work.
+//! Parsing is serial. That is a determinism decision, not an oversight: the canonical dump must
+//! be byte-identical across runs, and an ordered parallel merge is Slice 3 work.
+//!
+//! Two extractors run per index, each with its own `extractor_run` row and its own batch
+//! verified against its own declared source types. Keeping them separate is what makes a
+//! `DELETE FROM observation WHERE extractor_id = 'ts-js-reference'` a complete retraction of
+//! everything resolution claimed, with the structural graph untouched.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -11,16 +16,18 @@ use nerve_core::ids;
 use nerve_core::model::{
     AssertionRecord, EntityRecord, GraphBatch, ObservationRecord, OccurrenceRecord, Span,
 };
-use nerve_core::vocab::{Directness, EntityKind, EvidenceSourceType, Relation};
+use nerve_core::vocab::{Directness, EntityKind, EvidenceSourceType, Relation, UnresolvedCategory};
 
 use crate::config::{self, Config};
 use crate::discover;
 use crate::error::{IndexError, Result};
+use crate::exports::ExportIndex;
 use crate::extract::{
     self, ExportTarget, ModuleExtraction, DECLARED_SOURCE_TYPES, EXTRACTOR_ID, EXTRACTOR_VERSION,
 };
 use crate::gitinfo;
 use crate::lang::Language;
+use crate::refs::{self, RefTarget, ReferenceExtraction};
 use crate::resolve;
 
 /// Terminal status of an index run.
@@ -65,6 +72,10 @@ pub struct IndexOutcome {
     pub skipped_symlinks: usize,
     /// `import(expr)` calls that named no specifier and so produced no edge.
     pub dynamic_imports_without_specifier: usize,
+    /// Call sites and heritage clauses whose form Nerve does not model. Counted, never guessed.
+    pub unmodelled_call_sites: usize,
+    /// Breakdown of the above by form tag.
+    pub unmodelled_by_form: BTreeMap<String, usize>,
     /// Entity counts by kind, over the whole database.
     pub entities_by_kind: BTreeMap<String, i64>,
     /// Assertion counts by relation, over the whole database.
@@ -96,12 +107,25 @@ struct LoadedFile {
 /// Accumulates the graph for one run, deduplicating by content-derived key as it goes.
 struct GraphBuilder {
     state_id: String,
+    extractor_id: &'static str,
+    extractor_version: &'static str,
     batch: GraphBatch,
     seen_entities: BTreeSet<String>,
     seen_assertions: BTreeSet<String>,
 }
 
 impl GraphBuilder {
+    fn new(state_id: &str, extractor_id: &'static str, extractor_version: &'static str) -> Self {
+        GraphBuilder {
+            state_id: state_id.to_string(),
+            extractor_id,
+            extractor_version,
+            batch: GraphBatch::default(),
+            seen_entities: BTreeSet::new(),
+            seen_assertions: BTreeSet::new(),
+        }
+    }
+
     fn add_entity(&mut self, entity: EntityRecord) {
         if self.seen_entities.insert(entity.entity_id.clone()) {
             self.batch.entities.push(entity);
@@ -141,7 +165,7 @@ impl GraphBuilder {
     fn observe(
         &mut self,
         assertion_id: &str,
-        directness: Directness,
+        evidence: Evidence,
         file_path: &str,
         start_line: usize,
         end_line: usize,
@@ -150,12 +174,11 @@ impl GraphBuilder {
     ) {
         self.batch.observations.push(ObservationRecord {
             assertion_id: assertion_id.to_string(),
-            // Slice 1 has exactly one extractor and it reads the syntax tree.
-            evidence_source_type: EvidenceSourceType::AstDirect,
-            directness,
-            extractor_id: EXTRACTOR_ID.to_string(),
-            extractor_version: EXTRACTOR_VERSION.to_string(),
-            // This extractor performs no matching, so match_quality is meaningless for it.
+            evidence_source_type: evidence.source_type,
+            directness: evidence.directness,
+            extractor_id: self.extractor_id.to_string(),
+            extractor_version: self.extractor_version.to_string(),
+            // Neither extractor performs matching, so match_quality is meaningless for both.
             match_quality: None,
             file_path: file_path.to_string(),
             start_line,
@@ -172,7 +195,7 @@ impl GraphBuilder {
         source: &str,
         relation: Relation,
         target: &str,
-        directness: Directness,
+        evidence: Evidence,
         file_path: &str,
         span: Span,
         content_hash: &str,
@@ -181,7 +204,7 @@ impl GraphBuilder {
         let assertion_id = self.add_assertion(source, relation, target);
         self.observe(
             &assertion_id,
-            directness,
+            evidence,
             file_path,
             span.start_line,
             span.end_line,
@@ -189,6 +212,32 @@ impl GraphBuilder {
             details,
         );
     }
+}
+
+/// The evidence profile attached to one observation.
+///
+/// The pairing is not decoration. ADR-0003 defines `AST_RESOLVED` as "resolved through
+/// import/module resolution", so an edge that survived a resolution step must say so; an edge
+/// whose target is an `Unresolved` entity states only what the tree literally wrote and stays
+/// `AST_DIRECT`.
+#[derive(Debug, Clone, Copy)]
+struct Evidence {
+    source_type: EvidenceSourceType,
+    directness: Directness,
+}
+
+impl Evidence {
+    /// The syntax tree literally states this.
+    const DIRECT: Evidence = Evidence {
+        source_type: EvidenceSourceType::AstDirect,
+        directness: Directness::Direct,
+    };
+
+    /// Module, export or binding resolution produced this.
+    const RESOLVED: Evidence = Evidence {
+        source_type: EvidenceSourceType::AstResolved,
+        directness: Directness::Resolved,
+    };
 }
 
 fn parent_directory(rel_path: &str) -> Option<String> {
@@ -279,9 +328,47 @@ pub fn index_repository(root: &Path) -> Result<IndexOutcome> {
         .map(|e| e.dynamic_imports_without_specifier)
         .sum();
 
+    // The export closure spans every module, so it is built once from the whole corpus and
+    // then shared: a barrel chain in one file can reach a declaration in any other.
+    let indexed: BTreeSet<String> = loaded.iter().map(|file| file.rel_path.clone()).collect();
+    let export_index = ExportIndex::build(&extractions, &indexed);
+
+    let mut reference_extractions: Vec<ReferenceExtraction> = Vec::with_capacity(loaded.len());
+    for (file, extraction) in loaded.iter().zip(extractions.iter()) {
+        reference_extractions.push(refs::extract_references(
+            &config.project_id,
+            &file.rel_path,
+            file.language,
+            &file.source,
+            extraction,
+            &export_index,
+            &indexed,
+        )?);
+    }
+
+    let unmodelled_call_sites: usize = reference_extractions
+        .iter()
+        .map(|extraction| extraction.unmodelled_call_sites)
+        .sum();
+    let mut unmodelled_by_form: BTreeMap<String, usize> = BTreeMap::new();
+    for extraction in &reference_extractions {
+        for (form, count) in &extraction.unmodelled_by_form {
+            *unmodelled_by_form.entry(form.clone()).or_insert(0) += count;
+        }
+    }
+
     // ---- build ---------------------------------------------------------------------------
     let batch = build_graph(&config.project_id, &state_id, &loaded, &extractions)?;
     batch.verify_declared_source_types(EXTRACTOR_ID, &DECLARED_SOURCE_TYPES)?;
+
+    let reference_batch = build_reference_graph(
+        &config.project_id,
+        &state_id,
+        &loaded,
+        &reference_extractions,
+    );
+    reference_batch
+        .verify_declared_source_types(refs::EXTRACTOR_ID, &refs::DECLARED_SOURCE_TYPES)?;
 
     // ---- persist -------------------------------------------------------------------------
     let repo_id = ids::repository_id(&config.project_id);
@@ -312,21 +399,40 @@ pub fn index_repository(root: &Path) -> Result<IndexOutcome> {
                 content_merkle,
             },
         )?;
-        let run_id = nerve_store::begin_extractor_run(
+        // One `extractor_run` row per extractor. The rows are what make a contribution
+        // attributable, and therefore revocable, per extractor and version.
+        let structural_run = nerve_store::begin_extractor_run(
             &tx,
             &repo_id,
             &state_id,
             EXTRACTOR_ID,
             EXTRACTOR_VERSION,
         )?;
-        nerve_store::persist_batch(&tx, &repo_id, &state_id, run_id, &batch)?;
+        nerve_store::persist_batch(&tx, &repo_id, &state_id, structural_run, &batch)?;
         nerve_store::finish_extractor_run(
             &tx,
-            run_id,
+            structural_run,
             loaded.len() as i64,
             files_failed as i64,
             status.as_str(),
         )?;
+
+        let reference_run = nerve_store::begin_extractor_run(
+            &tx,
+            &repo_id,
+            &state_id,
+            refs::EXTRACTOR_ID,
+            refs::EXTRACTOR_VERSION,
+        )?;
+        nerve_store::persist_batch(&tx, &repo_id, &state_id, reference_run, &reference_batch)?;
+        nerve_store::finish_extractor_run(
+            &tx,
+            reference_run,
+            loaded.len() as i64,
+            files_failed as i64,
+            status.as_str(),
+        )?;
+
         // Derivation runs inside the same transaction: the graph and the state derived from it
         // become visible together or not at all.
         nerve_store::rebuild_assertion_state(&tx)?;
@@ -346,6 +452,8 @@ pub fn index_repository(root: &Path) -> Result<IndexOutcome> {
         skipped_unsupported: discovery.skipped_unsupported,
         skipped_symlinks: discovery.skipped_symlinks,
         dynamic_imports_without_specifier,
+        unmodelled_call_sites,
+        unmodelled_by_form,
         entities_by_kind: report.entities_by_kind,
         assertions_by_relation: report.assertions_by_relation,
         entities_total: report.entities_total,
@@ -365,12 +473,7 @@ fn build_graph(
     loaded: &[LoadedFile],
     extractions: &[ModuleExtraction],
 ) -> Result<GraphBatch> {
-    let mut builder = GraphBuilder {
-        state_id: state_id.to_string(),
-        batch: GraphBatch::default(),
-        seen_entities: BTreeSet::new(),
-        seen_assertions: BTreeSet::new(),
-    };
+    let mut builder = GraphBuilder::new(state_id, EXTRACTOR_ID, EXTRACTOR_VERSION);
 
     let repo_id = ids::repository_id(project_id);
     // The repository's display name is its own relative path. The directory basename is
@@ -417,7 +520,7 @@ fn build_graph(
             &parent_id,
             Relation::Contains,
             &entity_id,
-            Directness::Direct,
+            Evidence::DIRECT,
             directory,
             Span::NONE,
             &directory_hash(directory),
@@ -477,7 +580,7 @@ fn build_graph(
             &parent_id,
             Relation::Contains,
             &file_entity,
-            Directness::Direct,
+            Evidence::DIRECT,
             rel_path,
             Span::NONE,
             hash,
@@ -498,7 +601,7 @@ fn build_graph(
             &file_entity,
             Relation::Defines,
             &module_entity,
-            Directness::Direct,
+            Evidence::DIRECT,
             rel_path,
             extraction.file_span,
             hash,
@@ -528,7 +631,7 @@ fn build_graph(
                 &definer,
                 Relation::Defines,
                 &symbol.entity_id,
-                Directness::Direct,
+                Evidence::DIRECT,
                 rel_path,
                 symbol.span,
                 hash,
@@ -557,7 +660,7 @@ fn build_graph(
                 &module_entity,
                 Relation::Exports,
                 &target,
-                Directness::Direct,
+                Evidence::DIRECT,
                 rel_path,
                 export.span,
                 hash,
@@ -601,7 +704,7 @@ fn build_graph(
                     &module_entity,
                     Relation::Exports,
                     &target,
-                    Directness::Resolved,
+                    Evidence::RESOLVED,
                     rel_path,
                     re_export.span,
                     hash,
@@ -630,13 +733,20 @@ fn build_graph(
                 })
                 .collect();
 
-            let (target, directness) = match &resolved {
+            let (target, evidence) = match &resolved {
+                // Module resolution ran and succeeded: AST_RESOLVED, per ADR-0003.
                 Some(target_module) => (
                     ids::module_id(project_id, target_module),
-                    Directness::Resolved,
+                    Evidence::RESOLVED,
                 ),
+                // Nothing was resolved. All the tree states is a specifier, so AST_DIRECT.
                 None => {
-                    let entity_id = ids::unresolved_id(project_id, rel_path, &import.raw_specifier);
+                    let entity_id = ids::unresolved_id(
+                        project_id,
+                        rel_path,
+                        UnresolvedCategory::Module,
+                        &import.raw_specifier,
+                    );
                     builder.add_entity(EntityRecord {
                         entity_id: entity_id.clone(),
                         kind: EntityKind::Unresolved,
@@ -645,19 +755,20 @@ fn build_graph(
                         language: None,
                         meta: Some(
                             serde_json::json!({
+                                "category": UnresolvedCategory::Module.as_str(),
                                 "importer": rel_path,
                                 "raw_specifier": import.raw_specifier,
                                 "reason": if resolve::is_relative(&import.raw_specifier) {
                                     "relative specifier does not name an indexed file"
                                 } else {
-                                    "non-relative specifier; Slice 1 resolves relative paths only"
+                                    "non-relative specifier; resolution is relative-path only"
                                 },
                             })
                             .to_string(),
                         ),
                     });
                     builder.add_occurrence(&entity_id, rel_path, import.span, hash);
-                    (entity_id, Directness::Direct)
+                    (entity_id, Evidence::DIRECT)
                 }
             };
 
@@ -665,7 +776,7 @@ fn build_graph(
                 &module_entity,
                 Relation::Imports,
                 &target,
-                directness,
+                evidence,
                 rel_path,
                 import.span,
                 hash,
@@ -681,6 +792,68 @@ fn build_graph(
     }
 
     Ok(builder.batch)
+}
+
+/// Turn resolved reference sites into assertions and observations.
+///
+/// This runs as a **separate batch under a separate extractor run**. It creates no symbol
+/// entities — every resolved target already exists in the structural batch — and only the
+/// `Unresolved` entities it names itself.
+fn build_reference_graph(
+    project_id: &str,
+    state_id: &str,
+    loaded: &[LoadedFile],
+    extractions: &[ReferenceExtraction],
+) -> GraphBatch {
+    let mut builder = GraphBuilder::new(state_id, refs::EXTRACTOR_ID, refs::EXTRACTOR_VERSION);
+
+    for (file, extraction) in loaded.iter().zip(extractions.iter()) {
+        let rel_path = file.rel_path.as_str();
+        let hash = file.content_hash.as_str();
+
+        for site in &extraction.sites {
+            let (target, evidence) = match &site.target {
+                RefTarget::Resolved(entity_id) => (entity_id.clone(), Evidence::RESOLVED),
+                RefTarget::Unresolved { name, reason } => {
+                    let entity_id =
+                        ids::unresolved_id(project_id, rel_path, UnresolvedCategory::Value, name);
+                    builder.add_entity(EntityRecord {
+                        entity_id: entity_id.clone(),
+                        kind: EntityKind::Unresolved,
+                        name: name.clone(),
+                        scope_path: rel_path.to_string(),
+                        language: None,
+                        meta: Some(
+                            serde_json::json!({
+                                "category": UnresolvedCategory::Value.as_str(),
+                                "importer": rel_path,
+                                "raw_specifier": serde_json::Value::Null,
+                                // The first reason recorded for this name in this file. Each
+                                // individual site carries its own reason in observation details.
+                                "reason": reason.as_str(),
+                            })
+                            .to_string(),
+                        ),
+                    });
+                    builder.add_occurrence(&entity_id, rel_path, site.span, hash);
+                    (entity_id, Evidence::DIRECT)
+                }
+            };
+
+            builder.claim(
+                &site.source_entity_id,
+                site.relation,
+                &target,
+                evidence,
+                rel_path,
+                site.span,
+                hash,
+                site.details.clone(),
+            );
+        }
+    }
+
+    builder.batch
 }
 
 #[cfg(test)]

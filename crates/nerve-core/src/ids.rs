@@ -6,7 +6,7 @@
 //! different tuples cannot collide by concatenation.
 
 use crate::error::NerveError;
-use crate::vocab::{EntityKind, Relation};
+use crate::vocab::{EntityKind, Relation, UnresolvedCategory};
 
 /// ASCII unit separator, the canonical tuple field delimiter.
 pub const UNIT_SEPARATOR: u8 = 0x1f;
@@ -104,15 +104,26 @@ pub fn symbol_id(
     ))
 }
 
-/// `("unresolved", project_id, importer_rel_path, raw_specifier)`
-pub fn unresolved_id(project_id: &str, importer_rel_path: &str, raw_specifier: &str) -> String {
+/// `("unresolved", project_id, importer_rel_path, category, raw_name)`
+///
+/// `category` is load-bearing, not descriptive. A file containing both
+/// `import { parse } from 'parse'` and a call to `parse()` has two distinct unresolved things
+/// with the same name; without the discriminator they would collide onto one entity and Nerve
+/// would silently claim a module and a value are the same thing.
+pub fn unresolved_id(
+    project_id: &str,
+    importer_rel_path: &str,
+    category: UnresolvedCategory,
+    raw_name: &str,
+) -> String {
     prefixed(
         EntityKind::Unresolved,
         &[
             EntityKind::Unresolved.as_str(),
             project_id,
             importer_rel_path,
-            raw_specifier,
+            category.as_str(),
+            raw_name,
         ],
     )
 }
@@ -168,7 +179,10 @@ mod tests {
             (directory_id(PID, "src"), "dir"),
             (file_id(PID, "src/math.ts"), "file"),
             (module_id(PID, "src/math.ts"), "mod"),
-            (unresolved_id(PID, "src/a.ts", "./missing"), "unres"),
+            (
+                unresolved_id(PID, "src/a.ts", UnresolvedCategory::Module, "./missing"),
+                "unres",
+            ),
         ];
         for (id, prefix) in cases {
             assert!(id.starts_with(&format!("{prefix}_")), "{id} lacks {prefix}");
@@ -198,6 +212,32 @@ mod tests {
         for other in others {
             assert_ne!(base, other);
         }
+    }
+
+    #[test]
+    fn unresolved_modules_and_values_with_the_same_name_are_distinct() {
+        // A file that both imports from `parse` and calls `parse()` must not merge the two.
+        let module = unresolved_id(PID, "src/a.ts", UnresolvedCategory::Module, "parse");
+        let value = unresolved_id(PID, "src/a.ts", UnresolvedCategory::Value, "parse");
+        assert_ne!(module, value);
+        // The discriminator must not be forgeable by moving text between fields either.
+        assert_ne!(
+            unresolved_id(PID, "src/a.ts", UnresolvedCategory::Value, "parse"),
+            unresolved_id(PID, "src/a.tsvalue", UnresolvedCategory::Value, "parse")
+        );
+    }
+
+    #[test]
+    fn unresolved_id_varies_with_importer_and_name() {
+        let base = unresolved_id(PID, "src/a.ts", UnresolvedCategory::Value, "parse");
+        assert_ne!(
+            base,
+            unresolved_id(PID, "src/b.ts", UnresolvedCategory::Value, "parse")
+        );
+        assert_ne!(
+            base,
+            unresolved_id(PID, "src/a.ts", UnresolvedCategory::Value, "other")
+        );
     }
 
     #[test]

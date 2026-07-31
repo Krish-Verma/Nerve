@@ -56,10 +56,12 @@ read + hash     BLAKE3 content hash per file
 parse           tree-sitter, grammar chosen by extension
    │
 extract         entities + occurrences + assertions + observations
-                (one extractor: ts-js-structural)
+                ts-js-structural  → CONTAINS · DEFINES · IMPORTS · EXPORTS
+                ts-js-reference   → CALLS · REFERENCES · EXTENDS · IMPLEMENTS
+                                    via bind (lexical scope) + exports (re-export closure)
    │
-persist         single transaction: repository_state, extractor_run,
-                entities, occurrences, assertions, observations
+persist         single transaction: repository_state, one extractor_run per
+                extractor, entities, occurrences, assertions, observations
    │
 derive          rebuild_assertion_state()  — pure function of observation
 ```

@@ -179,6 +179,51 @@ impl FromStr for Relation {
     }
 }
 
+/// What an [`EntityKind::Unresolved`] entity stands in for.
+///
+/// This is a **domain discriminator**, not decoration. `import { parse } from 'parse'` and a
+/// call to `parse()` in the same file are different unresolved things; without a category in
+/// the identity tuple they would hash to one entity and Nerve would claim a module and a value
+/// are the same thing. ADR-0002's tuples exist precisely to prevent that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum UnresolvedCategory {
+    /// A module specifier that named no indexed module.
+    Module,
+    /// A value or type name that no binding in scope could resolve.
+    Value,
+}
+
+impl UnresolvedCategory {
+    /// Every category, in declaration order.
+    pub const ALL: [UnresolvedCategory; 2] =
+        [UnresolvedCategory::Module, UnresolvedCategory::Value];
+
+    /// Canonical name, used in identity tuples and in entity metadata.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UnresolvedCategory::Module => "module",
+            UnresolvedCategory::Value => "value",
+        }
+    }
+}
+
+impl fmt::Display for UnresolvedCategory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for UnresolvedCategory {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        UnresolvedCategory::ALL
+            .into_iter()
+            .find(|c| c.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("UnresolvedCategory", s))
+    }
+}
+
 /// How a piece of evidence was obtained (ADR-0003).
 ///
 /// The declaration order is **not** a truth ranking — ADR-0003 is explicit that ranking is
@@ -398,6 +443,17 @@ mod tests {
             prefixes,
             vec!["repo", "dir", "file", "mod", "fn", "meth", "class", "iface", "unres"]
         );
+    }
+
+    #[test]
+    fn unresolved_category_round_trips() {
+        for category in UnresolvedCategory::ALL {
+            assert_eq!(
+                category.as_str().parse::<UnresolvedCategory>().unwrap(),
+                category
+            );
+        }
+        assert!("nonsense".parse::<UnresolvedCategory>().is_err());
     }
 
     #[test]

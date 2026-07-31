@@ -6,7 +6,8 @@ Authoritative slice list. Update the status column at the end of every slice.
 | # | Slice | Status |
 |---|---|---|
 | 1 | Indexing foundation — `init`/`index`/`status`/`search`, SQLite evidence schema, TS/JS entities, `CONTAINS`/`DEFINES`/`IMPORTS`/`EXPORTS` | ✅ Complete (2026-07-31) — 137 tests pass, ADR-0001 gate passed |
-| 2 | Static relationship resolution — `CALLS`, `REFERENCES`, `EXTENDS`, `IMPLEMENTS`, module resolution, negative fixtures + measured precision, `nerve path`, `nerve why` | ⬜ Not started — **recommended next** |
+| 2a | Static relationship resolution — `CALLS`, `REFERENCES`, `EXTENDS`, `IMPLEMENTS`, lexical binding + import resolution, negative fixtures + measured precision | ✅ Complete (2026-07-31) — 203 tests pass, FP=0 FN=0 on 24 resolved edges |
+| 2b | Graph query surface — `nerve path`, `nerve why`, evidence packets | 🟡 In progress |
 | 3 | Incremental indexing — content hashes, changed-file indexing, importer invalidation, moves/deletes, `IdentityLink` | ⬜ Not started |
 | 4 | Initial visual explorer — `nerve serve`, overview, search, graph canvas, evidence inspector | ⬜ Not started |
 | 5 | Markdown + ADR evidence — sections, citations, document↔code identity links | ⬜ Not started |
@@ -35,3 +36,23 @@ Authoritative slice list. Update the status column at the end of every slice.
 
 `CALLS`, `REFERENCES`, `EXTENDS`, `IMPLEMENTS` — deferred to Slice 2 so they ship with negative
 fixtures and a measured precision number rather than as name matches. See master plan §3.3.
+
+## Slice 2 scope split (2026-07-31)
+
+Roadmap row 2 was one row covering a resolver, a measurement apparatus, and two query
+surfaces. It is split into **2a** (resolution + relations + measured precision) and **2b**
+(`nerve path`, `nerve why`). Rationale, pushback and acceptance criteria:
+`docs/plans/slice-02-static-resolution.md`.
+
+## Slice 2a — delivered
+
+- Second extractor `ts-js-reference 1.0.0`, declaring `[AST_DIRECT, AST_RESOLVED]`.
+- Lexical binding table with `Opaque` shadowing guard; transitive re-export closure.
+- `CALLS`, `REFERENCES`, `EXTENDS`, `IMPLEMENTS` — resolved edges `AST_RESOLVED`, unnameable
+  targets recorded as `Unresolved` entities with a closed-vocabulary reason.
+- **Measured: FP=0, FN=0 across 24 resolved edges; 38.1% of call sites honestly unresolved.**
+  Gate validity confirmed by orchestrator mutation probes against the implementation.
+- Corrected a Slice 1 defect: resolved `IMPORTS`/re-export `EXPORTS` were mislabelled
+  `AST_DIRECT`; now `AST_RESOLVED` (`ts-js-structural` → 1.1.0).
+- Corrected an identity collision: unresolved ids now carry a `module`/`value` category.
+- No schema change, no new dependencies. Report: `docs/reports/slice-02a-report.md`.

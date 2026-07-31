@@ -116,8 +116,8 @@ fn re_indexing_is_idempotent() {
     assert_eq!(dump_json(&root), dump_before, "logical graph changed");
     assert_eq!(
         count(&conn, "extractor_run"),
-        runs_before + 1,
-        "extractor_run is a run log and is expected to grow by exactly one"
+        runs_before + 2,
+        "extractor_run is a run log and grows by one row per extractor"
     );
 }
 
@@ -127,7 +127,11 @@ fn unresolved_imports_become_entities_not_omissions() {
     let conn = open_db(&root);
 
     let mut stmt = conn
-        .prepare("SELECT name, scope_path FROM entity WHERE kind = 'unresolved' ORDER BY name")
+        .prepare(
+            "SELECT name, scope_path FROM entity
+              WHERE kind = 'unresolved' AND json_extract(meta, '$.category') = 'module'
+              ORDER BY name",
+        )
         .unwrap();
     let rows: Vec<(String, String)> = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
@@ -185,36 +189,55 @@ fn a_dynamic_import_without_a_literal_produces_no_edge() {
     assert_eq!(imports_from_ambiguous, 0);
 }
 
+/// Each extractor owns a disjoint set of relations, and neither strays.
 #[test]
-fn slice_one_emits_only_the_four_declared_relations() {
+fn each_extractor_emits_only_its_own_relations() {
     let (_dir, root) = indexed_fixture();
     let conn = open_db(&root);
-    let mut stmt = conn
-        .prepare("SELECT DISTINCT relation FROM assertion ORDER BY relation")
-        .unwrap();
-    let relations: Vec<String> = stmt
-        .query_map([], |row| row.get(0))
-        .unwrap()
-        .map(|row| row.unwrap())
-        .collect();
-    assert_eq!(relations, vec!["CONTAINS", "DEFINES", "EXPORTS", "IMPORTS"]);
+
+    let relations_of = |extractor: &str| -> Vec<String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT a.relation
+                   FROM assertion a
+                   JOIN observation o ON o.assertion_id = a.assertion_id
+                  WHERE o.extractor_id = ?1
+                  ORDER BY a.relation",
+            )
+            .unwrap();
+        stmt.query_map([extractor], |row| row.get(0))
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect()
+    };
+
+    assert_eq!(
+        relations_of("ts-js-structural"),
+        vec!["CONTAINS", "DEFINES", "EXPORTS", "IMPORTS"]
+    );
+    assert_eq!(
+        relations_of("ts-js-reference"),
+        vec!["CALLS", "IMPLEMENTS", "REFERENCES"],
+        "ts-basic has no extends clause"
+    );
 }
 
+/// ADR-0003: an edge produced by resolution says `AST_RESOLVED`; one the tree literally states
+/// says `AST_DIRECT`. Slice 1 labelled resolved imports `AST_DIRECT`; plan P2 corrected it.
 #[test]
-fn slice_one_emits_only_ast_direct_evidence() {
+fn evidence_source_types_distinguish_read_from_resolved() {
     let (_dir, root) = indexed_fixture();
     let conn = open_db(&root);
     let mut stmt = conn
-        .prepare("SELECT DISTINCT evidence_source_type FROM observation")
+        .prepare("SELECT DISTINCT evidence_source_type FROM observation ORDER BY 1")
         .unwrap();
     let types: Vec<String> = stmt
         .query_map([], |row| row.get(0))
         .unwrap()
         .map(|row| row.unwrap())
         .collect();
-    assert_eq!(types, vec!["AST_DIRECT"]);
+    assert_eq!(types, vec!["AST_DIRECT", "AST_RESOLVED"]);
 
-    // Directness still distinguishes what was read from what was resolved.
     let mut stmt = conn
         .prepare("SELECT DISTINCT directness FROM observation ORDER BY directness")
         .unwrap();
@@ -224,6 +247,56 @@ fn slice_one_emits_only_ast_direct_evidence() {
         .map(|row| row.unwrap())
         .collect();
     assert_eq!(directness, vec!["DIRECT", "RESOLVED"]);
+
+    // Source type and directness never disagree.
+    let mismatched: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM observation
+              WHERE (evidence_source_type = 'AST_RESOLVED') != (directness = 'RESOLVED')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(mismatched, 0);
+
+    // A resolved import must not still be labelled AST_DIRECT.
+    let mislabelled: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM observation o
+               JOIN assertion a ON a.assertion_id = o.assertion_id
+               JOIN entity t ON t.entity_id = a.target_entity_id
+              WHERE a.relation = 'IMPORTS' AND t.kind = 'module'
+                AND o.evidence_source_type != 'AST_RESOLVED'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(mislabelled, 0);
+}
+
+/// Both extractors are recorded, each with its own run row and version.
+#[test]
+fn two_extractor_runs_are_recorded_per_index() {
+    let (_dir, root) = indexed_fixture();
+    let conn = open_db(&root);
+    let report = nerve_store::status(&conn).unwrap();
+    let runs: Vec<(String, String)> = report
+        .runs
+        .iter()
+        .map(|run| (run.extractor_id.clone(), run.extractor_version.clone()))
+        .collect();
+    assert_eq!(
+        runs,
+        vec![
+            ("ts-js-structural".to_string(), "1.1.0".to_string()),
+            ("ts-js-reference".to_string(), "1.0.0".to_string()),
+        ]
+    );
+    assert_eq!(
+        report.last_run.as_ref().unwrap().extractor_id,
+        "ts-js-reference"
+    );
+    assert!(report.is_healthy());
 }
 
 #[test]
@@ -245,7 +318,10 @@ fn the_fixture_graph_has_the_expected_shape() {
     assert_eq!(kinds["class"], 2);
     assert_eq!(kinds["interface"], 2);
     assert_eq!(kinds["method"], 6);
-    assert_eq!(kinds["unresolved"], 2);
+    assert_eq!(
+        kinds["unresolved"], 6,
+        "2 unresolved module specifiers + 4 unresolved call targets"
+    );
 
     let relations: BTreeMap<&str, i64> = report
         .assertions_by_relation
@@ -256,6 +332,44 @@ fn the_fixture_graph_has_the_expected_shape() {
     assert_eq!(relations["DEFINES"], 32);
     assert_eq!(relations["EXPORTS"], 19);
     assert_eq!(relations["IMPORTS"], 8);
+    assert_eq!(relations["CALLS"], 12);
+    assert_eq!(relations["REFERENCES"], 5);
+    assert_eq!(relations["IMPLEMENTS"], 2);
+    assert!(
+        !relations.contains_key("EXTENDS"),
+        "ts-basic has no extends clause, so the relation must be absent, not zero-valued"
+    );
+}
+
+/// The two identically named `shared` functions in `ambiguous.ts` must each be called by their
+/// own enclosing function. This is the case Slice 1 refused to guess at.
+#[test]
+fn identically_named_functions_in_sibling_scopes_resolve_separately() {
+    let (_dir, root) = indexed_fixture();
+    let conn = open_db(&root);
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT source.name, target.scope_path
+               FROM assertion a
+               JOIN entity source ON source.entity_id = a.source_entity_id
+               JOIN entity target ON target.entity_id = a.target_entity_id
+              WHERE a.relation = 'CALLS' AND target.name = 'shared'
+              ORDER BY source.name",
+        )
+        .unwrap();
+    let rows: Vec<(String, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("outerA".to_string(), "outerA".to_string()),
+            ("outerB".to_string(), "outerB".to_string()),
+        ]
+    );
 }
 
 #[test]
@@ -355,18 +469,29 @@ fn assertion_state_is_a_pure_rebuild() {
 }
 
 #[test]
-fn derived_state_carries_the_ast_direct_mask() {
+fn derived_state_carries_the_source_type_mask() {
     let (_dir, root) = indexed_fixture();
     let conn = open_db(&root);
     let mut stmt = conn
-        .prepare("SELECT DISTINCT source_type_mask, strongest_source_type FROM assertion_state")
+        .prepare(
+            "SELECT DISTINCT source_type_mask, strongest_source_type
+               FROM assertion_state ORDER BY source_type_mask",
+        )
         .unwrap();
     let rows: Vec<(i64, String)> = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
         .unwrap()
         .map(|row| row.unwrap())
         .collect();
-    assert_eq!(rows, vec![(1, "AST_DIRECT".to_string())]);
+    // Bit 0 is AST_DIRECT, bit 1 is AST_RESOLVED. No assertion has both yet: one extractor
+    // observes each relation, and each relation is either resolved or not.
+    assert_eq!(
+        rows,
+        vec![
+            (1, "AST_DIRECT".to_string()),
+            (2, "AST_RESOLVED".to_string())
+        ]
+    );
 }
 
 #[test]

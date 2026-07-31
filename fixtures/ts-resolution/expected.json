@@ -1,0 +1,74 @@
+{
+  "_format": {
+    "purpose": "Ground truth for the Slice 2a precision harness (crates/nerve-index/tests/precision.rs). See README.md.",
+    "selector": "<rel_path>#<qualified_name>, where qualified_name is scope_path.name (or just name at module top level). <rel_path> on its own names that file's Module entity.",
+    "resolved": "Every AST_RESOLVED CALLS/REFERENCES/EXTENDS/IMPLEMENTS edge the corpus must contain, and the only ones it may contain.",
+    "unresolved": "Every edge to an Unresolved entity the corpus must contain, and the only ones it may contain. target_name is the Unresolved entity's name; reason is ts-js-reference's recorded reason.",
+    "forbidden": "Edges that must not exist in any form, resolved or unresolved. Each is the plausible wrong answer for a negative fixture.",
+    "unmodelled_call_sites": "Call sites and heritage clauses whose form is not modelled. Counted, never guessed."
+  },
+
+  "resolved": [
+    { "from": "src/math.ts#add", "relation": "CALLS", "to": "src/math.ts#normalize", "note": "same-module call" },
+    { "from": "src/shapes.ts#Rectangle.describe", "relation": "CALLS", "to": "src/shapes.ts#Rectangle.area", "note": "this.m() where the class itself declares m" },
+    { "from": "src/shapes.ts#Rectangle.viaNestedFunction", "relation": "CALLS", "to": "src/shapes.ts#Rectangle.viaNestedFunction.helper", "note": "call to a function nested in a method" },
+    { "from": "src/app.ts#viaBarrel", "relation": "CALLS", "to": "src/math.ts#add", "note": "two-level barrel re-export chain" },
+    { "from": "src/app.ts#viaAlias", "relation": "CALLS", "to": "src/math.ts#add", "note": "import { a as b }" },
+    { "from": "src/app.ts#viaDefault", "relation": "CALLS", "to": "src/math.ts#add", "note": "default import" },
+    { "from": "src/app.ts#viaNamespace", "relation": "CALLS", "to": "src/math.ts#scale", "note": "namespace import member call" },
+    { "from": "src/app.ts#viaNew", "relation": "CALLS", "to": "src/shapes.ts#Rectangle", "note": "new Foo() from an import" },
+    { "from": "src/legacy.cjs#legacyAdd", "relation": "CALLS", "to": "src/math.ts#add", "note": "const m = require('./x'); m.foo()" },
+    { "from": "src/shadow.ts#sameNameDifferentScopes", "relation": "CALLS", "to": "src/shadow.ts#sameNameDifferentScopes.helper", "note": "innermost scope wins" },
+    { "from": "src/shadow.ts#otherScope", "relation": "CALLS", "to": "src/shadow.ts#otherScope.helper", "note": "sibling scope, same name" },
+    { "from": "src/stardefault.ts#useNamed", "relation": "CALLS", "to": "src/withdefault.ts#named", "note": "export * forwards named exports" },
+    { "from": "src/unmodelled.ts#Mixed", "relation": "CALLS", "to": "src/unmodelled.ts#mixin", "note": "the mixin call is real even though the heritage is not modelled" },
+
+    { "from": "src/app.ts#viaNew", "relation": "REFERENCES", "to": "src/shapes.ts#Rectangle", "note": "resolved type-position reference (return type)" },
+    { "from": "src/app.ts#typedParameter", "relation": "REFERENCES", "to": "src/shapes.ts#Shape", "note": "resolved type-position reference (parameter type)" },
+    { "from": "src/app.ts", "relation": "REFERENCES", "to": "src/math.ts#add", "note": "resolved value-position reference at module top level" },
+    { "from": "src/unmodelled.ts#Mixed", "relation": "REFERENCES", "to": "src/unmodelled.ts#Base", "note": "resolved value-position reference in an argument" },
+
+    { "from": "src/shapes.ts#Solid", "relation": "EXTENDS", "to": "src/shapes.ts#Shape", "note": "interface I extends J" },
+    { "from": "src/shapes.ts#Ellipse", "relation": "EXTENDS", "to": "src/shapes.ts#Circle", "note": "class A extends B, local" },
+    { "from": "src/generic.ts#Derived", "relation": "EXTENDS", "to": "src/generic.ts#Base", "note": "extends Base<T>, generics stripped" },
+    { "from": "src/heritage.ts#Bubble", "relation": "EXTENDS", "to": "src/shapes.ts#Circle", "note": "class A extends B, imported" },
+
+    { "from": "src/shapes.ts#Rectangle", "relation": "IMPLEMENTS", "to": "src/shapes.ts#Shape", "note": "class A implements I, local" },
+    { "from": "src/shapes.ts#Circle", "relation": "IMPLEMENTS", "to": "src/shapes.ts#Shape", "note": "class A implements I, local" },
+    { "from": "src/heritage.ts#Bubble", "relation": "IMPLEMENTS", "to": "src/shapes.ts#Shape", "note": "class A implements I, imported" }
+  ],
+
+  "unresolved": [
+    { "from": "src/shapes.ts#Rectangle.viaNestedFunction.helper", "relation": "CALLS", "target_name": "this.area", "reason": "this-rebound-by-nested-function" },
+    { "from": "src/shapes.ts#Ellipse.stretch", "relation": "CALLS", "target_name": "this.area", "reason": "method-not-declared-on-class" },
+    { "from": "src/app.ts#typedParameter", "relation": "CALLS", "target_name": "shape.area", "reason": "receiver-not-resolvable" },
+    { "from": "src/shadow.ts#shadowedByParameter", "relation": "CALLS", "target_name": "target", "reason": "local-binding-not-a-symbol" },
+    { "from": "src/stardefault.ts#useDefault", "relation": "CALLS", "target_name": "fallback", "reason": "import-name-not-exported" },
+    { "from": "src/unmodelled.ts#unmodelledForms", "relation": "CALLS", "target_name": "make", "reason": "local-binding-not-a-symbol" },
+    { "from": "src/globals.ts#report", "relation": "CALLS", "target_name": "console.log", "reason": "receiver-not-resolvable" },
+    { "from": "src/missing.ts#callThroughMissingImport", "relation": "CALLS", "target_name": "helper", "reason": "import-module-unresolved" }
+  ],
+
+  "forbidden": [
+    { "from": "src/shadow.ts#shadowedByParameter", "relation": "CALLS", "to": "src/shadow.ts#target", "why": "shadowed by parameter" },
+    { "from": "src/shadow.ts#shadowedByConst", "relation": "REFERENCES", "to": "src/math.ts#add", "why": "shadowed by const" },
+    { "from": "src/shadow.ts#sameNameDifferentScopes", "relation": "CALLS", "to": "src/shadow.ts#otherScope.helper", "why": "same name, wrong scope" },
+    { "from": "src/shadow.ts#otherScope", "relation": "CALLS", "to": "src/shadow.ts#sameNameDifferentScopes.helper", "why": "same name, wrong scope" },
+    { "from": "src/shadow.ts#localNameMatchesForeignExport", "relation": "REFERENCES", "to": "src/math.ts#scale", "why": "local with the same name as another module's export" },
+    { "from": "src/stardefault.ts#useDefault", "relation": "CALLS", "to": "src/withdefault.ts#secret", "why": "export * does not re-export default" },
+    { "from": "src/unmodelled.ts#Mixed", "relation": "EXTENDS", "to": "src/unmodelled.ts#Base", "why": "computed superclass" },
+    { "from": "src/shapes.ts#Rectangle.viaNestedFunction.helper", "relation": "CALLS", "to": "src/shapes.ts#Rectangle.area", "why": "this rebound by a nested non-arrow function" },
+    { "from": "src/shapes.ts#Ellipse.stretch", "relation": "CALLS", "to": "src/shapes.ts#Circle.area", "why": "member declared on the base class only" },
+    { "from": "src/app.ts#typedParameter", "relation": "CALLS", "to": "src/shapes.ts#Rectangle.area", "why": "receiver type unknown" },
+    { "from": "src/app.ts#typedParameter", "relation": "CALLS", "to": "src/shapes.ts#Circle.area", "why": "receiver type unknown" }
+  ],
+
+  "unmodelled_call_sites": 5,
+  "unmodelled_by_form": {
+    "call-result": 1,
+    "computed-member": 1,
+    "heritage-call": 1,
+    "iife": 1,
+    "require": 1
+  }
+}

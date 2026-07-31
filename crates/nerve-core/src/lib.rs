@@ -18,4 +18,6 @@ pub use error::{NerveError, Result};
 pub use model::{
     AssertionRecord, EntityRecord, GraphBatch, ObservationRecord, OccurrenceRecord, Span,
 };
-pub use vocab::{AssertionStatus, Directness, EntityKind, EvidenceSourceType, Relation};
+pub use vocab::{
+    AssertionStatus, Directness, EntityKind, EvidenceSourceType, Relation, UnresolvedCategory,
+};

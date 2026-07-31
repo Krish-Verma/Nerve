@@ -7,7 +7,11 @@ use rusqlite::{params, Connection};
 use crate::error::Result;
 use crate::schema;
 
-/// Summary of the most recent extractor run.
+/// Columns of `extractor_run`, in the order every query below reads them.
+const RUN_COLUMNS: &str = "run_id, state_id, extractor_id, extractor_version, started_at,
+                           finished_at, files_processed, files_failed, status";
+
+/// Summary of one extractor run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractorRunSummary {
     /// Surrogate run id.
@@ -63,17 +67,39 @@ pub struct StatusReport {
     pub unresolved_assertions: i64,
     /// Most recent extractor run.
     pub last_run: Option<ExtractorRunSummary>,
+    /// Every run recorded against the most recent state, oldest first.
+    ///
+    /// An index now runs more than one extractor, so "the last run" no longer describes what
+    /// the graph contains. `extractor_run` is a log, not a snapshot: re-indexing an unchanged
+    /// tree appends another set of rows for the same state, and they are all reported.
+    pub runs: Vec<ExtractorRunSummary>,
 }
 
 impl StatusReport {
-    /// A status is healthy when the schema is current and at least one run has completed.
+    /// A status is healthy when the schema is current and no run for the current state is
+    /// still open.
     pub fn is_healthy(&self) -> bool {
         self.schema_version == Some(schema::SCHEMA_VERSION)
             && self
                 .last_run
                 .as_ref()
                 .is_some_and(|run| run.status != "running")
+            && self.runs.iter().all(|run| run.status != "running")
     }
+}
+
+fn read_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExtractorRunSummary> {
+    Ok(ExtractorRunSummary {
+        run_id: row.get(0)?,
+        state_id: row.get(1)?,
+        extractor_id: row.get(2)?,
+        extractor_version: row.get(3)?,
+        started_at: row.get(4)?,
+        finished_at: row.get(5)?,
+        files_processed: row.get(6)?,
+        files_failed: row.get(7)?,
+        status: row.get(8)?,
+    })
 }
 
 fn scalar(conn: &Connection, sql: &str) -> Result<i64> {
@@ -102,26 +128,22 @@ pub fn status(conn: &Connection) -> Result<StatusReport> {
 
     let last_run = conn
         .query_row(
-            "SELECT run_id, state_id, extractor_id, extractor_version, started_at,
-                    finished_at, files_processed, files_failed, status
-               FROM extractor_run
-              ORDER BY run_id DESC LIMIT 1",
+            &format!("SELECT {RUN_COLUMNS} FROM extractor_run ORDER BY run_id DESC LIMIT 1"),
             [],
-            |row| {
-                Ok(ExtractorRunSummary {
-                    run_id: row.get(0)?,
-                    state_id: row.get(1)?,
-                    extractor_id: row.get(2)?,
-                    extractor_version: row.get(3)?,
-                    started_at: row.get(4)?,
-                    finished_at: row.get(5)?,
-                    files_processed: row.get(6)?,
-                    files_failed: row.get(7)?,
-                    status: row.get(8)?,
-                })
-            },
+            read_run,
         )
         .ok();
+
+    let mut runs: Vec<ExtractorRunSummary> = Vec::new();
+    if let Some(last) = &last_run {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {RUN_COLUMNS} FROM extractor_run WHERE state_id = ?1 ORDER BY run_id"
+        ))?;
+        let rows = stmt.query_map(params![last.state_id], read_run)?;
+        for row in rows {
+            runs.push(row?);
+        }
+    }
 
     let repository: Option<(String, String)> = conn
         .query_row(
@@ -171,6 +193,7 @@ pub fn status(conn: &Connection) -> Result<StatusReport> {
             "SELECT count(*) FROM assertion_state WHERE is_unresolved = 1",
         )?,
         last_run,
+        runs,
     })
 }
 

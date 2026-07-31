@@ -259,6 +259,8 @@ fn every_json_output_parses_and_carries_its_required_keys() {
             "skipped_symlinks",
             "denied_secrets",
             "dynamic_imports_without_specifier",
+            "unmodelled_call_sites",
+            "unmodelled_by_form",
             "entities_total",
             "entities_by_kind",
             "assertions_total",
@@ -272,8 +274,18 @@ fn every_json_output_parses_and_carries_its_required_keys() {
     assert_eq!(index["command"], "index");
     assert_eq!(index["status"], "complete");
     assert_eq!(index["files_processed"], 8);
-    assert_eq!(index["unresolved_entities"], 2);
+    assert_eq!(
+        index["unresolved_entities"], 6,
+        "2 unresolved module specifiers plus 4 unresolved call targets"
+    );
     assert_eq!(index["dynamic_imports_without_specifier"], 1);
+    assert_eq!(
+        index["unmodelled_call_sites"], 2,
+        "one require() and one import() in ts-basic"
+    );
+    assert_eq!(index["assertions_by_relation"]["CALLS"], 12);
+    assert_eq!(index["assertions_by_relation"]["REFERENCES"], 5);
+    assert_eq!(index["assertions_by_relation"]["IMPLEMENTS"], 2);
     assert_eq!(
         index["denied_secrets"].as_array().unwrap(),
         &vec![serde_json::Value::from(".env")]
@@ -304,6 +316,7 @@ fn every_json_output_parses_and_carries_its_required_keys() {
             "unresolved_entities",
             "unresolved_assertions",
             "last_run",
+            "runs",
         ],
     );
     assert_eq!(status["command"], "status");
@@ -322,7 +335,16 @@ fn every_json_output_parses_and_carries_its_required_keys() {
             "status",
         ],
     );
-    assert_eq!(status["last_run"]["extractor_id"], "ts-js-structural");
+    assert_eq!(status["last_run"]["extractor_id"], "ts-js-reference");
+
+    // Every run for the current state is reported, not only the last.
+    let runs = status["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 2, "one run per extractor");
+    assert_eq!(runs[0]["extractor_id"], "ts-js-structural");
+    assert_eq!(runs[0]["extractor_version"], "1.1.0");
+    assert_eq!(runs[1]["extractor_id"], "ts-js-reference");
+    assert_eq!(runs[1]["extractor_version"], "1.0.0");
+    require_keys(&runs[0], &["run_id", "state_id", "status"]);
 
     let search = json(&run(&["search", "area", "--path", root, "--json"]));
     require_keys(

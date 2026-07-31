@@ -5,8 +5,9 @@
 //! resolution and emits no assertions — resolution and assertion construction happen in
 //! [`crate::pipeline`], which is also where the evidence profile is attached.
 //!
-//! Slice 1 deliberately does **not** extract `CALLS`, `REFERENCES`, `EXTENDS` or `IMPLEMENTS`.
-//! Those relations exist in the vocabulary and are emitted by nothing.
+//! It deliberately does **not** extract `CALLS`, `REFERENCES`, `EXTENDS` or `IMPLEMENTS`.
+//! Those are the `ts-js-reference` extractor's job ([`crate::refs`]), which runs as a second
+//! extractor over the same tree so that its contribution is separately revocable.
 
 use std::collections::HashMap;
 
@@ -19,14 +20,25 @@ use nerve_core::vocab::{EntityKind, EvidenceSourceType};
 use crate::error::Result;
 use crate::lang::Language;
 
-/// Identifier of the only extractor in Slice 1.
+/// Identifier of the structural extractor.
 pub const EXTRACTOR_ID: &str = "ts-js-structural";
 
 /// Version of the extractor. Bump on any change to what it emits.
-pub const EXTRACTOR_VERSION: &str = "1.0.0";
+///
+/// `1.1.0` corrects the Slice 1 evidence labelling: an `IMPORTS` edge produced by module
+/// resolution, and an `EXPORTS` edge produced by re-export resolution, are `AST_RESOLVED`, not
+/// `AST_DIRECT`. What the extractor claims did not change; what it says about *how* it knows
+/// did, and that is exactly what the version field is for.
+pub const EXTRACTOR_VERSION: &str = "1.1.0";
 
 /// The evidence source types this extractor is permitted to emit (ADR-0003).
-pub const DECLARED_SOURCE_TYPES: [EvidenceSourceType; 1] = [EvidenceSourceType::AstDirect];
+///
+/// `AST_DIRECT` for facts the tree literally states (containment, definition, local exports,
+/// unresolved imports) and `AST_RESOLVED` for the edges module resolution produced.
+pub const DECLARED_SOURCE_TYPES: [EvidenceSourceType; 2] = [
+    EvidenceSourceType::AstDirect,
+    EvidenceSourceType::AstResolved,
+];
 
 /// Where a symbol sits lexically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
