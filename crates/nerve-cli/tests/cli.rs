@@ -29,13 +29,28 @@ fn copy_tree(source: &Path, destination: &Path) {
 }
 
 fn fixture_copy() -> (tempfile::TempDir, PathBuf) {
+    named_fixture_copy("ts-basic")
+}
+
+/// Copy a committed fixture into a temporary directory. The fixture itself is never touched.
+fn named_fixture_copy(name: &str) -> (tempfile::TempDir, PathBuf) {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/ts-basic")
+        .join("../../fixtures")
+        .join(name)
         .canonicalize()
         .unwrap();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("repo");
     copy_tree(&source, &root);
+    (dir, root)
+}
+
+/// Copy, initialize and index a fixture, returning the temp directory and its root.
+fn indexed_fixture(name: &str) -> (tempfile::TempDir, PathBuf) {
+    let (dir, root) = named_fixture_copy(name);
+    let path = root.to_str().unwrap();
+    assert_eq!(code(&run(&["init", path])), 0);
+    assert_eq!(code(&run(&["index", path])), 0);
     (dir, root)
 }
 
@@ -421,4 +436,506 @@ fn status_reports_the_schema_version_and_state() {
     assert_eq!(status["schema_version"], 1);
     assert_eq!(status["state_id"], index["state_id"]);
     assert!(status["database_bytes"].as_u64().unwrap() > 0);
+}
+
+// ---- graph query surface (Slice 2b) --------------------------------------------------------
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8(output.stderr.clone()).unwrap()
+}
+
+#[test]
+fn path_finds_a_known_multi_hop_route_and_pins_the_hop_count() {
+    let (_dir, root) = indexed_fixture("ts-resolution");
+    let root = root.to_str().unwrap();
+
+    // viaBarrel calls `plus`, which is `add` re-exported through index.ts and barrel.ts;
+    // `add` then calls `normalize` inside math.ts. Two hops, and only two.
+    let output = run(&["path", "viaBarrel", "normalize", "--path", root]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let value = json(&run(&[
+        "path",
+        "viaBarrel",
+        "normalize",
+        "--path",
+        root,
+        "--json",
+    ]));
+    assert_eq!(value["count"], 1);
+    assert_eq!(value["paths"][0]["length"], 2);
+    assert_eq!(value["paths"][0]["traverses_unresolved"], false);
+    let hops = value["paths"][0]["hops"].as_array().unwrap();
+    let relations: Vec<&str> = hops
+        .iter()
+        .map(|hop| hop["relation"].as_str().unwrap())
+        .collect();
+    assert_eq!(relations, vec!["CALLS", "CALLS"]);
+    assert_eq!(hops[0]["from"]["name"], "viaBarrel");
+    assert_eq!(hops[0]["to"]["name"], "add");
+    assert_eq!(hops[0]["file_path"], "src/app.ts");
+    assert_eq!(hops[0]["start_line"], 10);
+    assert_eq!(hops[0]["strongest_source_type"], "AST_RESOLVED");
+    assert_eq!(hops[1]["to"]["name"], "normalize");
+    assert_eq!(hops[1]["file_path"], "src/math.ts");
+    assert_eq!(hops[1]["start_line"], 4);
+}
+
+#[test]
+fn path_with_no_route_exits_zero_and_says_so() {
+    let (_dir, root) = indexed_fixture("ts-resolution");
+    let root = root.to_str().unwrap();
+
+    // The call graph runs one way: normalize never reaches back up to viaBarrel.
+    let output = run(&["path", "normalize", "viaBarrel", "--path", root]);
+    assert_eq!(code(&output), 0, "absence of a path is not an error");
+    assert!(
+        stdout(&output).contains("No path found within depth 6"),
+        "{}",
+        stdout(&output)
+    );
+
+    let value = json(&run(&[
+        "path",
+        "normalize",
+        "viaBarrel",
+        "--path",
+        root,
+        "--json",
+    ]));
+    assert_eq!(value["count"], 0);
+    assert_eq!(value["truncated"], false);
+    assert_eq!(value["max_depth"], 6);
+}
+
+#[test]
+fn path_json_carries_its_contract_and_marks_unresolved_hops() {
+    let (_dir, root) = indexed_fixture("ts-resolution");
+    let root = root.to_str().unwrap();
+
+    // `console` is a host global, so the call leaves what Nerve can see. It is still a path.
+    let value = json(&run(&[
+        "path",
+        "report",
+        "console.log",
+        "--path",
+        root,
+        "--json",
+    ]));
+    require_keys(
+        &value,
+        &[
+            "command",
+            "ok",
+            "exit_code",
+            "from",
+            "to",
+            "max_depth",
+            "limit",
+            "direction",
+            "relations",
+            "resolved_only",
+            "truncated",
+            "expansions",
+            "count",
+            "paths",
+        ],
+    );
+    assert_eq!(value["command"], "path");
+    assert_eq!(value["direction"], "forward");
+    assert_eq!(value["count"], 1);
+    assert_eq!(value["paths"][0]["traverses_unresolved"], true);
+    let hop = &value["paths"][0]["hops"][0];
+    require_keys(
+        hop,
+        &[
+            "relation",
+            "assertion_id",
+            "from",
+            "to",
+            "traversed_backwards",
+            "is_unresolved",
+            "status",
+            "strongest_source_type",
+            "observation_count",
+            "file_path",
+            "start_line",
+        ],
+    );
+    assert_eq!(hop["is_unresolved"], true);
+    assert_eq!(hop["status"], "UNRESOLVED");
+    require_keys(
+        &value["from"],
+        &[
+            "entity_id",
+            "kind",
+            "name",
+            "scope_path",
+            "qualified_name",
+            "language",
+            "file_path",
+            "start_line",
+            "end_line",
+        ],
+    );
+
+    // The same route disappears when unresolved edges are excluded, and that is still exit 0.
+    let filtered = json(&run(&[
+        "path",
+        "report",
+        "console.log",
+        "--resolved-only",
+        "--path",
+        root,
+        "--json",
+    ]));
+    assert_eq!(filtered["count"], 0);
+    assert_eq!(filtered["resolved_only"], true);
+}
+
+#[test]
+fn why_prints_every_observation_with_extractor_version_and_location() {
+    let (_dir, root) = indexed_fixture("ts-resolution");
+    let root = root.to_str().unwrap();
+
+    let human = run(&["why", "add", "normalize", "--path", root]);
+    assert_eq!(code(&human), 0, "{}", stderr(&human));
+    let text = stdout(&human);
+    assert!(text.contains("CALLS"), "{text}");
+    assert!(text.contains("ts-js-reference 1.0.0"), "{text}");
+    assert!(text.contains("src/math.ts:4"), "{text}");
+    assert!(text.contains("freshness fresh"), "{text}");
+
+    let value = json(&run(&["why", "add", "normalize", "--path", root, "--json"]));
+    require_keys(
+        &value,
+        &[
+            "command",
+            "ok",
+            "exit_code",
+            "subject",
+            "object",
+            "direction",
+            "relations",
+            "files_probed",
+            "count",
+            "assertions",
+        ],
+    );
+    assert_eq!(value["command"], "why");
+    assert_eq!(value["count"], 1);
+    let assertion = &value["assertions"][0];
+    require_keys(
+        assertion,
+        &[
+            "assertion_id",
+            "relation",
+            "direction",
+            "source",
+            "target",
+            "status",
+            "is_unresolved",
+            "observation_count",
+            "strongest_source_type",
+            "observations",
+        ],
+    );
+    assert_eq!(assertion["relation"], "CALLS");
+    assert_eq!(assertion["direction"], "outgoing");
+    assert_eq!(assertion["status"], "SUPPORTED");
+    assert_eq!(assertion["is_unresolved"], false);
+    assert_eq!(assertion["observation_count"], 1);
+    assert_eq!(assertion["strongest_source_type"], "AST_RESOLVED");
+
+    let observation = &assertion["observations"][0];
+    require_keys(
+        observation,
+        &[
+            "observation_id",
+            "evidence_source_type",
+            "directness",
+            "extractor_id",
+            "extractor_version",
+            "match_quality",
+            "state_id",
+            "file_path",
+            "start_line",
+            "end_line",
+            "content_hash",
+            "environment",
+            "details",
+            "created_at",
+            "freshness",
+        ],
+    );
+    assert_eq!(observation["evidence_source_type"], "AST_RESOLVED");
+    assert_eq!(observation["directness"], "RESOLVED");
+    assert_eq!(observation["extractor_id"], "ts-js-reference");
+    assert_eq!(observation["extractor_version"], "1.0.0");
+    assert_eq!(observation["file_path"], "src/math.ts");
+    assert_eq!(observation["start_line"], 4);
+    assert_eq!(observation["freshness"], "fresh");
+    assert_eq!(observation["match_quality"], serde_json::Value::Null);
+}
+
+#[test]
+fn why_reports_stale_only_for_the_file_that_changed() {
+    let (_dir, root) = indexed_fixture("ts-resolution");
+    let math = root.join("src/math.ts");
+    let root = root.to_str().unwrap();
+
+    let before = json(&run(&[
+        "why",
+        "add",
+        "--relation",
+        "CALLS",
+        "--path",
+        root,
+        "--json",
+    ]));
+    for assertion in before["assertions"].as_array().unwrap() {
+        for observation in assertion["observations"].as_array().unwrap() {
+            assert_eq!(observation["freshness"], "fresh");
+        }
+    }
+
+    let original = std::fs::read_to_string(&math).unwrap();
+    std::fs::write(&math, format!("{original}\n// touched after indexing\n")).unwrap();
+
+    let after = json(&run(&[
+        "why",
+        "add",
+        "--relation",
+        "CALLS",
+        "--path",
+        root,
+        "--json",
+    ]));
+    let mut stale = 0;
+    let mut fresh = 0;
+    for assertion in after["assertions"].as_array().unwrap() {
+        for observation in assertion["observations"].as_array().unwrap() {
+            let expected = if observation["file_path"] == "src/math.ts" {
+                stale += 1;
+                "stale"
+            } else {
+                fresh += 1;
+                "fresh"
+            };
+            assert_eq!(
+                observation["freshness"],
+                expected,
+                "{}",
+                serde_json::to_string(observation).unwrap()
+            );
+        }
+    }
+    assert!(stale > 0, "the mutated file must produce a stale reading");
+    assert!(fresh > 0, "untouched files must stay fresh");
+
+    // Freshness is derived, so restoring the bytes restores the answer without re-indexing.
+    std::fs::write(&math, &original).unwrap();
+    let restored = json(&run(&[
+        "why",
+        "add",
+        "--relation",
+        "CALLS",
+        "--path",
+        root,
+        "--json",
+    ]));
+    assert_eq!(restored, before);
+}
+
+#[test]
+fn why_hashes_each_file_once_however_many_observations_quote_it() {
+    let (_dir, root) = indexed_fixture("ts-resolution");
+    let root = root.to_str().unwrap();
+    let value = json(&run(&["why", "add", "--path", root, "--json"]));
+
+    let mut files = std::collections::BTreeSet::new();
+    let mut observations = 0;
+    for assertion in value["assertions"].as_array().unwrap() {
+        for observation in assertion["observations"].as_array().unwrap() {
+            files.insert(observation["file_path"].as_str().unwrap().to_string());
+            observations += 1;
+        }
+    }
+    assert!(observations > files.len(), "the test needs repeated files");
+    assert_eq!(value["files_probed"], files.len());
+}
+
+#[test]
+fn an_ambiguous_selector_exits_ten_and_lists_every_candidate() {
+    let (_dir, root) = indexed_fixture("ts-resolution");
+    let root = root.to_str().unwrap();
+
+    let output = run(&["path", "area", "normalize", "--path", root]);
+    assert_eq!(code(&output), 10);
+    let text = stderr(&output);
+    assert!(text.contains("Rectangle.area"), "{text}");
+    assert!(text.contains("Circle.area"), "{text}");
+    assert!(
+        text.contains("meth_"),
+        "candidate ids must be printed: {text}"
+    );
+
+    let value = json(&run(&[
+        "path",
+        "area",
+        "normalize",
+        "--path",
+        root,
+        "--json",
+    ]));
+    assert_eq!(value["exit_code"], 10);
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["selector"], "area");
+    assert_eq!(value["selector_role"], "from");
+    assert_eq!(value["matched_by"], "name");
+    let candidates = value["candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 3);
+    assert!(candidates.iter().all(|candidate| candidate["entity_id"]
+        .as_str()
+        .unwrap()
+        .starts_with("meth_")));
+
+    // `why` refuses in exactly the same way.
+    assert_eq!(code(&run(&["why", "area", "--path", root])), 10);
+
+    // Naming the file disambiguates it.
+    let resolved = json(&run(&[
+        "why",
+        "src/shapes.ts#Rectangle.area",
+        "--path",
+        root,
+        "--json",
+    ]));
+    assert_eq!(resolved["subject"]["qualified_name"], "Rectangle.area");
+}
+
+#[test]
+fn a_selector_that_matches_nothing_exits_two_with_suggestions() {
+    let (_dir, root) = indexed_fixture("ts-resolution");
+    let root = root.to_str().unwrap();
+
+    let output = run(&["path", "viaBarrel", "normalise", "--path", root]);
+    assert_eq!(code(&output), 2);
+    assert!(stderr(&output).contains("matches no indexed entity"));
+
+    let value = json(&run(&[
+        "path",
+        "viaBarrel",
+        "normalise",
+        "--path",
+        root,
+        "--json",
+    ]));
+    assert_eq!(value["exit_code"], 2);
+    assert_eq!(value["selector"], "normalise");
+    assert_eq!(value["selector_role"], "to");
+    let suggestions = value["suggestions"].as_array().unwrap();
+    assert!(
+        suggestions.iter().any(|hit| hit["name"] == "normalize"),
+        "{suggestions:?}"
+    );
+
+    assert_eq!(code(&run(&["why", "nosuchsymbolatall", "--path", root])), 2);
+}
+
+#[test]
+fn bad_graph_arguments_exit_ten() {
+    let (_dir, root) = indexed_fixture("ts-resolution");
+    let root = root.to_str().unwrap();
+    assert_eq!(
+        code(&run(&[
+            "path",
+            "add",
+            "normalize",
+            "--relation",
+            "SUMMONS",
+            "--path",
+            root
+        ])),
+        10
+    );
+    assert_eq!(
+        code(&run(&[
+            "path",
+            "add",
+            "normalize",
+            "--max-depth",
+            "0",
+            "--path",
+            root
+        ])),
+        10
+    );
+    assert_eq!(
+        code(&run(&[
+            "path",
+            "add",
+            "normalize",
+            "--limit",
+            "0",
+            "--path",
+            root
+        ])),
+        10
+    );
+    assert_eq!(
+        code(&run(&[
+            "why",
+            "add",
+            "--incoming",
+            "--outgoing",
+            "--path",
+            root
+        ])),
+        10,
+        "--incoming and --outgoing contradict each other"
+    );
+}
+
+#[test]
+fn graph_commands_need_an_index() {
+    let (_dir, root) = named_fixture_copy("ts-resolution");
+    let root = root.to_str().unwrap();
+    assert_eq!(code(&run(&["path", "a", "b", "--path", root])), 2);
+    assert_eq!(code(&run(&["why", "a", "--path", root])), 2);
+}
+
+/// ARCHITECTURE.md invariant 3: surfaces contain no business logic.
+///
+/// The CLI may parse arguments, render, and map exit codes. Traversal, evidence assembly and
+/// SQL live in `nerve-store`, so the Slice 4 server and Slice 8 MCP tools reuse them unchanged.
+#[test]
+fn the_cli_contains_no_traversal_or_query_logic() {
+    const MAIN: &str = include_str!("../src/main.rs");
+    for forbidden in [
+        "SELECT ",
+        "INSERT INTO",
+        "FROM assertion",
+        "JOIN ",
+        "ORDER BY",
+        "prepare(",
+        "query_row",
+        "rusqlite",
+        "VecDeque",
+        "BinaryHeap",
+        "blake3",
+    ] {
+        assert!(
+            !MAIN.contains(forbidden),
+            "nerve-cli must not contain {forbidden:?}"
+        );
+    }
+
+    const MANIFEST: &str = include_str!("../Cargo.toml");
+    for forbidden in ["rusqlite", "blake3", "tree-sitter"] {
+        assert!(
+            !MANIFEST.contains(forbidden),
+            "nerve-cli must not depend on {forbidden:?}"
+        );
+    }
 }

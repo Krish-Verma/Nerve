@@ -26,6 +26,25 @@ never executed; escaped before rendering; and never interpreted as instructions.
 - Path traversal via crafted file names (`../`, absolute paths, NUL bytes) is rejected.
 - Covered by `path-safety` tests from Slice 1.
 
+### Query-time file reads (from Slice 2b)
+
+`nerve why` computes freshness by re-hashing the file an observation points at. That path comes
+out of the database, which is a file on disk and therefore **not a trusted channel**. Every
+discovery-time rule is re-applied at query time through the same `canonical_child` choke point,
+never a second implementation:
+
+- the path must be relative, with only ordinary components (no `..`, no NUL, not absolute)
+- it must not be a symlink — discovery never indexes one, so a path that is one now was swapped
+  after indexing
+- it must canonicalize to a location inside the repository root, which is what catches a
+  symlinked *parent* directory
+- it must not match the secret deny-list, and must not exceed the file-size ceiling
+
+Anything refused is **reported as refused** rather than as missing, so the output never disguises
+which check fired. Verified by constructing both escape vectors and confirming no content leaks.
+
+All query commands are read-only; the database is byte-identical before and after.
+
 ## Exclusions
 
 Respected by default:

@@ -6,7 +6,8 @@
 Surfaces        nerve-cli   ·   [Slice 4] nerve-server + apps/nerve-web   ·   [Slice 8] MCP
                                   thin adapters — no business logic
                                             │
-Application     index_repository() · search_entities() · status() · (later) path/impact/why
+Application     index_repository() · status() · search_entities() · resolve_selector()
+                find_paths() · explain()      · (later) impact/gaps/check
                                             │
 Pipeline        nerve-index:  discover → parse → extract → persist
                               emits Observations ONLY
@@ -23,8 +24,8 @@ Model           nerve-core:   ids · entity kinds · relations · evidence vocab
 | Crate | Responsibility | Depends on |
 |---|---|---|
 | `nerve-core` | Identity computation, entity/relation/evidence vocabularies, error types, canonical serialization for golden tests | — |
-| `nerve-store` | SQLite schema and migrations, all SQL, FTS5, `rebuild_assertion_state` | `nerve-core` |
-| `nerve-index` | File discovery, ignore/deny rules, tree-sitter parsing, extraction, indexing pipeline | `nerve-core`, `nerve-store` |
+| `nerve-store` | SQLite schema and migrations, all SQL, FTS5, `rebuild_assertion_state`, selector resolution, bounded path traversal, evidence assembly | `nerve-core` |
+| `nerve-index` | File discovery, ignore/deny rules, tree-sitter parsing, extraction, indexing pipeline, query-time file prober | `nerve-core`, `nerve-store` |
 | `nerve-cli` | `clap` command surface, human and `--json` rendering, exit codes | all |
 
 `nerve-query` and `nerve-server` are deliberately **not** created yet — they have no distinct

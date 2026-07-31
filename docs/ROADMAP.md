@@ -7,7 +7,7 @@ Authoritative slice list. Update the status column at the end of every slice.
 |---|---|---|
 | 1 | Indexing foundation — `init`/`index`/`status`/`search`, SQLite evidence schema, TS/JS entities, `CONTAINS`/`DEFINES`/`IMPORTS`/`EXPORTS` | ✅ Complete (2026-07-31) — 137 tests pass, ADR-0001 gate passed |
 | 2a | Static relationship resolution — `CALLS`, `REFERENCES`, `EXTENDS`, `IMPLEMENTS`, lexical binding + import resolution, negative fixtures + measured precision | ✅ Complete (2026-07-31) — 203 tests pass, FP=0 FN=0 on 24 resolved edges |
-| 2b | Graph query surface — `nerve path`, `nerve why`, evidence packets | 🟡 In progress |
+| 2b | Graph query surface — `nerve path`, `nerve why`, evidence packets | ✅ Complete (2026-07-31) — 261 tests pass, query-time path safety verified by attack |
 | 3 | Incremental indexing — content hashes, changed-file indexing, importer invalidation, moves/deletes, `IdentityLink` | ⬜ Not started |
 | 4 | Initial visual explorer — `nerve serve`, overview, search, graph canvas, evidence inspector | ⬜ Not started |
 | 5 | Markdown + ADR evidence — sections, citations, document↔code identity links | ⬜ Not started |
@@ -56,3 +56,18 @@ surfaces. It is split into **2a** (resolution + relations + measured precision) 
   `AST_DIRECT`; now `AST_RESOLVED` (`ts-js-structural` → 1.1.0).
 - Corrected an identity collision: unresolved ids now carry a `module`/`value` category.
 - No schema change, no new dependencies. Report: `docs/reports/slice-02a-report.md`.
+
+## Slice 2b — delivered
+
+- `nerve path <from> <to>` — bounded-depth simple-path walk with relation/direction filters,
+  an honest `truncated` flag, and exit `0` on "no path" (absence is not an error).
+- `nerve why <from> [<to>]` — the full evidence packet per assertion: every observation with
+  source type, directness, extractor id + version, `file:line`, details, and **computed
+  freshness** (the file is re-hashed at query time).
+- Selectors refuse ambiguity: multiple matches exit `10` listing candidates; nothing is guessed.
+- Query-time file reads reuse the Slice 1 path-safety choke point. Verified by constructing
+  symlink-escape attacks: both file-level and parent-directory escapes are `refused`, with zero
+  content leakage. Queries are provably read-only.
+- Traversal p95 ≤ 83.45 ms at depth 4 on 2 M assertions, against ADR-0001's 200 ms budget
+  (measured under adverse machine load; see report for the attribution of one spurious failure).
+- No schema change, no new dependencies. Report: `docs/reports/slice-02b-report.md`.

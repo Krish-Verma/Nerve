@@ -9,9 +9,10 @@ mod exit;
 
 use std::path::{Path, PathBuf};
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::json;
 
+use nerve_core::Relation;
 use nerve_index::config;
 use nerve_index::error::IndexError;
 
@@ -74,6 +75,68 @@ enum Command {
         #[arg(long, default_value = ".")]
         path: PathBuf,
     },
+    /// Find how two entities are connected.
+    Path {
+        /// Source selector: entity id, rel/path.ts, rel/path.ts#Name, or a unique name.
+        from: String,
+        /// Target selector, same forms as `from`.
+        to: String,
+        /// Maximum number of hops.
+        #[arg(long, default_value_t = 6)]
+        max_depth: usize,
+        /// Follow only this relation. Repeatable. Default: every relation.
+        #[arg(long = "relation")]
+        relations: Vec<String>,
+        /// Maximum number of distinct paths.
+        #[arg(long, default_value_t = 3)]
+        limit: usize,
+        /// `forward` follows assertions; `any` treats them as undirected.
+        #[arg(long, value_enum, default_value_t = DirectionArg::Forward)]
+        direction: DirectionArg,
+        /// Exclude edges whose target Nerve could not resolve.
+        #[arg(long)]
+        resolved_only: bool,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Show the evidence behind a relationship.
+    Why {
+        /// Subject selector: entity id, rel/path.ts, rel/path.ts#Name, or a unique name.
+        from: String,
+        /// Optional second selector. Without it, every assertion touching `from` is reported.
+        to: Option<String>,
+        /// Only assertions where the subject is the target.
+        #[arg(long, conflicts_with = "outgoing")]
+        incoming: bool,
+        /// Only assertions where the subject is the source.
+        #[arg(long)]
+        outgoing: bool,
+        /// Report only this relation. Repeatable. Default: every relation.
+        #[arg(long = "relation")]
+        relations: Vec<String>,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+}
+
+/// `--direction` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum DirectionArg {
+    /// Follow assertions from source to target.
+    Forward,
+    /// Treat assertions as undirected.
+    Any,
+}
+
+impl DirectionArg {
+    fn to_store(self) -> nerve_store::Direction {
+        match self {
+            DirectionArg::Forward => nerve_store::Direction::Forward,
+            DirectionArg::Any => nerve_store::Direction::Any,
+        }
+    }
 }
 
 /// Rendering context threaded through the command handlers.
@@ -99,19 +162,39 @@ impl Output {
     }
 
     fn failure(&self, command: &str, code: i32, message: &str) -> i32 {
+        self.failure_detail(command, code, message, &[], json!({}))
+    }
+
+    /// A failure that carries structured detail: candidate lists and search suggestions.
+    fn failure_detail(
+        &self,
+        command: &str,
+        code: i32,
+        message: &str,
+        lines: &[String],
+        detail: serde_json::Value,
+    ) -> i32 {
         if self.json {
+            let mut object = serde_json::Map::new();
+            object.insert("command".into(), json!(command));
+            object.insert("ok".into(), json!(false));
+            object.insert("exit_code".into(), json!(code));
+            object.insert("error".into(), json!(message));
+            if let serde_json::Value::Object(extra) = detail {
+                for (key, value) in extra {
+                    object.insert(key, value);
+                }
+            }
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json!({
-                    "command": command,
-                    "ok": false,
-                    "exit_code": code,
-                    "error": message,
-                }))
-                .unwrap_or_default()
+                serde_json::to_string_pretty(&serde_json::Value::Object(object))
+                    .unwrap_or_default()
             );
         } else {
             eprintln!("nerve {command}: {message}");
+            for line in lines {
+                eprintln!("{line}");
+            }
         }
         code
     }
@@ -151,6 +234,44 @@ fn main() {
             limit,
             path,
         } => run_search(&output, &path, &query, kind.as_deref(), limit),
+        Command::Path {
+            from,
+            to,
+            max_depth,
+            relations,
+            limit,
+            direction,
+            resolved_only,
+            path,
+        } => {
+            let arguments = PathArguments {
+                from,
+                to,
+                max_depth,
+                relations,
+                limit,
+                direction,
+                resolved_only,
+            };
+            run_path(&output, &path, arguments)
+        }
+        Command::Why {
+            from,
+            to,
+            incoming,
+            outgoing,
+            relations,
+            path,
+        } => {
+            let arguments = WhyArguments {
+                from,
+                to,
+                incoming,
+                outgoing,
+                relations,
+            };
+            run_why(&output, &path, arguments)
+        }
     };
     std::process::exit(code);
 }
@@ -283,7 +404,14 @@ fn run_index(output: &Output, path: Option<PathBuf>) -> i32 {
     }
 }
 
-fn open_existing(path: &Path) -> Result<(PathBuf, nerve_store::Connection), String> {
+/// An opened index: the repository root, the database path, and a connection.
+struct OpenIndex {
+    root: PathBuf,
+    db_path: PathBuf,
+    conn: nerve_store::Connection,
+}
+
+fn open_existing(path: &Path) -> Result<OpenIndex, String> {
     let root = std::fs::canonicalize(path).map_err(|err| format!("{}: {err}", path.display()))?;
     let db_path = config::db_path(&root);
     if !db_path.exists() {
@@ -293,7 +421,11 @@ fn open_existing(path: &Path) -> Result<(PathBuf, nerve_store::Connection), Stri
         ));
     }
     let conn = nerve_store::open(&db_path).map_err(|err| err.to_string())?;
-    Ok((db_path, conn))
+    Ok(OpenIndex {
+        root,
+        db_path,
+        conn,
+    })
 }
 
 fn run_json(run: &nerve_store::ExtractorRunSummary) -> serde_json::Value {
@@ -311,8 +443,8 @@ fn run_json(run: &nerve_store::ExtractorRunSummary) -> serde_json::Value {
 }
 
 fn run_status(output: &Output, path: &Path) -> i32 {
-    let (db_path, conn) = match open_existing(path) {
-        Ok(pair) => pair,
+    let OpenIndex { db_path, conn, .. } = match open_existing(path) {
+        Ok(opened) => opened,
         Err(message) => return output.failure("status", exit::NO_INDEX, &message),
     };
     let report = match nerve_store::status(&conn) {
@@ -440,8 +572,8 @@ fn run_search(output: &Output, path: &Path, query: &str, kind: Option<&str>, lim
         }
     }
 
-    let (_, conn) = match open_existing(path) {
-        Ok(pair) => pair,
+    let conn = match open_existing(path) {
+        Ok(opened) => opened.conn,
         Err(message) => return output.failure("search", exit::NO_INDEX, &message),
     };
 
@@ -488,6 +620,467 @@ fn run_search(output: &Output, path: &Path, query: &str, kind: Option<&str>, lim
     }));
 
     exit::SUCCESS
+}
+
+// ---- graph commands ------------------------------------------------------------------------
+//
+// These handlers parse arguments, ask `nerve-store` the question, render the answer and map the
+// outcome to an exit code. There is no traversal, no evidence assembly and no SQL here; see
+// ARCHITECTURE.md invariant 3.
+
+fn entity_json(entity: &nerve_store::EntityRef) -> serde_json::Value {
+    json!({
+        "entity_id": entity.entity_id,
+        "kind": entity.kind,
+        "name": entity.name,
+        "scope_path": entity.scope_path,
+        "qualified_name": entity.qualified_name(),
+        "language": entity.language,
+        "file_path": entity.file_path,
+        "start_line": entity.start_line,
+        "end_line": entity.end_line,
+    })
+}
+
+fn entity_line(entity: &nerve_store::EntityRef) -> String {
+    format!(
+        "{:<10} {:<34} {}",
+        entity.kind,
+        entity.qualified_name(),
+        entity.location()
+    )
+}
+
+/// Parse `--relation` values against the closed relation vocabulary.
+fn parse_relations(values: &[String]) -> Result<Vec<Relation>, String> {
+    let mut relations = Vec::new();
+    for value in values {
+        match value.parse::<Relation>() {
+            Ok(relation) => {
+                if !relations.contains(&relation) {
+                    relations.push(relation);
+                }
+            }
+            Err(_) => {
+                let allowed = Relation::ALL
+                    .iter()
+                    .map(|relation| relation.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!(
+                    "unknown --relation {value:?}; expected one of: {allowed}"
+                ));
+            }
+        }
+    }
+    Ok(relations)
+}
+
+fn relation_names(relations: &[Relation]) -> Vec<&'static str> {
+    relations.iter().map(|relation| relation.as_str()).collect()
+}
+
+/// Resolve one selector, or render the refusal and return its exit code.
+///
+/// Ambiguity is exit 10 with the candidate list; nothing is chosen on the user's behalf.
+fn resolve_one(
+    output: &Output,
+    command: &str,
+    conn: &nerve_store::Connection,
+    role: &str,
+    selector: &str,
+) -> Result<nerve_store::EntityRef, i32> {
+    match nerve_store::resolve_selector(conn, selector) {
+        Ok(nerve_store::Selection::Resolved { entity, .. }) => Ok(*entity),
+        Ok(nerve_store::Selection::Ambiguous {
+            candidates,
+            matched_by,
+        }) => {
+            let message = format!(
+                "{selector:?} ({role}) matches {} entities; nothing was chosen — repeat the \
+                 command with one of these ids, or a path#name selector",
+                candidates.len()
+            );
+            let lines: Vec<String> = candidates
+                .iter()
+                .map(|candidate| format!("  {}  {}", entity_line(candidate), candidate.entity_id))
+                .collect();
+            Err(output.failure_detail(
+                command,
+                exit::USAGE,
+                &message,
+                &lines,
+                json!({
+                    "selector": selector,
+                    "selector_role": role,
+                    "matched_by": matched_by.as_str(),
+                    "candidates": candidates.iter().map(entity_json).collect::<Vec<_>>(),
+                }),
+            ))
+        }
+        Ok(nerve_store::Selection::NotFound { suggestions }) => {
+            let message = format!("{selector:?} ({role}) matches no indexed entity");
+            let mut lines = Vec::new();
+            if suggestions.is_empty() {
+                lines.push("  no near matches; try `nerve search`".to_string());
+            } else {
+                lines.push("  did you mean:".to_string());
+                for hit in &suggestions {
+                    let qualified = if hit.scope_path.is_empty() {
+                        hit.name.clone()
+                    } else {
+                        format!("{}.{}", hit.scope_path, hit.name)
+                    };
+                    let location = match (&hit.file_path, hit.start_line) {
+                        (Some(file), Some(line)) => format!("{file}:{line}"),
+                        _ => "-".to_string(),
+                    };
+                    lines.push(format!("    {:<10} {qualified:<34} {location}", hit.kind));
+                }
+            }
+            Err(output.failure_detail(
+                command,
+                exit::NO_INDEX,
+                &message,
+                &lines,
+                json!({
+                    "selector": selector,
+                    "selector_role": role,
+                    "suggestions": suggestions.iter().map(|hit| json!({
+                        "entity_id": hit.entity_id,
+                        "kind": hit.kind,
+                        "name": hit.name,
+                        "scope_path": hit.scope_path,
+                        "file_path": hit.file_path,
+                        "start_line": hit.start_line,
+                    })).collect::<Vec<_>>(),
+                }),
+            ))
+        }
+        Err(err) => Err(output.failure(command, exit::INTERNAL, &err.to_string())),
+    }
+}
+
+/// Everything `nerve path` was asked for.
+struct PathArguments {
+    from: String,
+    to: String,
+    max_depth: usize,
+    relations: Vec<String>,
+    limit: usize,
+    direction: DirectionArg,
+    resolved_only: bool,
+}
+
+/// Largest `--max-depth` accepted. Beyond this the answer stops being a useful explanation.
+const MAX_DEPTH_CEILING: usize = 32;
+
+fn run_path(output: &Output, path: &Path, arguments: PathArguments) -> i32 {
+    if arguments.max_depth == 0 || arguments.max_depth > MAX_DEPTH_CEILING {
+        return output.failure(
+            "path",
+            exit::USAGE,
+            &format!("--max-depth must be between 1 and {MAX_DEPTH_CEILING}"),
+        );
+    }
+    if arguments.limit == 0 {
+        return output.failure("path", exit::USAGE, "--limit must be at least 1");
+    }
+    let relations = match parse_relations(&arguments.relations) {
+        Ok(relations) => relations,
+        Err(message) => return output.failure("path", exit::USAGE, &message),
+    };
+
+    let conn = match open_existing(path) {
+        Ok(opened) => opened.conn,
+        Err(message) => return output.failure("path", exit::NO_INDEX, &message),
+    };
+
+    let from = match resolve_one(output, "path", &conn, "from", &arguments.from) {
+        Ok(entity) => entity,
+        Err(code) => return code,
+    };
+    let to = match resolve_one(output, "path", &conn, "to", &arguments.to) {
+        Ok(entity) => entity,
+        Err(code) => return code,
+    };
+
+    let query = nerve_store::PathQuery {
+        max_depth: arguments.max_depth,
+        limit: arguments.limit,
+        direction: arguments.direction.to_store(),
+        relations: relations.clone(),
+        resolved_only: arguments.resolved_only,
+    };
+    let report = match nerve_store::find_paths(&conn, &from.entity_id, &to.entity_id, &query) {
+        Ok(report) => report,
+        Err(err) => return output.failure("path", exit::INTERNAL, &err.to_string()),
+    };
+
+    output.line(format!("from  {}", entity_line(&report.from)));
+    output.line(format!("to    {}", entity_line(&report.to)));
+    output.line(String::new());
+
+    if report.paths.is_empty() {
+        output.line(format!(
+            "No path found within depth {} ({}, {} partial path(s) explored).",
+            report.max_depth,
+            query.direction.as_str(),
+            report.expansions
+        ));
+        if report.truncated {
+            output.line(
+                "  The search budget stopped the walk before the graph was exhausted, so a \
+                 longer path may exist.",
+            );
+        }
+    }
+
+    for (index, graph_path) in report.paths.iter().enumerate() {
+        output.line(format!(
+            "path {} of {} · {} hop(s){}",
+            index + 1,
+            report.paths.len(),
+            graph_path.length(),
+            if graph_path.traverses_unresolved() {
+                " · traverses an unresolved edge"
+            } else {
+                ""
+            }
+        ));
+        output.line(format!("  {}", entity_line(&report.from)));
+        for hop in &graph_path.hops {
+            let arrow = if hop.traversed_backwards {
+                format!("<-[{}]-", hop.relation)
+            } else {
+                format!("-[{}]->", hop.relation)
+            };
+            output.line(format!(
+                "    {:<20} {:<14} {} obs  {}{}",
+                arrow,
+                hop.strongest_source_type.as_deref().unwrap_or("-"),
+                hop.observation_count,
+                hop.location(),
+                if hop.is_unresolved {
+                    "  [unresolved]"
+                } else {
+                    ""
+                }
+            ));
+            output.line(format!("  {}", entity_line(&hop.to)));
+        }
+        output.line(String::new());
+    }
+
+    if report.truncated && !report.paths.is_empty() {
+        output.line("Search budget reached; there may be further paths.");
+    }
+
+    output.object(json!({
+        "command": "path",
+        "ok": true,
+        "exit_code": exit::SUCCESS,
+        "from": entity_json(&report.from),
+        "to": entity_json(&report.to),
+        "max_depth": report.max_depth,
+        "limit": query.limit,
+        "direction": query.direction.as_str(),
+        "relations": relation_names(&relations),
+        "resolved_only": query.resolved_only,
+        "truncated": report.truncated,
+        "expansions": report.expansions,
+        "count": report.paths.len(),
+        "paths": report.paths.iter().map(|graph_path| json!({
+            "length": graph_path.length(),
+            "traverses_unresolved": graph_path.traverses_unresolved(),
+            "hops": graph_path.hops.iter().map(|hop| json!({
+                "relation": hop.relation,
+                "assertion_id": hop.assertion_id,
+                "from": entity_json(&hop.from),
+                "to": entity_json(&hop.to),
+                "traversed_backwards": hop.traversed_backwards,
+                "is_unresolved": hop.is_unresolved,
+                "status": hop.status,
+                "strongest_source_type": hop.strongest_source_type,
+                "observation_count": hop.observation_count,
+                "file_path": hop.file_path,
+                "start_line": hop.start_line,
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+    }));
+
+    exit::SUCCESS
+}
+
+/// Everything `nerve why` was asked for.
+struct WhyArguments {
+    from: String,
+    to: Option<String>,
+    incoming: bool,
+    outgoing: bool,
+    relations: Vec<String>,
+}
+
+fn run_why(output: &Output, path: &Path, arguments: WhyArguments) -> i32 {
+    let relations = match parse_relations(&arguments.relations) {
+        Ok(relations) => relations,
+        Err(message) => return output.failure("why", exit::USAGE, &message),
+    };
+    let direction = match (arguments.incoming, arguments.outgoing) {
+        (true, false) => nerve_store::WhyDirection::Incoming,
+        (false, true) => nerve_store::WhyDirection::Outgoing,
+        _ => nerve_store::WhyDirection::Both,
+    };
+
+    let OpenIndex { root, conn, .. } = match open_existing(path) {
+        Ok(opened) => opened,
+        Err(message) => return output.failure("why", exit::NO_INDEX, &message),
+    };
+    // Freshness is computed by re-reading the repository, so the reader is built from the
+    // repository root and enforces the Slice 1 path rules on every path the database supplies.
+    let prober = match nerve_index::RepositoryProber::new(&root) {
+        Ok(prober) => prober,
+        Err(err) => return output.failure("why", error_exit_code(&err), &err.to_string()),
+    };
+
+    let subject = match resolve_one(output, "why", &conn, "from", &arguments.from) {
+        Ok(entity) => entity,
+        Err(code) => return code,
+    };
+    let object = match &arguments.to {
+        Some(selector) => match resolve_one(output, "why", &conn, "to", selector) {
+            Ok(entity) => Some(entity),
+            Err(code) => return code,
+        },
+        None => None,
+    };
+
+    let query = nerve_store::WhyQuery {
+        direction,
+        relations: relations.clone(),
+    };
+    let report = match nerve_store::explain(
+        &conn,
+        &subject.entity_id,
+        object.as_ref().map(|entity| entity.entity_id.as_str()),
+        &query,
+        &prober,
+    ) {
+        Ok(report) => report,
+        Err(err) => return output.failure("why", exit::INTERNAL, &err.to_string()),
+    };
+
+    output.line(format!("subject  {}", entity_line(&report.subject)));
+    if let Some(object) = &report.object {
+        output.line(format!("object   {}", entity_line(object)));
+    }
+    output.line(format!(
+        "assertions {} · files re-hashed {}",
+        report.assertions.len(),
+        report.files_probed
+    ));
+    output.line(String::new());
+
+    if report.assertions.is_empty() {
+        output.line("No assertion matches that question.");
+    }
+
+    for (index, assertion) in report.assertions.iter().enumerate() {
+        let other = match assertion.direction {
+            nerve_store::EdgeDirection::Outgoing => &assertion.target,
+            nerve_store::EdgeDirection::Incoming => &assertion.source,
+        };
+        let arrow = match assertion.direction {
+            nerve_store::EdgeDirection::Outgoing => "->",
+            nerve_store::EdgeDirection::Incoming => "<-",
+        };
+        output.line(format!(
+            "{}. {} {} {}",
+            index + 1,
+            assertion.relation,
+            arrow,
+            entity_line(other)
+        ));
+        output.line(format!(
+            "   status {} · unresolved {} · observations {} · strongest {}",
+            assertion.status.as_deref().unwrap_or("(none)"),
+            if assertion.is_unresolved { "yes" } else { "no" },
+            assertion.observation_count,
+            assertion.strongest_source_type.as_deref().unwrap_or("-")
+        ));
+        for observation in &assertion.observations {
+            output.line(format!(
+                "   - {} / {}  {} {}  {}  freshness {}",
+                observation.evidence_source_type,
+                observation.directness,
+                observation.extractor_id,
+                observation.extractor_version,
+                observation.location(),
+                observation.freshness
+            ));
+            output.line(format!(
+                "     environment {} · match_quality {} · state {}",
+                observation.environment.as_deref().unwrap_or("-"),
+                observation
+                    .match_quality
+                    .map(|quality| quality.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                observation.state_id
+            ));
+            output.line(format!(
+                "     details {}",
+                observation.details.as_deref().unwrap_or("-")
+            ));
+        }
+        output.line(String::new());
+    }
+
+    output.object(json!({
+        "command": "why",
+        "ok": true,
+        "exit_code": exit::SUCCESS,
+        "subject": entity_json(&report.subject),
+        "object": report.object.as_ref().map(entity_json),
+        "direction": query.direction.as_str(),
+        "relations": relation_names(&relations),
+        "files_probed": report.files_probed,
+        "count": report.assertions.len(),
+        "assertions": report.assertions.iter().map(|assertion| json!({
+            "assertion_id": assertion.assertion_id,
+            "relation": assertion.relation,
+            "direction": assertion.direction.as_str(),
+            "source": entity_json(&assertion.source),
+            "target": entity_json(&assertion.target),
+            "status": assertion.status,
+            "is_unresolved": assertion.is_unresolved,
+            "observation_count": assertion.observation_count,
+            "strongest_source_type": assertion.strongest_source_type,
+            "observations": assertion.observations.iter().map(|observation| json!({
+                "observation_id": observation.observation_id,
+                "evidence_source_type": observation.evidence_source_type,
+                "directness": observation.directness,
+                "extractor_id": observation.extractor_id,
+                "extractor_version": observation.extractor_version,
+                "match_quality": observation.match_quality,
+                "state_id": observation.state_id,
+                "file_path": observation.file_path,
+                "start_line": observation.start_line,
+                "end_line": observation.end_line,
+                "content_hash": observation.content_hash,
+                "environment": observation.environment,
+                "details": observation.details.as_deref().map(details_json),
+                "created_at": observation.created_at,
+                "freshness": observation.freshness.as_str(),
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+    }));
+
+    exit::SUCCESS
+}
+
+/// Render a stored `details` blob as JSON when it parses, as a string when it does not.
+fn details_json(details: &str) -> serde_json::Value {
+    serde_json::from_str(details).unwrap_or_else(|_| json!(details))
 }
 
 #[cfg(test)]

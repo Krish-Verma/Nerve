@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use nerve_index::config::{Config, IndexSettings, SecuritySettings, DEFAULT_MAX_FILE_BYTES};
 use nerve_index::discover::{canonical_child, discover, relative_path};
 use nerve_index::IndexError;
+use nerve_store::FileProber;
 
 fn write(root: &Path, rel_path: &str, contents: &str) {
     let path = root.join(rel_path);
@@ -328,4 +329,128 @@ fn the_index_directory_is_git_ignored_by_default() {
         std::fs::read_to_string(outcome.nerve_dir.join(".gitignore")).unwrap(),
         "*\n"
     );
+}
+
+// ---- query-time file reads (Slice 2b) ------------------------------------------------------
+//
+// `nerve why` re-hashes the file an observation points at. The path it opens comes out of the
+// database, which is an ordinary file on disk that Nerve does not own exclusively, so it is
+// untrusted input and every discovery-time rule applies again.
+
+fn prober_repository() -> (tempfile::TempDir, PathBuf, nerve_index::RepositoryProber) {
+    let outer = tempfile::tempdir().unwrap();
+    let root = outer.path().join("repo");
+    std::fs::create_dir_all(&root).unwrap();
+    write(&root, "src/a.ts", "export const a = 1;\n");
+    nerve_index::init_with_project_id(&root, Some(common::TEST_PROJECT_ID)).unwrap();
+    let root = std::fs::canonicalize(&root).unwrap();
+    let prober = nerve_index::RepositoryProber::new(&root).unwrap();
+    (outer, root, prober)
+}
+
+#[test]
+fn a_query_time_read_hashes_the_current_bytes() {
+    let (_outer, root, prober) = prober_repository();
+    assert_eq!(
+        prober.probe("src/a.ts"),
+        nerve_store::FileProbe::Hash(nerve_core::ids::content_hash(b"export const a = 1;\n"))
+    );
+
+    // The hash tracks the file, which is the whole point of computing freshness.
+    write(&root, "src/a.ts", "export const a = 2;\n");
+    assert_eq!(
+        prober.probe("src/a.ts"),
+        nerve_store::FileProbe::Hash(nerve_core::ids::content_hash(b"export const a = 2;\n"))
+    );
+}
+
+#[test]
+fn a_query_time_read_refuses_traversal_absolute_and_nul_paths() {
+    let (outer, _root, prober) = prober_repository();
+    write(outer.path(), "outside.ts", "export const secret = 1;\n");
+    let absolute = outer.path().join("outside.ts");
+
+    for candidate in [
+        "../outside.ts".to_string(),
+        "src/../../outside.ts".to_string(),
+        "src/a\0.ts".to_string(),
+        String::new(),
+        absolute.to_string_lossy().to_string(),
+    ] {
+        assert_eq!(
+            prober.probe(&candidate),
+            nerve_store::FileProbe::Refused,
+            "{candidate:?} must not be read"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_query_time_read_refuses_a_symlink_escaping_the_root() {
+    let (outer, root, prober) = prober_repository();
+    write(outer.path(), "outside.ts", "export const secret = 1;\n");
+    std::os::unix::fs::symlink(outer.path().join("outside.ts"), root.join("src/linked.ts"))
+        .unwrap();
+
+    assert_eq!(
+        prober.probe("src/linked.ts"),
+        nerve_store::FileProbe::Refused
+    );
+    // And the secret's hash is never produced by any path into the prober.
+    let secret = nerve_core::ids::content_hash(b"export const secret = 1;\n");
+    assert_ne!(
+        prober.probe("src/linked.ts"),
+        nerve_store::FileProbe::Hash(secret)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_query_time_read_refuses_a_symlinked_directory_escaping_the_root() {
+    let (outer, root, prober) = prober_repository();
+    write(outer.path(), "vendor/leak.ts", "export const leak = 1;\n");
+    std::os::unix::fs::symlink(outer.path().join("vendor"), root.join("src/vendor")).unwrap();
+
+    assert_eq!(
+        prober.probe("src/vendor/leak.ts"),
+        nerve_store::FileProbe::Refused
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_query_time_read_refuses_a_symlink_that_stays_inside_the_root() {
+    // Discovery never indexes a symlink, so a path that is one now was swapped after indexing.
+    // Following it would report a hash for a file the observation never described.
+    let (_outer, root, prober) = prober_repository();
+    std::os::unix::fs::symlink(root.join("src/a.ts"), root.join("src/alias.ts")).unwrap();
+    assert_eq!(
+        prober.probe("src/alias.ts"),
+        nerve_store::FileProbe::Refused
+    );
+}
+
+#[test]
+fn a_query_time_read_refuses_deny_listed_names() {
+    let (_outer, root, prober) = prober_repository();
+    write(&root, ".env", "SECRET=1\n");
+    write(&root, "src/id_rsa", "-----BEGIN\n");
+    assert_eq!(prober.probe(".env"), nerve_store::FileProbe::Refused);
+    assert_eq!(prober.probe("src/id_rsa"), nerve_store::FileProbe::Refused);
+}
+
+#[test]
+fn a_query_time_read_reports_a_vanished_file_as_missing() {
+    let (_outer, root, prober) = prober_repository();
+    std::fs::remove_file(root.join("src/a.ts")).unwrap();
+    assert_eq!(prober.probe("src/a.ts"), nerve_store::FileProbe::Missing);
+}
+
+#[test]
+fn a_query_time_read_refuses_a_file_above_the_configured_ceiling() {
+    let (_outer, root, prober) = prober_repository();
+    let oversized = vec![b'x'; (DEFAULT_MAX_FILE_BYTES + 1) as usize];
+    std::fs::write(root.join("src/a.ts"), &oversized).unwrap();
+    assert_eq!(prober.probe("src/a.ts"), nerve_store::FileProbe::Unreadable);
 }

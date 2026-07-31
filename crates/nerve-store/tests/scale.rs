@@ -3,6 +3,10 @@
 //! ADR-0001 says: revisit SQLite if p95 depth-4 traversal exceeds 200 ms on a 2,000,000
 //! assertion synthetic graph, or FTS5 symbol lookup exceeds 20 ms at 200,000 entities.
 //!
+//! Two traversals are measured against the same budget: the recursive-CTE reachability count
+//! from Slice 1, and Slice 2b's shipped [`find_paths`] walk, which is what `nerve path`
+//! actually runs.
+//!
 //! Ignored by default because building the graph takes tens of seconds. Run it with:
 //!
 //! ```text
@@ -11,13 +15,16 @@
 
 use std::time::{Duration, Instant};
 
-use nerve_store::{migrate, open};
+use nerve_store::{find_paths, migrate, open, PathQuery};
 
 const ENTITIES: usize = 200_000;
 const EDGES_PER_ENTITY: usize = 10;
 const ASSERTIONS: usize = ENTITIES * EDGES_PER_ENTITY;
 const TRAVERSAL_SAMPLES: usize = 200;
 const FTS_SAMPLES: usize = 200;
+/// The path walk is orders of magnitude more work per sample than the reachability count, so
+/// it takes fewer samples. 50 still puts a real observation at the p95 index.
+const PATH_SAMPLES: usize = 50;
 const TRAVERSAL_DEPTH: usize = 4;
 
 const TRAVERSAL_P95_BUDGET: Duration = Duration::from_millis(200);
@@ -167,6 +174,35 @@ fn scale_bounded_traversal_and_fts_latency() {
     }
     traversal_times.sort();
 
+    // ---- the shipped path walk -------------------------------------------------------------
+    //
+    // The recursive CTE above measures reachability. `nerve path` does something strictly
+    // harder: it enumerates simple paths and reconstructs them. Slice 2b's budget claim is
+    // about that function, so that function is what is measured here. Most sampled pairs are
+    // unreachable within four hops in a random 10-out-degree graph, which is the worst case:
+    // the walk explores the whole depth-4 neighbourhood before answering "no path".
+    let path_query = PathQuery {
+        max_depth: TRAVERSAL_DEPTH,
+        ..PathQuery::default()
+    };
+    let mut path_times = Vec::with_capacity(PATH_SAMPLES);
+    let mut paths_found = 0usize;
+    let mut expansions_total = 0usize;
+    for _ in 0..PATH_SAMPLES {
+        let from = format!("e{:07}", (rng.next() as usize) % ENTITIES);
+        let to = format!("e{:07}", (rng.next() as usize) % ENTITIES);
+        let began = Instant::now();
+        let report = find_paths(&conn, &from, &to, &path_query).unwrap();
+        path_times.push(began.elapsed());
+        paths_found += report.paths.len();
+        expansions_total += report.expansions;
+        assert!(
+            !report.truncated,
+            "the depth-{TRAVERSAL_DEPTH} walk must fit inside its budget, not be cut off by it"
+        );
+    }
+    path_times.sort();
+
     // ---- FTS lookup ----------------------------------------------------------------------
     let mut fts = conn
         .prepare(
@@ -213,6 +249,18 @@ fn scale_bounded_traversal_and_fts_latency() {
         millis(*traversal_times.last().unwrap()),
         millis(TRAVERSAL_P95_BUDGET)
     );
+    println!(
+        "nerve path depth-{TRAVERSAL_DEPTH}      {PATH_SAMPLES} samples, {paths_found} path(s) \
+         found, mean {} expansions",
+        expansions_total / PATH_SAMPLES
+    );
+    println!(
+        "  p50 {:8.2} ms   p95 {:8.2} ms   max {:8.2} ms   budget {:.0} ms",
+        millis(percentile(&path_times, 0.50)),
+        millis(percentile(&path_times, 0.95)),
+        millis(*path_times.last().unwrap()),
+        millis(TRAVERSAL_P95_BUDGET)
+    );
     println!("fts lookup              {FTS_SAMPLES} samples, {fts_hits} rows returned");
     println!(
         "  p50 {:8.2} ms   p95 {:8.2} ms   max {:8.2} ms   budget {:.0} ms",
@@ -230,6 +278,14 @@ fn scale_bounded_traversal_and_fts_latency() {
         "ADR-0001 falsification trigger fired: p95 depth-{TRAVERSAL_DEPTH} traversal {:.2} ms \
          exceeds the {:.0} ms budget",
         millis(traversal_p95),
+        millis(TRAVERSAL_P95_BUDGET)
+    );
+    let path_p95 = percentile(&path_times, 0.95);
+    assert!(
+        path_p95 < TRAVERSAL_P95_BUDGET,
+        "ADR-0001 falsification trigger fired: p95 depth-{TRAVERSAL_DEPTH} `nerve path` walk \
+         {:.2} ms exceeds the {:.0} ms budget",
+        millis(path_p95),
         millis(TRAVERSAL_P95_BUDGET)
     );
     assert!(
