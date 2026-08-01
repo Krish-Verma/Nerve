@@ -144,12 +144,22 @@ silently trusted.
 
 ### T10 — Supply chain and regression (A1, A5)
 
-**Controls (implemented):** 93 dependencies, all permissive, recorded in
-`third_party/LICENSES.md`; a test asserts **no networking crate** is in the tree; no telemetry,
-no analytics, no external LLM. `no_network` runs in CI.
-**Outstanding:** there is currently **no test asserting Nerve spawns no subprocess.** Given T1's
-importance, that assertion should exist rather than resting on code review.
-→ tracked as a corrective item below.
+**Controls (implemented):** 100 dependencies, all permissive, recorded in
+`third_party/LICENSES.md`; no telemetry, no analytics, no external LLM.
+
+`no_network.rs` asserts **no outbound network client** — HTTP/RPC clients, TLS, async runtimes
+that exist to drive them, telemetry, analytics, update checkers and crash reporters — across
+dev- and build-dependencies too. It deliberately does **not** claim "no networking crates":
+since Slice 4a `tiny_http` is present as an **inbound** loopback listener, and a companion test
+asserts its presence so a future reader cannot "fix" the suite by concluding Nerve has no network
+stack at all.
+
+`no_subprocess.rs` (added after this review flagged the gap) enforces T1 three ways: a scan of
+`crates/*/src/**` for process-creation APIs (`Command`, `exec*`, `fork`, `posix_spawn`, `system`)
+while still permitting `std::process::exit`; a dependency scan for process-runner crates; and an
+**end-to-end test** that indexes a repository whose `package.json` `postinstall`/`prepare`/`build`
+scripts and whose module top-level would each write a marker file, then asserts the marker does
+not exist. Verified to fail correctly by injecting `Command::new` into `gitinfo.rs`.
 
 ### T11 — Unbounded request-header read in the HTTP server (A3) — **accepted risk**
 
@@ -198,9 +208,10 @@ responsive, because the accept/read pool is separate from the query workers.
 | Test evidence (Slice 6/11) | T9 | ⬜ required before Slice 6 ships |
 | MCP (Slice 8) | T7, T8 | ⬜ required before Slice 8 ships |
 
-## 7. Corrective item raised by this review
+## 7. Corrective items
 
-**No-subprocess test.** T1 is the single most important indexing invariant and is currently
-guaranteed only by inspection. Add a test asserting no `std::process::Command` (or equivalent)
-appears in product code paths, mirroring the existing `no_network` test. Scheduled as part of the
-next slice that touches the CLI test surface.
+| Item | Status |
+|---|---|
+| **No-subprocess test.** T1 was guaranteed only by inspection. | ✅ **Done** — `crates/nerve-cli/tests/no_subprocess.rs`, 4 tests, mutation-verified |
+| **Networking terminology.** Docs and tests claimed "no networking crates", which became false when `tiny_http` landed. | ✅ **Done** — the claim is now "no outbound network client", with the inbound listener named explicitly |
+| **T11 availability bound.** `tiny_http` header read is unbounded. | ⬜ Open — see T11; re-examine before private beta |

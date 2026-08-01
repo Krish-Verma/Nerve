@@ -1,22 +1,53 @@
 //! Offline-first is enforced structurally, not by intention.
 //!
-//! CLAUDE.md §2 and SECURITY.md require that Nerve makes no network calls. The strongest
-//! check available at test time is that no networking crate is reachable in the dependency
-//! graph at all — including dev-dependencies and build-dependencies, because a test or build
+//! # What this asserts, precisely
+//!
+//! Since Slice 4a, Nerve **does** have a network stack: `tiny_http` is an inbound HTTP listener
+//! bound to `127.0.0.1`. Claiming "no networking crates" would be false, and this file used to
+//! say so. The accurate and load-bearing invariant is narrower:
+//!
+//! > Nerve has **no outbound network client**. It listens locally; it never dials out.
+//!
+//! So the forbidden list below is not "anything that touches a socket" — it is HTTP/TLS *client*
+//! stacks, async runtimes that would bring one, telemetry, analytics, update checkers and crash
+//! reporters. Dev-dependencies and build-dependencies are included, because a test or build
 //! script could otherwise reach the network during CI.
+//!
+//! `tiny_http` is deliberately **not** forbidden, and its presence is what makes the distinction
+//! necessary rather than pedantic. See `docs/SECURITY.md` and `docs/THREAT-MODEL.md`.
 
 use std::process::Command;
 
-/// Crates that would give any part of this workspace a network stack.
-const FORBIDDEN: [&str; 8] = [
+/// Crates that would give any part of this workspace an **outbound** network capability,
+/// telemetry, analytics, update checking or crash reporting.
+///
+/// Inbound-only listeners are not here by design: see the module documentation.
+const FORBIDDEN: [&str; 20] = [
+    // async runtimes that exist to drive network clients
     "tokio",
+    "async-std",
+    "smol",
+    // HTTP and RPC clients
     "reqwest",
     "hyper",
+    "hyper-util",
     "ureq",
     "curl",
+    "isahc",
+    "attohttpc",
+    "tonic",
+    // TLS, which only an outbound client needs here
     "native-tls",
     "rustls",
+    "openssl",
+    // raw socket plumbing
     "socket2",
+    // telemetry, analytics, update checking, crash reporting
+    "sentry",
+    "opentelemetry",
+    "tracing-opentelemetry",
+    "self_update",
+    "posthog-rs",
 ];
 
 fn cargo() -> String {
@@ -44,7 +75,7 @@ fn metadata() -> serde_json::Value {
 }
 
 #[test]
-fn no_networking_crate_is_in_the_dependency_tree() {
+fn no_outbound_network_client_is_in_the_dependency_tree() {
     let metadata = metadata();
     let packages = metadata["packages"].as_array().expect("packages array");
     let names: Vec<&str> = packages
@@ -60,7 +91,24 @@ fn no_networking_crate_is_in_the_dependency_tree() {
         .collect();
     assert!(
         found.is_empty(),
-        "networking crate(s) reachable from this workspace: {found:?}"
+        "outbound network client / telemetry crate(s) reachable from this workspace: {found:?}"
+    );
+}
+
+/// The inbound listener is expected, and naming it here keeps the distinction honest: a future
+/// reader must not "fix" the test above by concluding Nerve has no network stack at all.
+#[test]
+fn the_only_network_crate_is_the_inbound_listener() {
+    let metadata = metadata();
+    let names: Vec<&str> = metadata["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|package| package["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"tiny_http"),
+        "tiny_http is the local server; if it is gone, revisit this test and SECURITY.md"
     );
 }
 
