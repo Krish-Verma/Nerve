@@ -1,0 +1,107 @@
+/**
+ * Hash routing.
+ *
+ * The server serves exactly one document and a fixed table of assets — there is no history
+ * fallback and there should not be one, because a wildcard route is a filesystem surface. The
+ * fragment never reaches the server, so `#/entity/<id>/evidence` is both bookmarkable and
+ * impossible to mistake for a path the server must resolve.
+ */
+
+import { useCallback, useEffect, useState } from 'react';
+
+export type EntityTab = 'relations' | 'evidence' | 'graph' | 'source';
+
+export const ENTITY_TABS: readonly EntityTab[] = ['relations', 'evidence', 'graph', 'source'];
+
+export type Route =
+  | { view: 'overview' }
+  | { view: 'search'; q: string; kind: string | null }
+  | { view: 'entity'; id: string; tab: EntityTab; options: Record<string, string> }
+  | { view: 'gaps' };
+
+function parse(hash: string): Route {
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  const [pathPart = '', queryPart = ''] = raw.split('?', 2);
+  const segments = pathPart.split('/').filter((segment) => segment.length > 0);
+  const search = new URLSearchParams(queryPart);
+
+  switch (segments[0]) {
+    case 'search':
+      return { view: 'search', q: search.get('q') ?? '', kind: search.get('kind') };
+    case 'entity': {
+      const id = segments[1] ? decodeURIComponent(segments[1]) : '';
+      if (id === '') return { view: 'overview' };
+      const candidate = segments[2] as EntityTab | undefined;
+      const tab = candidate && ENTITY_TABS.includes(candidate) ? candidate : 'relations';
+      const options: Record<string, string> = {};
+      search.forEach((value, key) => {
+        options[key] = value;
+      });
+      return { view: 'entity', id, tab, options };
+    }
+    case 'gaps':
+      return { view: 'gaps' };
+    default:
+      return { view: 'overview' };
+  }
+}
+
+/** Build a fragment. Every caller goes through here so no route is spelled two ways. */
+export function href(route: Route): string {
+  switch (route.view) {
+    case 'overview':
+      return '#/overview';
+    case 'search': {
+      const search = new URLSearchParams();
+      if (route.q) search.set('q', route.q);
+      if (route.kind) search.set('kind', route.kind);
+      const text = search.toString();
+      return text ? `#/search?${text}` : '#/search';
+    }
+    case 'entity': {
+      const search = new URLSearchParams(route.options);
+      const text = search.toString();
+      const base = `#/entity/${encodeURIComponent(route.id)}/${route.tab}`;
+      return text ? `${base}?${text}` : base;
+    }
+    case 'gaps':
+      return '#/gaps';
+  }
+}
+
+/** A shorthand for the common case: open an entity on its default tab. */
+export function entityHref(id: string, tab: EntityTab = 'relations'): string {
+  return href({ view: 'entity', id, tab, options: {} });
+}
+
+export function navigate(target: string): void {
+  window.location.hash = target.startsWith('#') ? target.slice(1) : target;
+}
+
+/**
+ * Change the route without adding a history entry.
+ *
+ * Typing into the search field rewrites the route on every keystroke. Pushing each one would turn
+ * the back button into a per-character undo, so the query is replaced in place and the listeners
+ * are notified by hand — `replaceState` does not fire `hashchange` on its own.
+ */
+export function replaceRoute(target: string): void {
+  const url = new URL(window.location.href);
+  url.hash = target.startsWith('#') ? target.slice(1) : target;
+  if (url.href === window.location.href) return;
+  window.history.replaceState(null, '', url);
+  window.dispatchEvent(new HashChangeEvent('hashchange'));
+}
+
+export function useRoute(): [Route, (target: string) => void] {
+  const [route, setRoute] = useState<Route>(() => parse(window.location.hash));
+
+  useEffect(() => {
+    const onChange = () => setRoute(parse(window.location.hash));
+    window.addEventListener('hashchange', onChange);
+    return () => window.removeEventListener('hashchange', onChange);
+  }, []);
+
+  const go = useCallback((target: string) => navigate(target), []);
+  return [route, go];
+}

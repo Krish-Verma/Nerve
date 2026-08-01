@@ -1,3 +1,5 @@
 target/
 .nerve/
 .DS_Store
+node_modules/
+apps/nerve-web/dist/

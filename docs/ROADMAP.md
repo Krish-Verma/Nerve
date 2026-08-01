@@ -11,7 +11,7 @@ Authoritative slice list. Update the status column at the end of every slice.
 | 3 | Incremental indexing — changed-file detection, import-closure invalidation, **deletion**, `IdentityLink`, full-vs-incremental equivalence | ✅ Complete (2026-07-31) — 295 tests, equivalence holds over 24 seeded edits; **speed target missed (24.9% vs 20%)** |
 | 3b | Normalize repository state out of `occurrence`/`observation` and out of `occurrence_id` — removes the O(repository) restatement pass | ✅ Complete (2026-07-31) — 306 tests; **24.9% → 2.0%**; counted-writes gate; found and fixed a silent data-destruction bug |
 | 4a | `nerve serve` — loopback HTTP, read-only JSON API, T4/T5/T6 security controls | ✅ Complete (2026-07-31) — 427 tests; token/origin/host/traversal/symlink/XSS all attack-verified |
-| 4b | `apps/nerve-web` — the visual explorer SPA, asset embedding, screenshot QA | ⬜ Not started — **recommended next** |
+| 4b | `apps/nerve-web` — the visual explorer SPA, asset embedding, screenshot QA | 🟠 **Started, NOT complete** — scaffold only (no entry point, 1/6 views, never built or reviewed). `nerve serve` still serves the 4a placeholder. See `apps/nerve-web/README.md` |
 | 5 | Markdown + ADR evidence — sections, citations, document↔code identity links | ⬜ Not started |
 | 6 | Test evidence (**coverage only**) — `TEST_COVERS_SYMBOL`, freshness, affected-test experiment | ⬜ Not started |
 | 7 | CLI + query expansion — `impact`, `gaps`, `check`, evidence packets | ⬜ Not started |

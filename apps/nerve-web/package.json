@@ -1,0 +1,25 @@
+{
+  "name": "nerve-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "The Nerve visual explorer. Built assets are embedded into the nerve binary; nothing here is distributed as source.",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "lint": "node tools/lint.mjs",
+    "test": "node --test \"src/**/*.test.mjs\"",
+    "build": "vite build && node tools/embed.mjs",
+    "check": "npm run typecheck && npm run lint && npm run test"
+  },
+  "dependencies": {
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "typescript": "5.9.3",
+    "vite": "7.1.14"
+  }
+}
