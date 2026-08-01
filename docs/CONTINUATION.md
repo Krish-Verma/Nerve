@@ -8,23 +8,25 @@
 
 | | |
 |---|---|
-| **Current HEAD** | `1cd692a` — `wip: Slice 4b scaffold — INCOMPLETE, does not build` |
+| **Current HEAD** | `18c1a0c` — `feat: Slice 4b — the visual explorer` |
 | **Branch** | `main` · **Working tree** clean |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 4a** (`d9958b3`) — `nerve serve`, loopback read-only HTTP API |
-| **Next slice** | **Slice 4b** — `apps/nerve-web`, the visual explorer SPA |
-| **Roadmap status** | **INCOMPLETE.** 4b started-not-finished; slices 5–14 not started. |
+| **Last completed slice** | **Slice 4b** (`18c1a0c`) — the visual explorer. Slice 4 is done. |
+| **Next slice** | **Slice 5** — Markdown / ADR evidence (threat-model **T7** gate applies) |
+| **Roadmap status** | **INCOMPLETE.** Slices 5–14 and real-world validation not started. |
 
-**Why it stopped:** the Slice 4b implementation agent was terminated by an environment session
-limit (resets 10pm America/Los_Angeles) partway through scaffolding. Its partial work was
-preserved as an explicit WIP commit rather than discarded or presented as complete.
+**Why it stopped:** orchestrator context limit. Every slice in this project has been independently
+re-verified and adversarially probed before commit; continuing without the capacity to do that
+would lower the standard the project has held. Stopped at a clean, fully verified boundary.
 
 ## Verification state at HEAD
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace                                  → 427 passed, 0 failed, 2 ignored
+cargo test --workspace                                  → 435 passed, 0 failed, 2 ignored
+npm --prefix apps/nerve-web run check                   → typecheck + lint + 15 tests, clean
+npm --prefix apps/nerve-web run build                   → 4 assets → crates/nerve-server/assets
 cargo build --release                                   → Finished
 ```
 
@@ -52,57 +54,34 @@ Then read: `CLAUDE.md` · `docs/ROADMAP.md` · `apps/nerve-web/README.md` ·
 
 ---
 
-## Next objective — Slice 4b, exactly
+## Next objective — Slice 5, exactly
 
-Finish `apps/nerve-web` and embed it. **`apps/nerve-web/README.md` is the authoritative
-inventory** of what exists and what is missing. Summary:
+**Markdown / ADR evidence.** Deterministic ingestion of Markdown, README and ADR files into the
+same evidence model, with document-derived claims kept rigorously separate from source-derived
+ones.
 
-**Exists** (written against real 4a API responses, unverified): `api/client.ts`, `api/types.ts`,
-`routing.ts`, `format.ts`, `hooks.ts`, `ui/parts.tsx`, `graph/layout.ts` + a test,
-`styles/nerve.css`, `views/Overview.tsx`, `index.html`, `vite.config.ts`, `tsconfig.json`,
-`package.json`.
+**Blocking gate: threat-model T7** (`docs/THREAT-MODEL.md`). A README is attacker-controlled text.
+Document claims must carry `DOCUMENT_STATED`, must never be promoted to source-level evidence, and
+must be visibly distinguished in every surface. Nerve itself has no LLM in the product path, so
+injection cannot alter Nerve's behaviour — but Slice 8 will hand this text to agents.
 
-**Missing:** `src/main.tsx`, `src/App.tsx`; the Search, Entity, **Evidence inspector**,
-Neighbourhood-graph and Unresolved views; `tools/lint.mjs` and `tools/embed.mjs` (both referenced
-by `package.json` scripts); `npm install`; asset embedding into
-`crates/nerve-server/src/assets.rs`; and all verification.
+**Scope:** heading/section identity, exact citations, content hashes, repository-state scoping,
+document↔code identity links **with explicit evidence — never fuzzy name matching**, staleness
+where defensible, and contradiction detection only where deterministic claims can be compared.
 
-**Start by running the server and exercising the API**, so you build against real shapes:
+**Non-goals:** no LLM, no summarisation, no fuzzy linking, no schema change unless justified.
 
-```bash
-cargo build --release
-cp -R fixtures/ts-resolution /tmp/demo && rm -rf /tmp/demo/.nerve
-./target/release/nerve init /tmp/demo && ./target/release/nerve index /tmp/demo
-./target/release/nerve serve /tmp/demo     # prints a URL containing ?token=…
-```
+**The vocabulary already exists**: `EvidenceSourceType::DocumentStated` is declared in
+`nerve-core/src/vocab.rs` and emitted by nothing. A new extractor (`md-structural`, say) declares
+`[DOCUMENT_STATED]` and is refused by `verify_declared_source_types` if it emits anything else.
 
-Nine endpoints exist: `/api/overview`, `/api/search`, `/api/entity`, `/api/neighbourhood`,
-`/api/path`, `/api/why`, `/api/source`, `/api/unresolved`, `/api/partial-parses`.
+**Acceptance must include** positive/negative/ambiguous fixtures and a measured precision gate for
+any document↔code link, mirroring Slice 2a — a document mentioning `parseConfig` is **not**
+evidence that it means the symbol `parseConfig`.
 
-**Non-negotiable constraints:**
-- Runtime deps are **`react` + `react-dom` only**. No UI kit, chart library, graph library, state
-  manager, CSS framework or icons. Vite/TypeScript are build-time and **not distributed** —
-  record them as such in `third_party/LICENSES.md`.
-- **T5 is a blocking gate.** No `dangerouslySetInnerHTML`, no `innerHTML`, no inline
-  `<script>`/`<style>`/handlers. The server sends `default-src 'none'; script-src 'self';
-  style-src 'self'` with **no `unsafe-inline`**. Configure Vite to emit external JS/CSS.
-  **Do not weaken the CSP to make a build work.**
-- Graph is always a **bounded neighbourhood** of a focused entity; surface `truncated`,
-  `omitted_nodes`, `frontier_nodes`.
-- The **evidence inspector is the centrepiece** — source type, directness, extractor id+version,
-  `file:line`, computed freshness. Give it the most design attention.
-- Invoke the **`frontend-design` skill** before writing UI code.
-- **Screenshot-driven visual QA is an acceptance criterion.** Actually look at the screenshots and
-  fix what they reveal.
+## Remaining roadmap after Slice 5
 
-**Acceptance:** frontend typecheck + lint + build pass; Rust gate still passes; a grep-based check
-proves no `dangerouslySetInnerHTML`; no CSP console violations; database byte-identical before and
-after a UI session; screenshots across empty/small/large/long-name/unresolved-heavy repositories
-and narrow (~380px) and wide (~1600px) viewports.
-
-## Remaining roadmap after 4b
-
-5 Markdown/ADR evidence · 6 Test evidence (coverage only) · 7 CLI+query expansion
+6 Test evidence (coverage only) · 7 CLI+query expansion
 (`impact`, `gaps`, `check`) · 8 MCP · 9 Python · 10 Framework rules · 11 Test call tracing ·
 12 Git history · 13 Cross-repository contracts · 14 Human-confirmed memory ·
 **plus a real-world accuracy validation phase** (see "Open decisions").
