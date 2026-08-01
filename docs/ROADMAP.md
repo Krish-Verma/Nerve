@@ -11,7 +11,7 @@ Authoritative slice list. Update the status column at the end of every slice.
 | 3 | Incremental indexing — changed-file detection, import-closure invalidation, **deletion**, `IdentityLink`, full-vs-incremental equivalence | ✅ Complete (2026-07-31) — 295 tests, equivalence holds over 24 seeded edits; **speed target missed (24.9% vs 20%)** |
 | 3b | Normalize repository state out of `occurrence`/`observation` and out of `occurrence_id` — removes the O(repository) restatement pass | ✅ Complete (2026-07-31) — 306 tests; **24.9% → 2.0%**; counted-writes gate; found and fixed a silent data-destruction bug |
 | 4a | `nerve serve` — loopback HTTP, read-only JSON API, T4/T5/T6 security controls | ✅ Complete (2026-07-31) — 427 tests; token/origin/host/traversal/symlink/XSS all attack-verified |
-| 4b | `apps/nerve-web` — the visual explorer SPA, asset embedding, screenshot QA | 🟠 **Started, NOT complete** — scaffold only (no entry point, 1/6 views, never built or reviewed). `nerve serve` still serves the 4a placeholder. See `apps/nerve-web/README.md` |
+| 4b | `apps/nerve-web` — the visual explorer SPA, asset embedding, screenshot QA | ✅ Complete (2026-07-31) — 435 tests, 31 screenshots reviewed, 0 CSP violations; **fixed a 4a bug that made the UI unloadable** |
 | 5 | Markdown + ADR evidence — sections, citations, document↔code identity links | ⬜ Not started |
 | 6 | Test evidence (**coverage only**) — `TEST_COVERS_SYMBOL`, freshness, affected-test experiment | ⬜ Not started |
 | 7 | CLI + query expansion — `impact`, `gaps`, `check`, evidence packets | ⬜ Not started |
@@ -133,3 +133,21 @@ It also raised one corrective item: there is no test asserting Nerve spawns no s
 - Read-only proven by sha256 before/after; clean SIGTERM shutdown leaving no database lock.
 - One accepted risk recorded as threat-model **T11**: `tiny_http` reads header lines unbounded,
   a local availability issue with no disclosure path. Report: `docs/reports/slice-04a-report.md`.
+
+## Slice 4b — delivered
+
+- `apps/nerve-web`: React SPA compiled into the binary via `include_bytes!`. `nerve serve` needs
+  no Node, no build step and no network. Runtime dependencies are **`react` + `react-dom` only**,
+  lint-enforced; 67 build-time packages recorded as **not distributed**.
+- Six views: Overview · Symbols · Entity (Relations / **Evidence** / Neighbourhood / Source) ·
+  Gaps. The **evidence inspector is the centrepiece** — an assertion written as a sentence, each
+  observation carrying extractor id+version and evidence type, and **freshness shown as the
+  arithmetic it is**: recorded hash beside on-disk hash, with a verdict.
+- The graph is always a **bounded neighbourhood**: on a 485-entity repository it draws 25 of 170
+  and says `145 MORE NOT DRAWN`. Not a hairball (plan P4).
+- **Fixed a Slice 4a bug that made the interface unloadable**: static assets required the session
+  token, which a browser cannot attach to `<script src>`. Relaxed for the fixed asset table only;
+  `Host` and `Origin` still enforced (they run *before* the token in `guard.check`), API routes
+  and unknown paths still 401. Verified live.
+- 31 screenshots reviewed across 4 repositories at 380px and 1600px; 0 CSP violations; database
+  byte-identical before and after a UI session. Report: `docs/reports/slice-04b-report.md`.

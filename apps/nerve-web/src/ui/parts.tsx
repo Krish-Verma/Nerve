@@ -186,22 +186,23 @@ export function Empty({
   );
 }
 
-function candidateList(value: Json): Entity[] {
+/**
+ * Pull the entity-shaped members out of an error's structured detail.
+ *
+ * The detail blob is `Json` — the server sends whatever the refusal needed to carry, and this
+ * app must not assume a shape it did not check. So each member is tested for the one field that
+ * makes it usable and cast through `unknown`; a value that fails the test is dropped rather than
+ * rendered as a hole.
+ */
+function shaped<T>(value: Json): T[] {
   if (!Array.isArray(value)) return [];
   return value.filter(
-    (item): item is Entity =>
-      typeof item === 'object' && item !== null && typeof (item as Entity).entity_id === 'string',
-  ) as unknown as Entity[];
-}
-
-function suggestionList(value: Json): SearchHit[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter(
-    (item): item is SearchHit =>
+    (item) =>
       typeof item === 'object' &&
       item !== null &&
-      typeof (item as SearchHit).entity_id === 'string',
-  ) as unknown as SearchHit[];
+      !Array.isArray(item) &&
+      typeof (item as Record<string, Json>)['entity_id'] === 'string',
+  ) as unknown as T[];
 }
 
 function detailField(detail: Json, key: string): Json {
@@ -248,8 +249,8 @@ export function Failure({ error, onRetry }: { error: unknown; onRetry?: () => vo
     );
   }
 
-  const candidates = candidateList(detailField(error.detail, 'candidates'));
-  const suggestions = suggestionList(detailField(error.detail, 'suggestions'));
+  const candidates = shaped<Entity>(detailField(error.detail, 'candidates'));
+  const suggestions = shaped<SearchHit>(detailField(error.detail, 'suggestions'));
   const allowed = detailField(error.detail, 'allowed');
 
   return (

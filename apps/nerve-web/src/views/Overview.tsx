@@ -6,7 +6,7 @@
  * fact that changes how every other number on this screen should be read.
  */
 
-import { useApi } from '../hooks';
+import type { Resource } from '../hooks';
 import type { FreshnessReport, Overview as OverviewData, RunSummary } from '../api/types';
 import { ago, bytes, count, stamp } from '../format';
 import { Chip, Def, Defs, Empty, Failure, Figure, Loading, Panel, Tally } from '../ui/parts';
@@ -97,8 +97,8 @@ function Run({ run, latest }: { run: RunSummary; latest: boolean }) {
   );
 }
 
-export function Overview() {
-  const { state, reload } = useApi<OverviewData>('/api/overview');
+export function Overview({ resource }: { resource: Resource<OverviewData> }) {
+  const { state, reload } = resource;
 
   if (state.status === 'loading') return <Loading label="Measuring the index" />;
   if (state.status === 'error') return <Failure error={state.error} onRetry={reload} />;

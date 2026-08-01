@@ -192,6 +192,84 @@ crates for one signal.
 Total: 95 third-party crates (`nerve-core`, `nerve-store`, `nerve-index`, `nerve-server` and
 `nerve-cli` are this workspace and are excluded).
 
+## npm — `apps/nerve-web`, the visual explorer (Slice 4b)
+
+An npm tree cannot be audited package by package the way a Cargo tree can, so the surface is
+held down instead of audited up. The decision and its reasoning are in
+`docs/plans/slice-04-visual-explorer.md` P5.
+
+The split below is the important one, and it is **enforced, not merely documented**:
+`apps/nerve-web/tools/lint.mjs` fails the build if `package.json` declares any runtime
+dependency other than `react` and `react-dom`, or declares one that is never imported.
+
+Regenerate these facts with:
+
+```bash
+node -e "const l=require('./apps/nerve-web/package-lock.json');
+for (const [p,i] of Object.entries(l.packages)) if (p.startsWith('node_modules/'))
+  console.log(p.slice(13), i.version, i.license, i.dev?'build-time':'DISTRIBUTED')"
+```
+
+### Distributed — compiled into the `nerve` binary
+
+These three are bundled by Vite into `crates/nerve-server/assets/assets/nerve.js`, which
+`include_bytes!` compiles into the executable. They ship to users.
+
+| Package | Version | License | Purpose |
+|---|---|---|---|
+| `react` | 19.2.0 | MIT | The view layer |
+| `react-dom` | 19.2.0 | MIT | DOM rendering |
+| `scheduler` | 0.27.0 | MIT | React's cooperative scheduler; a transitive dependency of `react-dom`, not chosen directly |
+
+**Three packages, all MIT.** No UI kit, no chart library, no graph library, no state manager,
+no CSS framework, no icon package, no date library, no HTTP client. The neighbourhood graph is
+hand-rolled SVG (`apps/nerve-web/src/graph/layout.ts`); the stylesheet is written by hand and
+uses system font stacks, because the Content-Security-Policy forbids a remote origin and a
+webfont would be another distributed dependency for no legibility gain.
+
+### Build-time only — **not distributed**
+
+67 further packages are reachable from `devDependencies`. **None of them is in the shipped
+bytes**: they run on a developer's machine to produce `dist/`, and the `nerve` binary contains
+no trace of them. They are recorded for completeness, not because they are distributed.
+
+| Package | Version | License | Purpose |
+|---|---|---|---|
+| `vite` | 7.3.6 | MIT | Bundler. Configured plugin-free — see below |
+| `typescript` | 5.9.3 | Apache-2.0 | Type checking (`tsc --noEmit`); emits nothing |
+| `@types/react` | 19.2.2 | MIT | Type declarations |
+| `@types/react-dom` | 19.2.2 | MIT | Type declarations |
+| `esbuild` + 26 `@esbuild/*` platform binaries | 0.28.1 | MIT | Transform, via Vite |
+| `rollup` + 25 `@rollup/rollup-*` platform binaries | 4.62.3 | MIT | Bundling, via Vite |
+| `postcss` | 8.5.25 | MIT | CSS pipeline, via Vite |
+| `nanoid` | 3.3.16 | MIT | Via postcss |
+| `picocolors` | 1.1.1 | ISC | Via postcss/vite |
+| `source-map-js` | 1.2.1 | BSD-3-Clause | Via postcss |
+| `@types/estree` | 1.0.9 | MIT | Via rollup |
+| `csstype` | 3.2.3 | MIT | Via `@types/react` |
+| `fdir` · `picomatch` · `tinyglobby` | 6.5.0 · 4.0.5 · 0.2.17 | MIT | File globbing, via Vite |
+| `fsevents` | 2.3.3 | MIT | Optional macOS file watcher, via Vite's dev server, which this project never runs |
+
+The 51 `@esbuild/*` and `@rollup/rollup-*` entries are per-platform prebuilt binaries; exactly
+one is installed on any given machine (`@esbuild/darwin-arm64` and `@rollup/rollup-darwin-arm64`
+here). They are counted individually above because the lockfile lists them individually.
+
+**All 70 packages are permissively licensed**: MIT, ISC, BSD-3-Clause, or Apache-2.0. Nothing is
+copyleft.
+
+### What `apps/nerve-web` deliberately does not use
+
+- **`@vitejs/plugin-react`** — it exists for dev-server Fast Refresh, which this project never
+  runs because the app is only ever served from the Rust binary. It would pull Babel into a tree
+  that then needs licence review. `esbuild`'s automatic JSX transform covers the need.
+- **A linter (`eslint` and its plugin tree)** — `tsc --strict` with `noUnusedLocals`,
+  `noUncheckedIndexedAccess` and `verbatimModuleSyntax` catches what matters, and the rules that
+  are actually load-bearing here are security rules, not style rules. Those are enforced by
+  `tools/lint.mjs`, which is 120 lines of Node with no dependencies.
+- **A test framework** — `node --test` runs the layout and search tests directly, and Node strips
+  the types on import, so no transform and no framework is needed.
+- **Any runtime package beyond React** — see the enforced list above.
+
 ## Dependencies deliberately absent
 
 Enforced by `crates/nerve-cli/tests/no_network.rs`, which parses `cargo metadata` and fails

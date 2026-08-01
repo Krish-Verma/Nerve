@@ -19,7 +19,7 @@ use tiny_http::{Method, Request};
 
 use crate::api::{self, ApiError, Context};
 use crate::assets;
-use crate::guard::Guard;
+use crate::guard::{Guard, Rejection};
 use crate::request::{Target, TargetError};
 use crate::respond;
 use crate::token::{TOKEN_HEADER, TOKEN_QUERY};
@@ -114,11 +114,33 @@ fn resolve(request: &Request, guard: &Guard, ctx: &Context<'_>) -> Outcome {
         header(request, ORIGIN_HEADER),
         supplied_token.as_deref(),
     ) {
-        return Outcome::Error(ApiError::new(
-            rejection.status(),
-            rejection.code(),
-            rejection.message(),
-        ));
+        // A browser cannot attach a header to a subresource request. The document is opened at
+        // `/?token=…`, but the `<script>` and `<link>` it names are fetched by the browser with
+        // no token and no way to supply one — so requiring the token on the embedded assets makes
+        // the interface unloadable. It is relaxed for those, and for nothing else:
+        //
+        //  * `Host` and `Origin` are still enforced. [`Guard::check`] applies them **before** the
+        //    token, so a `MissingToken` or `BadToken` verdict is proof that both already passed —
+        //    the DNS-rebinding defence and the cross-origin refusal are untouched.
+        //  * Only a path that resolves in the fixed asset table is served. Anything else still
+        //    gets the guard's refusal, so an unauthorised caller still cannot learn which API
+        //    routes exist.
+        //  * What is served is build-constant: the same bytes in every copy of this binary,
+        //    containing no repository content, no index content and no session state. A caller
+        //    who can reach these already has the executable they came out of.
+        //
+        // Every `/api/*` route remains gated on all three checks.
+        let unauthenticated_asset =
+            matches!(rejection, Rejection::MissingToken | Rejection::BadToken)
+                && assets::lookup(&target.path).is_some();
+
+        if !unauthenticated_asset {
+            return Outcome::Error(ApiError::new(
+                rejection.status(),
+                rejection.code(),
+                rejection.message(),
+            ));
+        }
     }
 
     route(&target, ctx)

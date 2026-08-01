@@ -133,6 +133,43 @@ export interface Neighbourhood {
   resolved_only?: boolean;
 }
 
+/** One traversed step. `traversed_backwards` means the edge was followed against its recorded direction. */
+export interface PathHop {
+  relation: string;
+  assertion_id: string;
+  from: Entity;
+  to: Entity;
+  traversed_backwards: boolean;
+  is_unresolved: boolean;
+  status: string;
+  strongest_source_type: string;
+  observation_count: number;
+  file_path: string | null;
+  start_line: number | null;
+}
+
+export interface FoundPath {
+  length: number;
+  traverses_unresolved: boolean;
+  hops: PathHop[];
+}
+
+export interface PathReport {
+  from: Entity;
+  to: Entity;
+  max_depth: number;
+  /** True when the search hit its ceiling before it had finished looking. */
+  truncated: boolean;
+  /** How many nodes the search expanded before it stopped. */
+  expansions: number;
+  count: number;
+  paths: FoundPath[];
+  limit?: number;
+  direction?: string;
+  relations?: string[];
+  resolved_only?: boolean;
+}
+
 export interface EntityDetail {
   entity: Entity;
   occurrence_count: number;

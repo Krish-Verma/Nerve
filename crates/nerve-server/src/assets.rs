@@ -3,9 +3,12 @@
 //! `nerve serve` must need no Node runtime, no build step and no files on disk beyond the
 //! repository it is indexing, so the interface ships inside the executable.
 //!
-//! **This is the hook the explorer slice fills.** Built assets are dropped into
-//! `crates/nerve-server/assets/` and listed in [`ASSETS`]; nothing else about the server needs
-//! to change. Two properties of this module are load-bearing and must survive that change:
+//! The bytes here are the output of `apps/nerve-web`, copied in by `npm run build` (which runs
+//! `apps/nerve-web/tools/embed.mjs` after Vite). **The directory layout mirrors the route layout
+//! exactly** — `assets/nerve.js` on disk is `/assets/nerve.js` over HTTP — so the `include_bytes!`
+//! paths and the [`ASSETS`] table cannot drift apart without the mismatch being obvious.
+//!
+//! Two properties of this module are load-bearing:
 //!
 //! - **Lookup is an exact match against a fixed table.** No path is ever joined onto a directory
 //!   and no filesystem call is made, so there is no traversal surface here at all — a request
@@ -15,9 +18,14 @@
 //!   into markup, which is what makes the served document XSS-free by construction rather than
 //!   by escaping (THREAT-MODEL T5).
 //!
-//! The placeholder page carries no inline `<style>` or `<script>`, because the
-//! `Content-Security-Policy` this server sends has no `unsafe-inline`. A page that needs an
-//! exception to the policy is a page that has weakened it.
+//! The served document carries no inline `<style>` and no inline `<script>` body — only external
+//! references to files in this same table — because the `Content-Security-Policy` this server
+//! sends has no `unsafe-inline`. A page that needs an exception to the policy is a page that has
+//! weakened it. `embed.mjs` re-reads the emitted HTML and refuses to copy it in if that stops
+//! being true, and [`the_served_page_needs_no_csp_exception`] asserts it again from Rust, against
+//! the bytes that actually shipped.
+//!
+//! [`the_served_page_needs_no_csp_exception`]: tests::the_served_page_needs_no_csp_exception
 
 /// One embedded file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,9 +49,19 @@ pub const ASSETS: &[Asset] = &[
         bytes: include_bytes!("../assets/index.html"),
     },
     Asset {
+        path: "assets/nerve.js",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: include_bytes!("../assets/assets/nerve.js"),
+    },
+    Asset {
         path: "assets/nerve.css",
         content_type: "text/css; charset=utf-8",
-        bytes: include_bytes!("../assets/nerve.css"),
+        bytes: include_bytes!("../assets/assets/nerve.css"),
+    },
+    Asset {
+        path: "assets/favicon.svg",
+        content_type: "image/svg+xml",
+        bytes: include_bytes!("../assets/assets/favicon.svg"),
     },
 ];
 
@@ -84,16 +102,67 @@ mod tests {
         }
     }
 
+    /// The served document must run under `script-src 'self'; style-src 'self'` with no
+    /// `unsafe-inline`. That permits an external script and an external stylesheet, and forbids
+    /// an inline body, an inline style block, and an event-handler attribute.
+    ///
+    /// This asserts the property against the bytes that actually shipped, which is the point:
+    /// `embed.mjs` checks the same thing in the frontend build, and neither check trusts the
+    /// other or trusts the Vite configuration that is supposed to make both pass.
     #[test]
-    fn the_placeholder_page_needs_no_csp_exception() {
+    fn the_served_page_needs_no_csp_exception() {
         let html = std::str::from_utf8(ASSETS[0].bytes).unwrap();
-        assert!(!html.contains("<script"), "no inline or external script");
-        assert!(!html.contains("<style"), "no inline style block");
-        assert!(!html.to_ascii_lowercase().contains(" onload"));
-        assert!(!html.to_ascii_lowercase().contains(" onerror"));
+        let lower = html.to_ascii_lowercase();
+
+        // Every `<script>` must be a reference, never a body: `<script ... src=...></script>`.
+        for fragment in html.split("<script").skip(1) {
+            let (open, rest) = fragment
+                .split_once('>')
+                .expect("an unterminated <script tag");
+            assert!(open.contains("src="), "a <script> with no src: {open}");
+            let body = rest.split("</script>").next().unwrap_or("");
+            assert!(body.trim().is_empty(), "an inline <script> body: {body}");
+        }
+
+        assert!(!lower.contains("<style"), "no inline style block");
+        assert!(!lower.contains(" style="), "no style attribute");
+        assert!(!lower.contains(" onload"));
+        assert!(!lower.contains(" onerror"));
+        assert!(!lower.contains(" onclick"));
         assert!(!html.contains("http://"), "no remote origin");
         assert!(!html.contains("https://"), "no remote origin");
-        assert!(html.contains("/assets/nerve.css"));
+
+        // And every URL it names must be an asset this binary can actually serve.
+        for path in [
+            "/assets/nerve.js",
+            "/assets/nerve.css",
+            "/assets/favicon.svg",
+        ] {
+            assert!(
+                html.contains(path),
+                "the document does not reference {path}"
+            );
+            assert!(
+                lookup(path).is_some(),
+                "{path} is referenced but not embedded"
+            );
+        }
+    }
+
+    /// The interface is compiled in, so an empty or truncated build must not reach a release.
+    #[test]
+    fn the_interface_is_actually_embedded() {
+        let script = lookup("/assets/nerve.js").expect("the script is embedded");
+        assert!(
+            script.bytes.len() > 20_000,
+            "the embedded bundle is {} bytes, which is not a built application",
+            script.bytes.len()
+        );
+        let styles = lookup("/assets/nerve.css").expect("the stylesheet is embedded");
+        assert!(
+            styles.bytes.len() > 2_000,
+            "the embedded stylesheet is too small to be real"
+        );
     }
 
     #[test]

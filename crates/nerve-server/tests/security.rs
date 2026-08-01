@@ -22,20 +22,89 @@ fn the_server_binds_loopback_only() {
     assert_ne!(address.ip().to_string(), "0.0.0.0");
 }
 
+/// Nothing that was read out of the repository is reachable without the session token.
+///
+/// Every advertised route is exercised, not a sample of them, so a route added later cannot be
+/// added ungated without this failing. An unknown path is included too: it must also be refused
+/// rather than 404, or an unauthorised caller could enumerate which routes exist.
 #[test]
-fn a_request_without_a_token_is_refused() {
+fn no_api_route_answers_without_a_token() {
     let (_dir, _root, session) = common::served();
-    for target in [
-        "/",
-        "/index.html",
-        "/assets/nerve.css",
-        "/api/overview",
-        "/api/search?q=area",
-    ] {
-        let response = session.raw("GET", target, &[("Host", &session.host())]);
+    let mut targets: Vec<String> = nerve_server::router::ROUTES
+        .iter()
+        .map(|route| route.to_string())
+        .collect();
+    targets.push("/api/search?q=area".to_string());
+    targets.push("/api/entity?selector=Circle".to_string());
+    targets.push("/no/such/route".to_string());
+
+    for target in targets {
+        let response = session.raw("GET", &target, &[("Host", &session.host())]);
         assert_eq!(response.status, 401, "{target}: {}", response.body);
         assert_eq!(response.parse_json()["error"]["code"], "token_required");
         assert!(!response.body.contains("entities_total"), "{target}");
+        assert!(!response.body.contains(PAYLOAD), "{target}");
+    }
+}
+
+/// The interface's own files load without the token, and carry nothing that is not public.
+///
+/// This is a deliberate, narrow relaxation and it is pinned here so it cannot widen by accident.
+/// A browser cannot attach a header to a `<script src>` or a `<link href>`, so requiring the
+/// token on them would make the interface unloadable. What is served instead is build-constant:
+/// identical in every copy of this binary, containing no repository content, no index content
+/// and no session state. The API stays gated — see `no_api_route_answers_without_a_token`.
+#[test]
+fn the_interface_loads_without_a_token_and_carries_nothing_private() {
+    let (_dir, root, session) = common::served();
+    let root_path = root.to_string_lossy().to_string();
+
+    for target in ["/", "/index.html", "/assets/nerve.css", "/assets/nerve.js"] {
+        let response = session.raw("GET", target, &[("Host", &session.host())]);
+        assert_eq!(response.status, 200, "{target}: {}", response.body);
+
+        // The three things that would make serving these ungated a disclosure. Client-side field
+        // names such as `entities_total` legitimately appear in the bundle — they are the shape
+        // of the API, which is public — so what is asserted is the absence of *values*: this
+        // session's token, this repository's content, and this repository's location on disk.
+        assert!(
+            !response.body.contains(session.token()),
+            "{target} carries the session token"
+        );
+        assert!(
+            !response.body.contains(PAYLOAD),
+            "{target} carries repository content"
+        );
+        assert!(
+            !response.body.contains(HOSTILE_FILE),
+            "{target} carries an indexed path"
+        );
+        assert!(
+            !response.body.contains(&root_path),
+            "{target} carries the repository root"
+        );
+    }
+}
+
+/// Relaxing the token on the interface files did not relax `Host` or `Origin` on them.
+///
+/// The guard applies those two checks *before* the token, so they are still the DNS-rebinding
+/// defence and the cross-origin refusal for every route on the server, assets included.
+#[test]
+fn the_interface_files_still_refuse_a_forged_host_or_a_foreign_origin() {
+    let (_dir, _root, session) = common::served();
+    for target in ["/", "/assets/nerve.js", "/assets/nerve.css"] {
+        let rebound = session.raw("GET", target, &[("Host", "evil.test")]);
+        assert_eq!(rebound.status, 403, "{target}: {}", rebound.body);
+        assert_eq!(rebound.parse_json()["error"]["code"], "host_not_allowed");
+
+        let foreign = session.raw(
+            "GET",
+            target,
+            &[("Host", &session.host()), ("Origin", "http://evil.test")],
+        );
+        assert_eq!(foreign.status, 403, "{target}: {}", foreign.body);
+        assert_eq!(foreign.parse_json()["error"]["code"], "origin_not_allowed");
     }
 }
 
@@ -354,11 +423,25 @@ fn the_served_page_has_no_inline_script_or_style() {
         response.header("content-type"),
         Some("text/html; charset=utf-8")
     );
+    // `script-src 'self'; style-src 'self'` with no `unsafe-inline` permits an external script
+    // and an external stylesheet. What it forbids is anything the document itself carries: a
+    // script body, a style block, a style attribute, an event handler.
+    for fragment in response.body.split("<script").skip(1) {
+        let (open, rest) = fragment
+            .split_once('>')
+            .expect("an unterminated <script tag");
+        assert!(open.contains("src="), "a <script> with no src: {open}");
+        let body = rest.split("</script>").next().unwrap_or("");
+        assert!(body.trim().is_empty(), "an inline <script> body: {body}");
+    }
+
     let html = response.body.to_ascii_lowercase();
-    assert!(!html.contains("<script"), "{html}");
     assert!(!html.contains("<style"), "{html}");
+    assert!(!html.contains(" style="), "{html}");
     assert!(!html.contains(" onerror"), "{html}");
     assert!(!html.contains(" onload"), "{html}");
+    assert!(!html.contains(" onclick"), "{html}");
+    assert!(!html.contains("javascript:"), "{html}");
     // Nothing repository-derived, and nothing templated, is in the page at all.
     assert!(!response.body.contains(PAYLOAD));
     assert!(!response.body.contains(session.token()));

@@ -253,6 +253,49 @@ export function edgePath(
   return `M ${from.x} ${from.y} Q ${controlX} ${controlY} ${to.x} ${to.y}`;
 }
 
+/**
+ * Where a ring's own label goes: in the gap between two adjacent nodes on that ring.
+ *
+ * Putting it at a fixed compass point collides with whichever node happens to be there, which on
+ * an evenly spaced ring is often the top one. Nodes on a ring are evenly spaced, so the midpoints
+ * between them are known exactly — this picks the midpoint nearest the top of the circle, which is
+ * both collision-free by construction and deterministic, so the picture stays reproducible.
+ */
+export function ringLabelPlacement(
+  ring: Ring,
+  nodes: PlacedNode[],
+  centre: { x: number; y: number },
+): { x: number; y: number } {
+  const angles = nodes
+    .filter((node) => node.depth === ring.depth)
+    .map((node) => node.angle)
+    .sort((a, b) => a - b);
+
+  // With nothing on the ring there is nothing to avoid, so the top is free.
+  if (angles.length === 0) {
+    return { x: centre.x, y: centre.y - ring.radius - 7 };
+  }
+
+  const top = -Math.PI / 2;
+  let best = angles[0]! + Math.PI;
+  let bestGap = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < angles.length; index += 1) {
+    const here = angles[index]!;
+    const next = index + 1 < angles.length ? angles[index + 1]! : angles[0]! + Math.PI * 2;
+    const middle = (here + next) / 2;
+    const distance = angleGap(middle, top);
+    if (distance < bestGap) {
+      bestGap = distance;
+      best = middle;
+    }
+  }
+
+  return {
+    x: centre.x + Math.cos(best) * ring.radius,
+    y: centre.y + Math.sin(best) * ring.radius + 4,
+  };
+}
+
 /** Where a node's label goes: outside the ring, on the side that points away from the centre. */
 export function labelPlacement(node: PlacedNode): {
   x: number;

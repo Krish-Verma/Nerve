@@ -6,7 +6,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { circularMean, edgePath, labelPlacement, layout } from './layout.ts';
+import {
+  circularMean,
+  edgePath,
+  labelPlacement,
+  layout,
+  ringLabelPlacement,
+} from './layout.ts';
 
 const node = (id, depth, sortKey = id) => ({ id, depth, sortKey });
 
@@ -113,4 +119,42 @@ test('labels sit outside the ring, anchored away from the centre', () => {
   assert.equal(labelPlacement(right).anchor, 'start');
   const left = { ...right, angle: Math.PI, x: 200 };
   assert.equal(labelPlacement(left).anchor, 'end');
+});
+
+test('a ring label lands between two nodes, never on one', () => {
+  // Six nodes on ring 1: the first is placed at the top, so the top is exactly where a fixed
+  // label would collide. The gap midpoints are what this has to find instead.
+  const result = layout(
+    [
+      node('a', 0),
+      node('b', 1),
+      node('c', 1),
+      node('d', 1),
+      node('e', 1),
+      node('f', 1),
+      node('g', 1),
+    ],
+    [],
+    600,
+    600,
+  );
+  const ring = result.rings[0];
+  const at = ringLabelPlacement(ring, result.nodes, result.centre);
+
+  for (const placed of result.nodes) {
+    if (placed.depth !== 1) continue;
+    const distance = Math.hypot(placed.x - at.x, placed.y - at.y);
+    assert.ok(distance > 20, `the ring label is ${distance.toFixed(1)}px from ${placed.id}`);
+  }
+
+  // And it stays on the ring it is labelling, so it cannot be read as belonging to another.
+  const radius = Math.hypot(at.x - result.centre.x, at.y - result.centre.y - 4);
+  assert.ok(Math.abs(radius - ring.radius) < 1, `${radius} should be ${ring.radius}`);
+});
+
+test('a ring with nothing on it still gets a label', () => {
+  const result = layout([node('a', 0), node('b', 1)], [], 600, 600);
+  const at = ringLabelPlacement({ depth: 3, radius: 200 }, result.nodes, result.centre);
+  assert.equal(at.x, result.centre.x);
+  assert.ok(at.y < result.centre.y);
 });

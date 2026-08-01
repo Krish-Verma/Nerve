@@ -732,6 +732,52 @@ body {
   color: var(--unknown);
 }
 
+/* ---- unresolved references --------------------------------------------------------------- */
+
+.gaplist {
+  display: flex;
+  flex-direction: column;
+}
+
+.gap {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 16px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.gap:last-child {
+  border-bottom: none;
+}
+
+.gap:hover {
+  background: var(--ink-raise);
+}
+
+.gap__name {
+  font-size: 13px;
+  color: var(--unknown);
+  min-width: 0;
+}
+
+.gap__meta {
+  font-size: 11px;
+  color: var(--bone-4);
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* The reason gets a whole row of its own, because most of them are a clause, not a word. */
+.gap__reason {
+  grid-column: 1 / -1;
+  font-family: var(--sans);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--bone-3);
+  max-width: 78ch;
+}
+
 /* ---- relation groups --------------------------------------------------------------------- */
 
 .relgroup {
@@ -812,15 +858,20 @@ a.claim__party:hover {
   color: var(--unknown);
 }
 
+/*
+ * The verb is set in Nerve's own voice, in lower case, because the point of writing an assertion
+ * as a sentence is that it can be read aloud — and "Circle DEFINES Circle.area" is a row in a
+ * table wearing a sentence's clothes. The two names either side stay in the repository's voice,
+ * so the sentence visibly has three parts and you can see which two Nerve did not write.
+ */
 .claim__verb {
   font-family: var(--sans);
-  font-size: 10px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.04em;
   color: var(--bone-3);
   border: 1px solid var(--rule);
   border-radius: 2px;
-  padding: 1px 6px;
+  padding: 1px 7px;
   white-space: nowrap;
 }
 
@@ -995,10 +1046,17 @@ a.claim__party:hover {
   background: radial-gradient(circle at 50% 48%, #191410 0%, var(--ink-sink) 72%);
 }
 
+/*
+ * The drawing scales with the panel, but is capped so the footer — which carries the count of
+ * what was *not* drawn — stays on screen. A truncation notice below the fold is a truncation
+ * notice nobody reads. `preserveAspectRatio` letterboxes rather than distorting, so the layout
+ * stays the pure function of its input that its tests assert it is.
+ */
 .graph svg {
   display: block;
   width: 100%;
   height: auto;
+  max-height: min(620px, 56vh);
 }
 
 .graph__ring {
@@ -1134,6 +1192,124 @@ a.claim__party:hover {
   overflow: visible;
 }
 
+/* ---- the search box, and the list it drops ----------------------------------------------- */
+
+.omni {
+  position: relative;
+  min-width: 0;
+}
+
+.omni__pop {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  min-width: 320px;
+  background: var(--ink-panel);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.omni__foot {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--rule-soft);
+  background: var(--ink-sink);
+  font-family: var(--sans);
+  font-size: 11px;
+  color: var(--bone-4);
+}
+
+/* ---- the freshness check ----------------------------------------------------------------- */
+
+/*
+ * Two hashes and a verdict. This is the one block on the screen that shows its working: the
+ * server measured freshness by re-hashing, and the only way to make that legible rather than
+ * merely assertable is to print both strings and let the reader compare them.
+ */
+.check {
+  display: grid;
+  gap: 8px;
+  padding: 11px 12px;
+  background: var(--ink-sink);
+  border: 1px solid var(--rule-soft);
+  border-radius: 2px;
+}
+
+.check__row {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.check__hash {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--bone-2);
+  letter-spacing: 0.02em;
+}
+
+.check__verdict {
+  font-family: var(--sans);
+  font-size: 12px;
+  line-height: 1.5;
+  padding-top: 7px;
+  border-top: 1px solid var(--rule-soft);
+}
+
+.check__verdict--same {
+  color: var(--fresh);
+}
+
+.check__verdict--differs {
+  color: var(--stale);
+}
+
+/* ---- a path, read as a chain ------------------------------------------------------------- */
+
+.chain {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.chain__step {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chain__from {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--bone);
+}
+
+/* The rule is the hop: the label sits on a line that visibly connects one name to the next. */
+.chain__link {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin: 2px 0 8px 7px;
+  padding: 7px 0 9px 16px;
+  border-left: 1px solid var(--rule);
+}
+
+.chain__arrow {
+  font-size: 13px;
+  color: var(--bone-3);
+}
+
+.chain__arrow--back {
+  color: var(--stale);
+}
+
 /* ---- states ------------------------------------------------------------------------------ */
 
 .state {
@@ -1160,6 +1336,22 @@ a.claim__party:hover {
 
 .state--error .state__title {
   color: var(--stale);
+}
+
+/*
+ * A list offered inside an empty or refused state — candidates for an ambiguous selector, other
+ * queries to try — is a short menu, not a result set. Left to stretch the full width its label
+ * and its explanation end up a screen apart, so it is held to a readable measure and given an
+ * edge, which is what makes it read as something to choose from.
+ */
+.state > .stack {
+  max-width: 68ch;
+}
+
+.state .hits {
+  border: 1px solid var(--rule-soft);
+  border-radius: 2px;
+  background: var(--ink-panel);
 }
 
 .signal {
