@@ -63,8 +63,14 @@ enum Command {
     /// Report index counts, freshness and schema version.
     Status {
         /// Repository root. Defaults to the current directory.
-        #[arg(long, default_value = ".")]
-        path: PathBuf,
+        ///
+        /// Accepted positionally, matching `init` and `index`, whose subject is also the
+        /// repository. `--path` remains accepted so the query commands — whose positional
+        /// arguments are the query, not the repository — keep one spelling across the surface.
+        path: Option<PathBuf>,
+        /// Repository root. Equivalent to the positional form.
+        #[arg(long = "path", value_name = "PATH")]
+        path_flag: Option<PathBuf>,
     },
     /// Full-text search over entity names and scope paths.
     Search {
@@ -232,7 +238,10 @@ fn main() {
     let code = match cli.command {
         Command::Init { path } => run_init(&output, path),
         Command::Index { path, full } => run_index(&output, path, full),
-        Command::Status { path } => run_status(&output, &path),
+        Command::Status { path, path_flag } => run_status(
+            &output,
+            &path.or(path_flag).unwrap_or_else(|| PathBuf::from(".")),
+        ),
         Command::Search {
             query,
             kind,

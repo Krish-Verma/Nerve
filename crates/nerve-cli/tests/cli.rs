@@ -438,6 +438,21 @@ fn status_reports_the_schema_version_and_state() {
     assert!(status["database_bytes"].as_u64().unwrap() > 0);
 }
 
+/// `init`, `index` and `status` all take the repository positionally. `nerve status .` erroring
+/// while `nerve index .` worked was an inconsistency found in the Slice 3 product review.
+#[test]
+fn status_accepts_the_repository_positionally_and_via_path() {
+    let (_dir, root) = fixture_copy();
+    let root_str = root.to_str().unwrap();
+    run(&["init", root_str]);
+    run(&["index", root_str]);
+
+    let positional = json(&run(&["status", root_str, "--json"]));
+    let flagged = json(&run(&["status", "--path", root_str, "--json"]));
+    assert_eq!(positional["state_id"], flagged["state_id"]);
+    assert_eq!(positional["healthy"], serde_json::Value::Bool(true));
+}
+
 // ---- graph query surface (Slice 2b) --------------------------------------------------------
 
 fn stderr(output: &Output) -> String {
