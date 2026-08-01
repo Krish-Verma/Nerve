@@ -16,6 +16,10 @@ observation falls on, and a tree with documents only could not distinguish "the 
 | `docs/decisions/plain-note.md` | ADR by *directory*, with no id and no status; absent must not read as unparsed |
 | `docs/hostile.md` | the negative fixture: scripts, event handlers, inline HTML, a `javascript:` link, traversal-shaped link text, prompt-injection prose, and both identity-forgery separators |
 
+Link *resolution* is measured on its own corpus, `fixtures/md-links`. What `docs/hostile.md`
+proves here is narrower and complementary: a hostile destination reaches the graph as an inert
+`Unresolved` entity with a reason, and a traversal-shaped **link text** is never read as one.
+
 ## Changing this fixture
 
 Adding a document means updating the expectations in `tests/documents.rs` in the same commit.

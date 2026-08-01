@@ -25,6 +25,14 @@
 //! document side of the invariant. Directory containment stays with `ts-js-structural`, because
 //! its evidence cites a directory rather than any file.
 //!
+//! Slice 5c adds `REFERENCES` edges for resolved links and leaves that invariant untouched: a
+//! resolved link is still only a document's claim, so it stays `DOCUMENT_STATED` and moves the
+//! *directness* axis alone. What it does add is a dependency documents did not previously have —
+//! on the indexed path set, and on the bytes of any file a `#L<n>` anchor points into — which is
+//! why [`crate::incremental::classify`] now re-resolves cached destinations and why a document
+//! being re-scanned drags its anchor targets into the extraction set. Both are stated where they
+//! are implemented.
+//!
 //! # Incremental indexing (Slice 3)
 //!
 //! Every run costs `discover + read + hash` over the whole tree — that is what the repository
@@ -79,6 +87,7 @@ use nerve_core::vocab::{Directness, EntityKind, EvidenceSourceType, Relation, Un
 
 use crate::config::{self, Config};
 use crate::discover;
+use crate::docref::{self, AnchorOutcome, DocumentLinks, LinkOutcome, LinkSite};
 use crate::docs::{self, DocumentExtraction};
 use crate::error::{IndexError, Result};
 use crate::exports::ExportIndex;
@@ -412,6 +421,18 @@ impl Evidence {
         source_type: EvidenceSourceType::DocumentStated,
         directness: docs::DIRECTNESS,
     };
+
+    /// A document states this, and **link resolution** turned it into an entity.
+    ///
+    /// The source type is deliberately the same: a resolved link is still only a document's
+    /// claim, so promoting it to `AST_RESOLVED` would make a README's assertion indistinguishable
+    /// from one the compiler could check — exactly the collapse THREAT-MODEL.md T7 forbids. Only
+    /// directness moves, on the same reading of ADR-0003 that separates `AST_DIRECT` from
+    /// `AST_RESOLVED`: a step happened, and the row says so.
+    const DOCUMENT_RESOLVED: Evidence = Evidence {
+        source_type: EvidenceSourceType::DocumentStated,
+        directness: docs::RESOLVED_DIRECTNESS,
+    };
 }
 
 fn parent_directory(rel_path: &str) -> Option<String> {
@@ -536,6 +557,13 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         .filter(|file| !file.kind.is_doc())
         .map(|file| file.rel_path.clone())
         .collect();
+
+    // What a **document link** resolves against: every indexed path, documents included. Wider
+    // than `indexed` on purpose — a README linking to another README is an ordinary and useful
+    // thing to record, whereas a module *specifier* resolving to a document would invent a
+    // `Module` entity no extractor creates.
+    let all_indexed: BTreeSet<String> = current_hashes.keys().cloned().collect();
+
     let mut known_paths: BTreeSet<String> = current_hashes.keys().cloned().collect();
     known_paths.extend(previous.keys().cloned());
     let invalidated =
@@ -554,34 +582,93 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     }
 
     // ---- extract the invalidation set ----------------------------------------------------
-    let mut extractions: BTreeMap<String, ModuleExtraction> = BTreeMap::new();
+    //
+    // Documents are scanned first, and not for tidiness. A `#L<n>` anchor is resolved against the
+    // **symbol extents** of the file it points into, and extents exist only for a file this run
+    // parsed. A document being re-extracted therefore drags its anchor targets into the
+    // extraction set: without that, an incremental run would conclude "no symbol covers that
+    // line" exactly where a from-scratch run resolves the symbol, and the two would disagree.
+    //
+    // Only **code** targets are forced. An anchor into a document resolves to no symbol in
+    // either kind of run — no extractor gives a document symbol extents — so forcing one would
+    // buy nothing, and the expansion stays a single round with no cycle to bound.
     let mut document_extractions: BTreeMap<String, DocumentExtraction> = BTreeMap::new();
+    for file in &loaded {
+        // A document has no grammar and no imports, so nothing resolves *through* it: it is
+        // never in another file's invalidation closure, only in its own.
+        if target_paths.contains(&file.rel_path) && file.language().is_none() {
+            document_extractions.insert(
+                file.rel_path.clone(),
+                docs::extract_document(&config.project_id, &file.rel_path, &file.source),
+            );
+        }
+    }
+    for (rel_path, extraction) in &document_extractions {
+        for link in &extraction.links {
+            if docref::anchor_of(&link.destination).is_none() {
+                continue;
+            }
+            let Some(target) = docref::resolve_path(rel_path, &link.destination, &all_indexed)
+            else {
+                continue;
+            };
+            if indexed.contains(&target) {
+                target_paths.insert(target);
+            }
+        }
+    }
+
+    let mut extractions: BTreeMap<String, ModuleExtraction> = BTreeMap::new();
     for file in &loaded {
         if !target_paths.contains(&file.rel_path) {
             continue;
         }
-        match file.language() {
-            Some(language) => {
-                extractions.insert(
-                    file.rel_path.clone(),
-                    extract::extract_module(
-                        &config.project_id,
-                        &file.rel_path,
-                        language,
-                        &file.source,
-                    )?,
-                );
-            }
-            // A document has no grammar and no imports, so it invalidates only itself: nothing
-            // resolves through it, and in Slice 5a nothing resolves out of it either.
-            None => {
-                document_extractions.insert(
-                    file.rel_path.clone(),
-                    docs::extract_document(&config.project_id, &file.rel_path, &file.source),
-                );
-            }
-        }
+        let Some(language) = file.language() else {
+            continue;
+        };
+        extractions.insert(
+            file.rel_path.clone(),
+            extract::extract_module(&config.project_id, &file.rel_path, language, &file.source)?,
+        );
     }
+
+    // ---- resolve document links ----------------------------------------------------------
+    //
+    // Resolution reads a whole-repository view and produces no filesystem access beyond the path
+    // guard: membership of the indexed path set decides the answer, and nothing here opens,
+    // fetches or follows a destination. See `crate::docref` for why the guard is in the loop
+    // even though its success is ignored.
+    let symbol_extents: BTreeMap<String, Vec<docref::SymbolExtent>> = extractions
+        .iter()
+        .map(|(rel_path, extraction)| {
+            let extents = extraction
+                .symbols
+                .iter()
+                .map(|symbol| docref::SymbolExtent {
+                    entity_id: symbol.entity_id.clone(),
+                    start_byte: symbol.span.start_byte,
+                    end_byte: symbol.span.end_byte,
+                    start_line: symbol.span.start_line,
+                    end_line: symbol.span.end_line,
+                })
+                .collect();
+            (rel_path.clone(), extents)
+        })
+        .collect();
+    let corpus = docref::Corpus {
+        indexed: &all_indexed,
+        symbols: &symbol_extents,
+        content_hashes: &current_hashes,
+    };
+    let document_links: BTreeMap<String, DocumentLinks> = document_extractions
+        .iter()
+        .map(|(rel_path, extraction)| {
+            (
+                rel_path.clone(),
+                docref::resolve_document_links(&root, rel_path, &extraction.links, &corpus),
+            )
+        })
+        .collect();
 
     // The export closure spans every module, so it is built from the whole corpus: freshly
     // parsed modules for the invalidation set, and modules reconstructed from the cache for
@@ -719,12 +806,12 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     reference_batch
         .verify_declared_source_types(refs::EXTRACTOR_ID, &refs::DECLARED_SOURCE_TYPES)?;
 
-    let document_targets: Vec<(&LoadedFile, &DocumentExtraction)> = loaded
+    let document_targets: Vec<(&LoadedFile, &DocumentExtraction, &DocumentLinks)> = loaded
         .iter()
         .filter_map(|file| {
-            document_extractions
-                .get(&file.rel_path)
-                .map(|extraction| (file, extraction))
+            let extraction = document_extractions.get(&file.rel_path)?;
+            let links = document_links.get(&file.rel_path)?;
+            Some((file, extraction, links))
         })
         .collect();
     let document_batch = build_document_graph(&config.project_id, &document_targets);
@@ -1485,6 +1572,118 @@ fn build_reference_graph(
     builder.batch
 }
 
+/// Observation `details.link_target`: what one document-link edge points at.
+///
+/// Closed, because a reader filtering the graph for broken documentation links needs to
+/// enumerate the answers rather than guess them.
+mod link_target {
+    /// The edge names the indexed file the destination resolves to.
+    pub const FILE: &str = "file";
+    /// The edge names the symbol a `#L<n>` anchor resolved to inside that file.
+    pub const SYMBOL: &str = "symbol";
+    /// The edge names an `Unresolved` entity, and `details.reason` says why.
+    pub const UNRESOLVED: &str = "unresolved";
+}
+
+/// The `details` payload shared by every document-link observation.
+///
+/// Uniform across all four emission sites on purpose: a query that asks "which documentation
+/// links are broken?" reads the same keys whether the answer is a file, a symbol or a refusal,
+/// and a key that is absent for one shape and present for another turns that query into a
+/// special case per shape.
+fn link_details(
+    site: &LinkSite,
+    source_kind: &str,
+    target_kind: &str,
+    resolved_path: Option<&str>,
+    target_content_hash: Option<&str>,
+    reason: Option<&str>,
+) -> serde_json::Value {
+    // What the document *wrote*, whether or not it resolved. An anchor that named nothing is
+    // still the anchor the author typed, and the citation is owed it.
+    let anchor = docref::anchor_of(&site.raw_destination)
+        .map(|anchor| serde_json::json!({ "start_line": anchor.start, "end_line": anchor.end }));
+    serde_json::json!({
+        "form": site.form.as_str(),
+        "raw_destination": site.raw_destination,
+        "source_kind": source_kind,
+        "link_target": target_kind,
+        "resolved_path": resolved_path,
+        "anchor": anchor,
+        // Recorded for an anchored symbol edge only. It is the **target** file's hash, so a
+        // later `nerve why` can say the anchor was resolved against bytes the file no longer
+        // has. Putting it on the file edge as well would make every document that links to a
+        // file a dependent of that file's contents.
+        "target_content_hash": target_content_hash,
+        "reason": reason,
+    })
+}
+
+/// Emit one document-link edge whose target is an `Unresolved` entity.
+///
+/// Unresolved is a value, not an omission: a stale `docs/` link is the single most useful thing
+/// this extractor produces, and a link that quietly emitted nothing would be indistinguishable
+/// from a document Nerve never read.
+///
+/// The entity is named by the destination **exactly as written**, fragment included, so that a
+/// broken `./util.ts#L900` and a broken `./util.ts` are two unresolved things rather than one.
+/// The destination is repository content and stays inert: it becomes an entity name and a JSON
+/// string, never a path this process opens.
+#[allow(clippy::too_many_arguments)]
+fn claim_unresolved_document_link(
+    builder: &mut GraphBuilder,
+    project_id: &str,
+    rel_path: &str,
+    content_hash: &str,
+    source_entity: &str,
+    source_kind: &str,
+    site: &LinkSite,
+    reason: &str,
+    resolved_path: Option<&str>,
+) {
+    let entity_id = ids::unresolved_id(
+        project_id,
+        rel_path,
+        UnresolvedCategory::DocumentLink,
+        &site.raw_destination,
+    );
+    builder.add_entity(EntityRecord {
+        entity_id: entity_id.clone(),
+        kind: EntityKind::Unresolved,
+        name: site.raw_destination.clone(),
+        scope_path: rel_path.to_string(),
+        language: None,
+        meta: Some(
+            serde_json::json!({
+                "category": UnresolvedCategory::DocumentLink.as_str(),
+                "importer": rel_path,
+                "raw_specifier": site.raw_destination,
+                "reason": reason,
+            })
+            .to_string(),
+        ),
+    });
+    builder.add_occurrence(&entity_id, rel_path, site.span, content_hash);
+    builder.claim(
+        source_entity,
+        Relation::References,
+        &entity_id,
+        // Nothing was resolved. All the document states is a destination, so `DIRECT`.
+        Evidence::DOCUMENT,
+        rel_path,
+        site.span,
+        content_hash,
+        link_details(
+            site,
+            source_kind,
+            link_target::UNRESOLVED,
+            resolved_path,
+            None,
+            Some(reason),
+        ),
+    );
+}
+
 /// Turn scanned documents into entities, occurrences, assertions and observations.
 ///
 /// A separate batch under a separate extractor run, exactly as `ts-js-reference` is. It emits:
@@ -1492,23 +1691,43 @@ fn build_reference_graph(
 /// - the document's `File` entity and the `CONTAINS` edge from its directory,
 /// - `File CONTAINS Document`,
 /// - `Document CONTAINS Section` for top-level headings,
-/// - `Section CONTAINS Section` for nested ones.
+/// - `Section CONTAINS Section` for nested ones,
+/// - `Section REFERENCES File` for a destination that names an indexed file, and
+///   `Section REFERENCES <symbol>` in addition when a `#L<n>` anchor resolves,
+/// - `Section REFERENCES Unresolved` for a destination that names nothing here.
 ///
-/// Every observation is `DOCUMENT_STATED` / `DIRECT`, including the two filesystem-shaped edges.
-/// That is what makes THREAT-MODEL.md T7 a property of the *file* rather than of each emission
-/// site, and therefore checkable by one query over the whole `observation` table.
+/// The source of a link edge is the **innermost section containing it**, and the document itself
+/// for a link written before the first heading. Attributing every link to the document would
+/// throw away the only thing that says *where* in a long file the claim was made.
 ///
-/// Heading text becomes an entity name and a byte span. It is never interpreted, never
-/// rendered, never followed and never executed. `nerve_core::ids::section_id` strips its control
-/// characters before it can reach an identity tuple.
+/// Three shapes deliberately emit nothing:
+///
+/// - an **external** destination (any URI scheme, or protocol-relative `//host/…`). It is a
+///   legitimate reference to something outside the repository; nothing failed, and it is
+///   counted, never fetched and never entity-ised.
+/// - a bare `#fragment`, which names a heading. Heading-anchor resolution is not modelled.
+/// - a **bare code-span mention** — `` `parseConfig` `` in prose. Turning that into an edge is
+///   name matching, which ADR-0002 refuses as a basis for identity.
+///
+/// `SUPERSEDES` is not emitted here either. It stays declared-and-unemitted until the slice that
+/// can produce it with evidence.
+///
+/// Every observation is `DOCUMENT_STATED`, including the two filesystem-shaped edges and every
+/// resolved link. That is what makes THREAT-MODEL.md T7 a property of the *file* rather than of
+/// each emission site, and therefore checkable by one query over the whole `observation` table.
+/// Only `directness` distinguishes a resolved claim from a stated one.
+///
+/// Heading text and link destinations become entity names and byte spans. They are never
+/// interpreted, rendered, followed or executed. `nerve_core::ids::section_id` strips control
+/// characters before heading text can reach an identity tuple.
 fn build_document_graph(
     project_id: &str,
-    targets: &[(&LoadedFile, &DocumentExtraction)],
+    targets: &[(&LoadedFile, &DocumentExtraction, &DocumentLinks)],
 ) -> GraphBatch {
     let mut builder = GraphBuilder::new(docs::EXTRACTOR_ID, docs::EXTRACTOR_VERSION);
     let repo_id = ids::repository_id(project_id);
 
-    for (file, extraction) in targets.iter().copied() {
+    for (file, extraction, resolved) in targets.iter().copied() {
         let rel_path = file.rel_path.as_str();
         let hash = file.content_hash.as_str();
         let name = last_segment(rel_path);
@@ -1562,6 +1781,12 @@ fn build_document_graph(
                     "sections": extraction.sections.len(),
                     "has_front_matter": extraction.front_matter.is_some(),
                     "unsupported": extraction.unsupported,
+                    // Link outcomes are counted rather than left to be inferred from the graph,
+                    // because three of them produce no row at all: an external destination, a
+                    // bare fragment, and a code-span mention would otherwise be
+                    // indistinguishable from a document Nerve never looked at.
+                    "links": resolved.outcomes,
+                    "code_span_mentions": extraction.code_span_mentions,
                 })
                 .to_string(),
             ),
@@ -1632,6 +1857,111 @@ fn build_document_graph(
                     "style": section.style.as_str(),
                 }),
             );
+        }
+
+        for site in &resolved.sites {
+            // The innermost enclosing section, and the document itself for a link written before
+            // the first heading. Both are entities this batch has already emitted.
+            let (source_entity, source_kind) = match extraction.owning_section(site.span.start_byte)
+            {
+                Some(section) => (section.entity_id.as_str(), "section"),
+                None => (document_entity, "document"),
+            };
+
+            match &site.outcome {
+                // Counted in the document's `links` meta and emitted nowhere. Nothing failed,
+                // and nothing in this repository was named.
+                LinkOutcome::External { .. } | LinkOutcome::FragmentOnly => {}
+
+                // The reason is read back off the outcome rather than restated here, so the
+                // closed vocabulary has one definition and cannot drift into two.
+                LinkOutcome::Refused | LinkOutcome::NotIndexed { .. } => {
+                    let Some(reason) = site.outcome.unresolved_reason() else {
+                        continue;
+                    };
+                    claim_unresolved_document_link(
+                        &mut builder,
+                        project_id,
+                        rel_path,
+                        hash,
+                        source_entity,
+                        source_kind,
+                        site,
+                        reason,
+                        match &site.outcome {
+                            // The path the destination normalized to. It named nothing, and
+                            // saying *which* path named nothing is what makes the refusal
+                            // actionable. A refused destination normalized to no path at all.
+                            LinkOutcome::NotIndexed { path } => Some(path.as_str()),
+                            _ => None,
+                        },
+                    );
+                }
+
+                LinkOutcome::File { path, anchor } => {
+                    // The file edge, whatever the fragment did. A `#L900` that resolves to no
+                    // symbol does not stop the document from referencing the file.
+                    builder.claim(
+                        source_entity,
+                        Relation::References,
+                        &ids::file_id(project_id, path),
+                        Evidence::DOCUMENT_RESOLVED,
+                        rel_path,
+                        site.span,
+                        hash,
+                        link_details(
+                            site,
+                            source_kind,
+                            link_target::FILE,
+                            Some(path.as_str()),
+                            None,
+                            None,
+                        ),
+                    );
+                    match anchor {
+                        None => {}
+                        Some(AnchorOutcome::Symbol {
+                            entity_id,
+                            target_content_hash,
+                            ..
+                        }) => builder.claim(
+                            source_entity,
+                            Relation::References,
+                            entity_id,
+                            Evidence::DOCUMENT_RESOLVED,
+                            rel_path,
+                            site.span,
+                            hash,
+                            link_details(
+                                site,
+                                source_kind,
+                                link_target::SYMBOL,
+                                Some(path.as_str()),
+                                Some(target_content_hash.as_str()),
+                                None,
+                            ),
+                        ),
+                        // The file resolved and the anchor did not, so the site produces both a
+                        // resolved edge and an unresolved one. Collapsing them would either
+                        // hide the working half of the link or overstate the broken half.
+                        Some(AnchorOutcome::NoSymbol { .. }) => {
+                            if let Some(reason) = site.outcome.unresolved_reason() {
+                                claim_unresolved_document_link(
+                                    &mut builder,
+                                    project_id,
+                                    rel_path,
+                                    hash,
+                                    source_entity,
+                                    source_kind,
+                                    site,
+                                    reason,
+                                    Some(path.as_str()),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

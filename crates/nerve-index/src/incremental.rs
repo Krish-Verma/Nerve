@@ -28,11 +28,32 @@
 //! path set changes, every cached module's specifiers are re-resolved against the old and the
 //! new path set, and any module whose answer moved joins the seed. That comparison is exact and
 //! costs no parsing, because the specifiers are cached.
+//!
+//! # Documents depend on the tree in two ways, and neither is an edge
+//!
+//! Slice 5c gives a document `REFERENCES` edges, and they rest on inputs the document does not
+//! contain:
+//!
+//! - **the indexed path set** — `[guide](./guide.md)` resolves or does not resolve according to
+//!   whether `guide.md` is indexed, so adding, deleting or moving *any* file can change a
+//!   document's graph while its bytes stand still. Unlike a specifier, a destination is resolved
+//!   against the **whole** path set, documents included: a README linking to a README is an
+//!   ordinary thing to record.
+//! - **the target file's contents**, but only under a line anchor. `./util.ts#L13` is resolved
+//!   to the symbol covering line 13 and records the hash it was resolved at, so editing
+//!   `util.ts` can move that answer. A link *without* an anchor depends only on the target
+//!   existing, and is deliberately left alone — making every document that links to a file a
+//!   dependent of that file's contents would re-scan the documentation on every source edit.
+//!
+//! Both comparisons are exact and cost no scanning, because the destinations are cached
+//! ([`crate::facts::DocumentCounters::destinations`]) and both are answered by the pure
+//! [`crate::docref::resolve_path`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use nerve_core::ids;
 
+use crate::docref;
 use crate::error::Result;
 use crate::facts::{CachedSymbol, ModuleFacts};
 use crate::lang::path_is_document;
@@ -160,6 +181,40 @@ pub fn classify(
                 set.unchanged.remove(path);
                 set.resolution_changed.insert(path.clone());
             }
+        }
+    }
+
+    // Documents. See the module documentation for why the path set here is the whole one and why
+    // only an anchored destination depends on the target's bytes.
+    let before_all: BTreeSet<String> = previous.keys().cloned().collect();
+    let after_all: BTreeSet<String> = current.keys().cloned().collect();
+    let path_set_moved = before_all != after_all;
+    for (path, module) in previous {
+        if !path_is_document(path) || !after_all.contains(path) || set.modified.contains(path) {
+            continue;
+        }
+        let Some(facts) = &module.facts else { continue };
+        let moved = facts.document.destinations.iter().any(|destination| {
+            let now = docref::resolve_path(path, destination, &after_all);
+            // A target added, removed or moved: the destination names a different file, or has
+            // stopped naming one at all.
+            if path_set_moved && now != docref::resolve_path(path, destination, &before_all) {
+                return true;
+            }
+            // A target edited, under a line anchor.
+            match (docref::anchor_of(destination), &now) {
+                (Some(_), Some(target)) => {
+                    previous
+                        .get(target)
+                        .map(|module| module.content_hash.as_str())
+                        != current.get(target).map(String::as_str)
+                }
+                _ => false,
+            }
+        });
+        if moved {
+            set.unchanged.remove(path);
+            set.resolution_changed.insert(path.clone());
         }
     }
 
@@ -519,6 +574,122 @@ mod tests {
         );
         assert!(set.resolution_changed.is_empty());
         assert_eq!(set.modified, ["src/math.ts".to_string()].into());
+    }
+
+    /// Give a previously indexed document a cached destination list.
+    fn with_destinations(
+        previous: &mut BTreeMap<String, PreviousModule>,
+        path: &str,
+        destinations: &[&str],
+    ) {
+        previous.get_mut(path).unwrap().facts = Some(ModuleFacts {
+            document: crate::facts::DocumentCounters {
+                destinations: destinations.iter().map(|d| (*d).to_string()).collect(),
+                ..crate::facts::DocumentCounters::default()
+            },
+            ..ModuleFacts::default()
+        });
+    }
+
+    /// The four ways the *path set* can move a document link's answer.
+    #[test]
+    fn a_document_is_seeded_when_a_destination_would_now_resolve_differently() {
+        // Added: `./guide.md` named nothing, and now names a file.
+        let mut before = previous(&[("README.md", "h1")]);
+        with_destinations(&mut before, "README.md", &["./docs/guide.md"]);
+        let set = classify(
+            &before,
+            &current(&[("README.md", "h1"), ("docs/guide.md", "h2")]),
+            false,
+        );
+        assert_eq!(set.resolution_changed, ["README.md".to_string()].into());
+        assert!(set.unchanged.is_empty());
+
+        // Removed: the link goes from resolved to broken, which is the signal, not the absence
+        // of one.
+        let mut before = previous(&[("README.md", "h1"), ("docs/guide.md", "h2")]);
+        with_destinations(&mut before, "README.md", &["./docs/guide.md"]);
+        let set = classify(&before, &current(&[("README.md", "h1")]), false);
+        assert_eq!(set.resolution_changed, ["README.md".to_string()].into());
+
+        // Moved: the destination stops naming the file it named.
+        let mut before = previous(&[("README.md", "h1"), ("docs/guide.md", "h2")]);
+        with_destinations(&mut before, "README.md", &["./docs/guide.md"]);
+        let set = classify(
+            &before,
+            &current(&[("README.md", "h1"), ("docs/moved/guide.md", "h2")]),
+            false,
+        );
+        assert_eq!(set.resolution_changed, ["README.md".to_string()].into());
+
+        // Untouched: an unrelated file appearing must not re-resolve every document.
+        let mut before = previous(&[("README.md", "h1"), ("docs/guide.md", "h2")]);
+        with_destinations(&mut before, "README.md", &["./docs/guide.md"]);
+        let set = classify(
+            &before,
+            &current(&[
+                ("README.md", "h1"),
+                ("docs/guide.md", "h2"),
+                ("src/new.ts", "h3"),
+            ]),
+            false,
+        );
+        assert!(set.resolution_changed.is_empty(), "{set:?}");
+        assert!(set.unchanged.contains("README.md"));
+    }
+
+    /// A line anchor is resolved against the target's symbols and records the hash it was
+    /// resolved at, so editing the target must re-extract the document. A link with no anchor
+    /// depends only on the file existing, and must not.
+    #[test]
+    fn only_an_anchored_destination_depends_on_the_targets_bytes() {
+        let mut before = previous(&[("README.md", "h1"), ("src/util.ts", "h2")]);
+        with_destinations(&mut before, "README.md", &["./src/util.ts#L13"]);
+        let set = classify(
+            &before,
+            &current(&[("README.md", "h1"), ("src/util.ts", "edited")]),
+            false,
+        );
+        assert_eq!(
+            set.resolution_changed,
+            ["README.md".to_string()].into(),
+            "an anchored link survived an edit to the file it points into"
+        );
+
+        let mut before = previous(&[("README.md", "h1"), ("src/util.ts", "h2")]);
+        with_destinations(&mut before, "README.md", &["./src/util.ts"]);
+        let set = classify(
+            &before,
+            &current(&[("README.md", "h1"), ("src/util.ts", "edited")]),
+            false,
+        );
+        assert!(
+            set.resolution_changed.is_empty(),
+            "an unanchored link made a document depend on a file's contents: {set:?}"
+        );
+        assert!(set.unchanged.contains("README.md"));
+    }
+
+    /// A destination that resolves to nothing in either tree is not a reason to do work.
+    #[test]
+    fn a_destination_that_names_nothing_either_way_seeds_nothing() {
+        let mut before = previous(&[("README.md", "h1"), ("src/a.ts", "h2")]);
+        with_destinations(
+            &mut before,
+            "README.md",
+            &[
+                "https://example.invalid/x",
+                "#heading",
+                "../../../etc/passwd",
+                "./missing.md",
+            ],
+        );
+        let set = classify(
+            &before,
+            &current(&[("README.md", "h1"), ("src/a.ts", "h2"), ("src/b.ts", "h3")]),
+            false,
+        );
+        assert!(set.resolution_changed.is_empty(), "{set:?}");
     }
 
     #[test]

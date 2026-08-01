@@ -294,7 +294,7 @@ fn every_extractor_run_is_recorded_per_index() {
         vec![
             ("ts-js-structural".to_string(), "1.1.0".to_string()),
             ("ts-js-reference".to_string(), "1.0.0".to_string()),
-            ("md-structural".to_string(), "1.0.0".to_string()),
+            ("md-structural".to_string(), "1.1.0".to_string()),
         ]
     );
     assert_eq!(

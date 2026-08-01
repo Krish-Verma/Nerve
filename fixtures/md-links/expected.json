@@ -1,0 +1,160 @@
+{
+  "_": [
+    "Hand-written ground truth for fixtures/md-links, read by",
+    "crates/nerve-index/tests/document_links.rs. Selectors: file:<path>, doc:<path>,",
+    "sec:<path>#<>-joined heading chain>, sym:<path>#<scope>.<name>.",
+    "Every entry was checked against the fixture by hand. If the implementation disagrees with",
+    "this file, tighten the implementation."
+  ],
+
+  "resolved": [
+    {
+      "from": "doc:README.md",
+      "to": "file:docs/guide.md",
+      "note": "a link written before the first heading belongs to no section, so the document is the source"
+    },
+    {
+      "from": "sec:README.md#md-links>Resolving to a file",
+      "to": "file:src/app.ts",
+      "note": "inline [text](./src/app.ts), relative to the document's own directory"
+    },
+    {
+      "from": "sec:README.md#md-links>Resolving to a file",
+      "to": "file:src/util.ts",
+      "note": "root-relative /src/util.ts, resolved against the repository root"
+    },
+    {
+      "from": "sec:README.md#md-links>Resolving to a file",
+      "to": "file:docs/my guide.md",
+      "note": "a bracketed destination <./docs/my guide.md>, the only CommonMark form that allows a space"
+    },
+    {
+      "from": "sec:README.md#md-links>Resolving to a symbol",
+      "to": "file:src/util.ts",
+      "note": "the file edge every anchored link also carries; three links in this section produce one claim"
+    },
+    {
+      "from": "sec:README.md#md-links>Resolving to a symbol",
+      "to": "sym:src/util.ts#describe",
+      "note": "#L2 is inside the top-level function describe (lines 1-3) and inside nothing else"
+    },
+    {
+      "from": "sec:README.md#md-links>Resolving to a symbol",
+      "to": "sym:src/util.ts#Describer.describe",
+      "note": "#L13 and #L13-L14 both name line 13, which the method (12-14) and the class (5-15) cover; innermost wins"
+    },
+    {
+      "from": "sec:docs/guide.md#The guide",
+      "to": "file:README.md",
+      "note": "document to document; documents are in the set a destination resolves against"
+    },
+    {
+      "from": "sec:docs/guide.md#The guide>Reference-style links",
+      "to": "file:src/app.ts",
+      "note": "the citation points at the [app]: definition, which is where the destination is written"
+    },
+    {
+      "from": "sec:docs/guide.md#The guide>Angle-bracket links",
+      "to": "file:src/util.ts",
+      "note": "<../src/util.ts> is explicitly relative, so it is a link and not raw HTML"
+    },
+    {
+      "from": "sec:docs/negatives.md#Negatives>Unresolved, with a reason",
+      "to": "file:src/util.ts",
+      "note": "#L4 and #L999 fail as anchors and still reference the file; the two claims are separate"
+    }
+  ],
+
+  "unresolved": [
+    {
+      "from": "sec:docs/negatives.md#Negatives>Unresolved, with a reason",
+      "target_name": "../assets/diagram.svg",
+      "reason": "document_link_target_not_indexed",
+      "note": "present on disk, not in the indexed set; membership decides, not the filesystem"
+    },
+    {
+      "from": "sec:docs/negatives.md#Negatives>Unresolved, with a reason",
+      "target_name": "../../../etc/passwd",
+      "reason": "document_link_refused",
+      "note": "climbs above the repository root; refused before anything reaches the filesystem"
+    },
+    {
+      "from": "sec:docs/negatives.md#Negatives>Unresolved, with a reason",
+      "target_name": "./my%20guide.md",
+      "reason": "document_link_target_not_indexed",
+      "note": "docs/my guide.md is indexed; %20 is not decoded, because decoding it would decode %1f"
+    },
+    {
+      "from": "sec:docs/negatives.md#Negatives>Unresolved, with a reason",
+      "target_name": "../src/util.ts#L4",
+      "reason": "document_anchor_no_symbol",
+      "note": "line 4 is blank: the function ends on line 3 and the class starts on line 5"
+    },
+    {
+      "from": "sec:docs/negatives.md#Negatives>Unresolved, with a reason",
+      "target_name": "../src/util.ts#L999",
+      "reason": "document_anchor_no_symbol",
+      "note": "past end of file; the anchor fails and the file reference stands"
+    }
+  ],
+
+  "ambiguous": [
+    {
+      "from": "sec:README.md#md-links>Resolving to a symbol",
+      "winner": "sym:src/util.ts#Describer.describe",
+      "loser": "sym:src/util.ts#Describer",
+      "why": "line 13 is covered by both the method and the class that holds it; the innermost symbol is the answer and the enclosing one must not also be claimed"
+    }
+  ],
+
+  "unsupported": [
+    {
+      "destination": "../src/fenced.ts",
+      "outcome": "in-fenced-code",
+      "why": "block structure is resolved before inline structure, so the link parser never sees it"
+    },
+    {
+      "destination": "../src/spanned.ts",
+      "outcome": "in-code-span",
+      "why": "an inline code span is not prose"
+    },
+    {
+      "destination": "describe",
+      "outcome": "code-span-mention",
+      "why": "a bare name in prose is not a reference to the symbol; that is name matching, which ADR-0002 refuses"
+    },
+    {
+      "destination": "#negatives",
+      "outcome": "fragment-only",
+      "why": "heading-anchor resolution is not modelled; counted, never guessed at"
+    },
+    {
+      "destination": "https://example.invalid/spec",
+      "outcome": "external",
+      "why": "counted, never fetched, and never an Unresolved entity, because nothing failed"
+    }
+  ],
+
+  "forbidden": [
+    {
+      "from": "sec:README.md#md-links>Resolving to a symbol",
+      "to": "sym:src/util.ts#Describer",
+      "why": "the enclosing class must not be claimed alongside the innermost method"
+    },
+    {
+      "from": "sec:README.md#md-links>Resolving to a file",
+      "to": "sym:src/app.ts#run",
+      "why": "a link with no anchor names a file, never a symbol inside it"
+    },
+    {
+      "from": "sec:docs/negatives.md#Negatives>Not a link at all",
+      "to": "file:src/app.ts",
+      "why": "nothing in that section is a link"
+    },
+    {
+      "from": "doc:docs/negatives.md",
+      "to": "file:src/app.ts",
+      "why": "nothing in that document resolves to app.ts, from the document or from any section"
+    }
+  ]
+}

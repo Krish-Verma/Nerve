@@ -14,8 +14,8 @@ Authoritative slice list. Update the status column at the end of every slice.
 | 4b | `apps/nerve-web` — the visual explorer SPA, asset embedding, screenshot QA | ✅ Complete (2026-07-31) — 435 tests, 31 screenshots reviewed, 0 CSP violations; **fixed a 4a bug that made the UI unloadable** |
 | 5a | Markdown + ADR ingestion — `Document`/`Section` entities, `CONTAINS` structure, ADR status, T7 controls | ✅ Complete (2026-08-01) — 506 tests; T7 exhaustive and mutation-verified; **closed two identity-forgery vectors**, one of them pre-existing in every id constructor |
 | 5b | Markdown **link scanning** — destinations, forms, spans; code-span mentions counted not emitted | ✅ Complete (2026-08-01) — 541 tests; the tests found 6 real scanner defects, two of them turning hostile HTML into link destinations |
-| 5c | Document↔code **link resolution** — `REFERENCES` by explicit path and `#L<n>` anchor, `SUPERSEDES`, unresolved reasons, measured precision, invalidation | ⬜ Not started |
-| 5d | **Corrective** — filesystem containment is not AST evidence; UI vocabulary catch-up | ⬜ Not started |
+| 5c | Document↔code **link resolution** — `REFERENCES` by explicit path and `#L<n>` anchor, unresolved reasons, measured precision, invalidation | ✅ Complete (2026-08-01) — 564 tests; FP=0 on fixtures, but **only 5 link sites exist across Nerve's own 45 documents** |
+| 5d | `Document SUPERSEDES Document`, **corrective** filesystem-evidence relabelling, and UI vocabulary catch-up | ⬜ Not started |
 | 6 | Test evidence (**coverage only**) — `TEST_COVERS_SYMBOL`, freshness, affected-test experiment | ⬜ Not started |
 | 7 | CLI + query expansion — `impact`, `gaps`, `check`, evidence packets | ⬜ Not started |
 | 8 | MCP — one default investigation tool | ⬜ Not started |
@@ -159,6 +159,21 @@ the link; nothing normalized, resolved, stat-ed, opened or fetched. Bare inline-
 counted, never emitted. Writing the tests found **six real defects**, including `</div>` and
 `<script>alert(1)</script>` being recorded as link destinations — both from accepting a leading `/`
 as "root-relative". Ambiguity is now a refusal. Report: `docs/reports/slice-05b-report.md`.
+
+## Slice 5c — delivered
+
+- `md-structural 1.1.0` emits `Section REFERENCES <File>`, and `REFERENCES <symbol>` where a
+  `#L<n>` anchor resolves to the innermost covering span. Everything still carries
+  `DOCUMENT_STATED`; only `directness` moves to `RESOLVED`. Verified across the whole real
+  repository: **0** non-`DOCUMENT_STATED` observations on any `.md` path.
+- Broken documentation links are first-class: `document_link_target_not_indexed`,
+  `document_link_refused`, `document_anchor_no_symbol`. External destinations are counted, never
+  fetched, and never entity-ised — **0** entities named `http…` or `javascript:…` on the real repo.
+- **Fixture precision FP=0, recall 100% over 17 sites** — a regression gate, not an accuracy claim.
+- **The finding that matters: Nerve's own 45 documents contain 5 Markdown link sites in total.**
+  Real documentation refers to code in inline code spans, which this slice deliberately refuses to
+  treat as links. High precision, narrow coverage, by design. Report:
+  `docs/reports/slice-05c-report.md`.
 
 ## Slice 5d — why it exists
 

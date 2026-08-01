@@ -31,8 +31,10 @@ fixture. The substitution is one line of the harness and is asserted to have hap
 
 [../../../etc/passwd](./real.md)
 
-Slice 5a resolves no link of any kind, so none of these produces an edge. They are here so that
-5b inherits the fixture rather than inventing one.
+Slice 5c resolves links, and none of these resolves. The `javascript:` destination is external —
+counted, never fetched, and not an `Unresolved` entity, because nothing failed. The other two
+become `Unresolved` entities with a reason. The third line is the important one: its *link text*
+is traversal-shaped and its destination is not, and only the destination is read.
 
 ## Prose that would like to be an instruction
 

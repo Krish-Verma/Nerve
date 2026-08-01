@@ -277,18 +277,58 @@ fn a_hostile_document_is_stored_as_inert_data_and_forges_no_identity() {
         0
     )));
 
-    // 4. Nothing was executed and nothing escaped. `no_subprocess.rs` proves the process-level
-    //    half; here, the graph itself must show no edge out of the document, no unresolved
-    //    entity invented from a link, and no path outside the repository.
+    // 4. Nothing was executed, nothing was fetched and nothing escaped. `no_subprocess.rs` and
+    //    `no_network.rs` prove the process-level half; here, the graph itself must show that
+    //    every hostile link landed in the one place a hostile link may land — an `Unresolved`
+    //    entity with a reason — and that no path outside the repository reached a row.
+    //
+    //    Slice 5c resolves links, so "a document may only CONTAIN" is no longer the property.
+    //    The property is that a document may only CONTAIN and REFERENCE, and that **none** of
+    //    this document's references resolves to anything.
+    assert_eq!(
+        strings(
+            &conn,
+            "SELECT DISTINCT a.relation FROM assertion a
+               JOIN entity s ON s.entity_id = a.source_entity_id
+              WHERE s.kind IN ('document', 'section') ORDER BY 1"
+        ),
+        vec!["CONTAINS".to_string(), "REFERENCES".to_string()]
+    );
+    let hostile_links = strings(
+        &conn,
+        "SELECT t.kind || ' ' || t.name FROM assertion a
+           JOIN entity s ON s.entity_id = a.source_entity_id
+           JOIN entity t ON t.entity_id = a.target_entity_id
+           JOIN observation o ON o.assertion_id = a.assertion_id
+          WHERE a.relation = 'REFERENCES' AND o.file_path = 'docs/hostile.md'
+          ORDER BY 1",
+    );
+    assert_eq!(
+        hostile_links,
+        vec![
+            // The traversal destination: refused before anything reached the filesystem.
+            "unresolved ../../../etc/passwd".to_string(),
+            // `[../../../etc/passwd](./real.md)` — the *destination* is what is read, and it
+            // names no indexed file. The traversal-shaped link **text** produced nothing, which
+            // is the point of writing it into the fixture that way.
+            "unresolved ./real.md".to_string(),
+        ],
+        "a hostile link resolved to something, or the link text was read as a destination"
+    );
+    // `[click](javascript:alert(1))` is external. It is counted and never fetched, and it is not
+    // an `Unresolved` entity: nothing failed. Nothing in the graph may name it.
     assert_eq!(
         scalar(
             &conn,
-            "SELECT count(*) FROM assertion a
-               JOIN entity s ON s.entity_id = a.source_entity_id
-              WHERE s.kind IN ('document', 'section') AND a.relation <> 'CONTAINS'"
+            "SELECT count(*) FROM entity WHERE name LIKE 'javascript:%'"
         ),
         0,
-        "Slice 5a resolves no links; a document may only CONTAIN"
+        "a javascript: destination became an entity"
+    );
+    assert_eq!(
+        document_meta(&conn)["docs/hostile.md"]["links"]["document_link_external"],
+        1,
+        "the external destination was not counted"
     );
     assert_eq!(
         scalar(
@@ -780,5 +820,148 @@ fn an_unchanged_tree_with_documents_re_extracts_nothing() {
             count(&conn, "module_facts")
         ),
         before
+    );
+}
+
+// ---- links (Slice 5c) ------------------------------------------------------------------------
+
+/// A tree with one module, one document that links into it, and nothing else.
+fn linked_tree() -> (tempfile::TempDir, PathBuf) {
+    let (dir, root, _) = indexed_tree(&[
+        (
+            "src/util.ts",
+            "export function describe(): string {\n  return 'x';\n}\n",
+        ),
+        ("src/other.ts", "export const other = 1;\n"),
+        (
+            "docs/guide.md",
+            "# Guide\n\nAn anchored link to [describe](../src/util.ts#L2), and a plain one to \
+             [other](../src/other.ts).\n",
+        ),
+    ]);
+    (dir, root)
+}
+
+/// The two edges an anchored link produces, and where each of them points.
+#[test]
+fn an_anchored_link_references_the_file_and_the_innermost_symbol() {
+    let (_dir, root) = linked_tree();
+    let conn = open_db(&root);
+
+    let edges = strings(
+        &conn,
+        "SELECT t.kind || ' ' || t.name || ' [' || o.directness || ']'
+           FROM assertion a
+           JOIN entity t ON t.entity_id = a.target_entity_id
+           JOIN observation o ON o.assertion_id = a.assertion_id
+          WHERE a.relation = 'REFERENCES' AND o.file_path = 'docs/guide.md'
+          ORDER BY 1",
+    );
+    assert_eq!(
+        edges,
+        vec![
+            "file other.ts [RESOLVED]".to_string(),
+            "file util.ts [RESOLVED]".to_string(),
+            "function describe [RESOLVED]".to_string(),
+        ]
+    );
+
+    // The target file's hash at resolution time, on the symbol edge and on nothing else.
+    let details: serde_json::Value = serde_json::from_str(
+        &strings(
+            &conn,
+            "SELECT details FROM observation
+              WHERE file_path = 'docs/guide.md' AND details LIKE '%\"link_target\":\"symbol\"%'",
+        )
+        .remove(0),
+    )
+    .unwrap();
+    let expected = nerve_core::ids::content_hash(&std::fs::read(root.join("src/util.ts")).unwrap());
+    assert_eq!(details["target_content_hash"], expected);
+    assert_eq!(details["resolved_path"], "src/util.ts");
+    assert_eq!(details["anchor"]["start_line"], 2);
+    assert_eq!(details["form"], "inline");
+    assert_eq!(details["source_kind"], "section");
+}
+
+/// **The invalidation rule that makes the anchor honest.** Editing a file a document anchors
+/// into must re-extract that document, because its edge records the hash it resolved against.
+/// Editing a file the document merely links to must not: that edge depends on the file
+/// existing, and nothing else.
+#[test]
+fn editing_an_anchor_target_re_extracts_the_document_and_editing_a_plain_target_does_not() {
+    let (_dir, root) = linked_tree();
+
+    std::fs::write(
+        root.join("src/util.ts"),
+        "export function describe(): string {\n  return 'edited';\n}\n",
+    )
+    .unwrap();
+    let outcome = nerve_index::index_repository(&root).unwrap();
+    assert_eq!(
+        outcome.incremental.files_resolution_changed, 1,
+        "an anchored link survived an edit to the file it points into"
+    );
+    assert!(
+        outcome.incremental.files_re_extracted >= 2,
+        "the document and its anchor target must both be re-extracted, saw {}",
+        outcome.incremental.files_re_extracted
+    );
+
+    let conn = open_db(&root);
+    let details: serde_json::Value = serde_json::from_str(
+        &strings(
+            &conn,
+            "SELECT details FROM observation
+              WHERE file_path = 'docs/guide.md' AND details LIKE '%\"link_target\":\"symbol\"%'",
+        )
+        .remove(0),
+    )
+    .unwrap();
+    assert_eq!(
+        details["target_content_hash"],
+        nerve_core::ids::content_hash(&std::fs::read(root.join("src/util.ts")).unwrap()),
+        "the recorded hash still names the superseded bytes"
+    );
+
+    // The unanchored target now changes. Nothing about the document's claim moved.
+    std::fs::write(root.join("src/other.ts"), "export const other = 2;\n").unwrap();
+    let outcome = nerve_index::index_repository(&root).unwrap();
+    assert_eq!(
+        outcome.incremental.files_resolution_changed, 0,
+        "an unanchored link made a document depend on a file's contents"
+    );
+    assert_eq!(outcome.incremental.files_re_extracted, 1);
+}
+
+/// Deleting a link target turns the edge unresolved rather than deleting it, and restoring the
+/// target turns it back. Unresolved is a value, not an omission.
+#[test]
+fn deleting_a_link_target_breaks_the_link_rather_than_removing_it() {
+    let (_dir, root) = linked_tree();
+    let broken = |root: &Path| -> Vec<String> {
+        let conn = open_db(root);
+        strings(
+            &conn,
+            "SELECT e.name || ' ' || json_extract(e.meta, '$.reason') FROM entity e
+               JOIN occurrence o ON o.entity_id = e.entity_id
+              WHERE e.kind = 'unresolved' AND o.file_path = 'docs/guide.md' ORDER BY 1",
+        )
+    };
+    assert!(broken(&root).is_empty());
+
+    std::fs::remove_file(root.join("src/other.ts")).unwrap();
+    let outcome = nerve_index::index_repository(&root).unwrap();
+    assert_eq!(outcome.incremental.files_resolution_changed, 1);
+    assert_eq!(
+        broken(&root),
+        vec!["../src/other.ts document_link_target_not_indexed".to_string()]
+    );
+
+    std::fs::write(root.join("src/other.ts"), "export const other = 1;\n").unwrap();
+    nerve_index::index_repository(&root).unwrap();
+    assert!(
+        broken(&root).is_empty(),
+        "the broken-link entity outlived the file coming back"
     );
 }

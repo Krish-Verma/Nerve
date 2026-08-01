@@ -96,6 +96,19 @@ pub struct DocumentCounters {
     pub is_adr: bool,
     /// Constructs the Markdown scanner refused, by form tag.
     pub unsupported: BTreeMap<String, usize>,
+    /// Every link destination the document wrote, deduplicated and sorted.
+    ///
+    /// The document counterpart of [`ModuleFacts::import_specifiers`], cached for exactly the
+    /// same reason: adding, deleting or moving a file changes what a destination resolves to
+    /// without the document itself changing at all, and the comparison must not require
+    /// re-scanning every document to notice. The **whole** destination is kept, fragment
+    /// included, because the fragment is what says whether the document depends on the target
+    /// file's contents as well as on its existence.
+    ///
+    /// `serde(default)` so a payload written by Slice 5a still parses. An unreadable payload is
+    /// a cache miss, and a cache miss re-extracts the repository for nothing.
+    #[serde(default)]
+    pub destinations: Vec<String>,
 }
 
 /// Everything an unchanged module must remember for another module to be re-extracted.
@@ -128,6 +141,7 @@ impl ModuleFacts {
                 sections: extraction.sections.len(),
                 is_adr: extraction.adr.is_adr,
                 unsupported: extraction.unsupported.clone(),
+                destinations: crate::docref::cached_destinations(&extraction.links),
             },
             ..ModuleFacts::default()
         }

@@ -12,7 +12,12 @@
 //!
 //! Nothing here interprets document text as an instruction. Prose reaches this module as bytes,
 //! becomes an entity name and a byte span, and stops. There is no LLM in the product path, no
-//! rendering, no link following, and in Slice 5a no resolution of any kind.
+//! rendering, and **no link is ever followed**: Slice 5c resolves a destination against the set
+//! of indexed paths ([`crate::docref`]), which is a set-membership test, not an access.
+//!
+//! This module stays a **pure function of one file**. It records the destinations a document
+//! wrote and where they were; deciding what they name needs the whole repository, so that
+//! decision lives in [`crate::pipeline`], which is the only place that has it.
 
 use std::collections::BTreeMap;
 
@@ -20,13 +25,18 @@ use nerve_core::ids;
 use nerve_core::model::Span;
 use nerve_core::vocab::{Directness, EvidenceSourceType};
 
-use crate::markdown::{self, DocumentScan, HeadingStyle, MAX_RAW_STATUS_BYTES};
+use crate::markdown::{self, DocumentScan, HeadingStyle, RawLink, MAX_RAW_STATUS_BYTES};
 
 /// Extractor identity, recorded on every observation and on its `extractor_run` row.
 pub const EXTRACTOR_ID: &str = "md-structural";
 
 /// Extractor version. A change here re-extracts every document, by design.
-pub const EXTRACTOR_VERSION: &str = "1.0.0";
+///
+/// `1.1.0` is Slice 5c: the same structure as `1.0.0`, plus `REFERENCES` edges for resolved
+/// links. Output over identical bytes changed, so the version had to move with it — that is the
+/// whole contract of the field, and it is what makes every document re-scan on the first run of
+/// this build rather than keep a graph the current rules would not produce.
+pub const EXTRACTOR_VERSION: &str = "1.1.0";
 
 /// The only evidence source type this extractor may emit (ADR-0003, THREAT-MODEL.md T7).
 pub const DECLARED_SOURCE_TYPES: [EvidenceSourceType; 1] = [EvidenceSourceType::DocumentStated];
@@ -35,6 +45,16 @@ pub const DECLARED_SOURCE_TYPES: [EvidenceSourceType; 1] = [EvidenceSourceType::
 ///
 /// `Direct`: the file literally contains the heading whose span the observation cites.
 pub const DIRECTNESS: Directness = Directness::Direct;
+
+/// How directly a document states a claim that **link resolution** produced.
+///
+/// `Resolved`, on the same reading of ADR-0003 that gives an import `AST_RESOLVED`: the document
+/// wrote `./util.ts#L13`, and a resolution step turned that into an entity. The *source type*
+/// stays `DOCUMENT_STATED` — a resolved link is still only a document's claim — so
+/// [`DECLARED_SOURCE_TYPES`] is unchanged and the THREAT-MODEL.md T7 query still has no
+/// exceptions. Directness is the axis that says a step happened; source type is the axis that
+/// says who said it, and only the first of those moved.
+pub const RESOLVED_DIRECTNESS: Directness = Directness::Resolved;
 
 /// Directory names that make every Markdown file inside them an ADR.
 pub const ADR_DIRECTORIES: [&str; 3] = ["decisions", "adr", "adrs"];
@@ -169,10 +189,48 @@ pub struct DocumentExtraction {
     pub adr: AdrFacts,
     /// Front matter span, when the document opens with one.
     pub front_matter: Option<Span>,
+    /// Link destinations the document wrote, in source order, uninterpreted.
+    ///
+    /// Uninterpreted here on purpose: what a destination *names* depends on every other file in
+    /// the repository, and this function is given one file.
+    pub links: Vec<RawLink>,
+    /// Inline code spans that look like a bare identifier.
+    ///
+    /// Counted and never emitted. `parseConfig` in prose is not evidence that the document means
+    /// the symbol `parseConfig`; that is name matching, which ADR-0002 refuses as a basis for
+    /// identity. The count exists so that "Nerve saw this and declined" is visible rather than
+    /// indistinguishable from "Nerve never looked".
+    pub code_span_mentions: usize,
     /// Constructs the scanner refused, by form tag.
     pub unsupported: BTreeMap<String, usize>,
     /// The whole file, which is where the document entity is.
     pub file_span: Span,
+}
+
+impl DocumentExtraction {
+    /// The innermost section whose span covers `byte`, or `None` when nothing does.
+    ///
+    /// `None` means the **document** is the container: a link written before the first heading
+    /// belongs to no section, and inventing one for it would put an entity in the graph that the
+    /// file does not contain.
+    ///
+    /// The answer cannot be ambiguous. Sections nest by construction and each one starts at its
+    /// own heading, so no two share a start byte and any two that cover the same byte differ in
+    /// length. The shortest covering span is therefore unique, and "innermost" is a total
+    /// function rather than a tie-break on declaration order.
+    pub fn owning_section(&self, byte: usize) -> Option<&SectionDef> {
+        self.sections
+            .iter()
+            .filter(|section| {
+                section.section_span.start_byte <= byte && byte < section.section_span.end_byte
+            })
+            .min_by_key(|section| {
+                section
+                    .section_span
+                    .end_byte
+                    .saturating_sub(section.section_span.start_byte)
+            })
+    }
 }
 
 fn last_segment(rel_path: &str) -> &str {
@@ -371,6 +429,8 @@ pub fn extract_document(project_id: &str, rel_path: &str, source: &str) -> Docum
         sections: build_sections(project_id, rel_path, &scan),
         adr: read_adr(rel_path, source, &scan),
         front_matter: scan.front_matter,
+        links: scan.links.clone(),
+        code_span_mentions: scan.code_span_mentions,
         unsupported: scan.counters.unsupported.clone(),
         file_span: Span {
             start_byte: 0,
@@ -623,5 +683,46 @@ mod tests {
     #[test]
     fn declared_source_types_are_document_stated_and_nothing_else() {
         assert_eq!(DECLARED_SOURCE_TYPES, [EvidenceSourceType::DocumentStated]);
+    }
+
+    /// A link's source is the innermost section containing it, and the document when none does.
+    #[test]
+    fn a_link_belongs_to_the_innermost_section_containing_it() {
+        let source = "Intro [a](./a.md)\n\n# Top\n\n[b](./b.md)\n\n## Child\n\n[c](./c.md)\n";
+        let extraction = extract("docs/a.md", source);
+        assert_eq!(extraction.links.len(), 3);
+
+        let owner = |destination: &str| -> Option<String> {
+            let link = extraction
+                .links
+                .iter()
+                .find(|link| link.destination == destination)
+                .expect(destination);
+            extraction
+                .owning_section(link.span.start_byte)
+                .map(|section| section.name.clone())
+        };
+        assert_eq!(owner("./a.md"), None, "a link before the first heading");
+        assert_eq!(owner("./b.md").as_deref(), Some("Top"));
+        assert_eq!(
+            owner("./c.md").as_deref(),
+            Some("Child"),
+            "the enclosing `Top` section covers it too; the innermost wins"
+        );
+    }
+
+    /// The scanner's block ordering, restated where the extractor consumes it: a destination
+    /// inside a fence or a code span is not a link, so no attribution question arises.
+    #[test]
+    fn a_destination_inside_code_never_reaches_the_link_list() {
+        let source = "# T\n\n```md\n[fenced](./fenced.md)\n```\n\n\
+                      A `[span](./span.md)` in prose, and [real](./real.md).\n";
+        let extraction = extract("docs/a.md", source);
+        let destinations: Vec<&str> = extraction
+            .links
+            .iter()
+            .map(|link| link.destination.as_str())
+            .collect();
+        assert_eq!(destinations, vec!["./real.md"]);
     }
 }

@@ -1236,6 +1236,98 @@ fn incremental_and_full_agree_under_a_seeded_edit_sequence() {
         }
     }
 
+    // ---- the document-link sequence ---------------------------------------------------------
+    //
+    // Slice 5c gives a document edges that rest on files it does not contain: the indexed path
+    // set, and — under a `#L<n>` anchor — the target file's bytes. There are exactly five ways
+    // that dependency can move, and they are scripted rather than sampled, because a sampler
+    // that happened not to draw one of them would report a property it never tested.
+    //
+    // The target carries a line anchor throughout, which is the strictly harder case: an
+    // unanchored link survives an edit to its target by design, an anchored one must not.
+    const TARGET: &str = "src/link_target.ts";
+    const MOVED_TARGET: &str = "src/moved/link_target.ts";
+    const DOCUMENT: &str = "docs/links.md";
+    let target_source = |body: &str| format!("export function linked(): number {{\n  {body}\n}}\n");
+    let document_source = |links: &str| {
+        format!("---\ntitle: links\n---\n\n# Links\n\n## Body\n\n{links}\n\n### Deeper\n\nText.\n")
+    };
+
+    // A document with no links, so that "link added" is an edit to an existing document rather
+    // than the arrival of a new one.
+    write(&root, TARGET, &target_source("return 1;"));
+    write(&root, DOCUMENT, &document_source("No links yet."));
+    index(&root);
+
+    let mut link_steps: Vec<&'static str> = Vec::new();
+    let check = |label: &'static str, applied: &[String], steps: &mut Vec<&'static str>| {
+        let outcome = index(&root);
+        let actual = dump_json(&root);
+        let (_reference_dir, expected) = dump_of_a_from_scratch_index(&root);
+        assert_eq!(
+            actual, expected,
+            "incremental and full disagree after {label}\n\
+             re-extracted {} file(s), resolution-changed {}\n\
+             history: {applied:?}",
+            outcome.incremental.files_re_extracted, outcome.incremental.files_resolution_changed
+        );
+        steps.push(label);
+    };
+
+    // 1. A link is added to a document whose bytes are the only thing that changed.
+    write(
+        &root,
+        DOCUMENT,
+        &document_source("A link to [the target](../src/link_target.ts#L2)."),
+    );
+    check("doc-link-add", &applied, &mut link_steps);
+
+    // 2. The target is edited. The document's bytes are unchanged, and its anchor edge records
+    //    the target's content hash, so it must be re-extracted anyway.
+    write(&root, TARGET, &target_source("return 2;"));
+    check("doc-link-target-edited", &applied, &mut link_steps);
+
+    // 3. The target is deleted. The link becomes unresolved rather than disappearing.
+    remove(&root, TARGET);
+    check("doc-link-target-deleted", &applied, &mut link_steps);
+
+    // 4. The target comes back. The unresolved entity must go, and the edge must resolve again.
+    write(&root, TARGET, &target_source("return 2;"));
+    check("doc-link-target-restored", &applied, &mut link_steps);
+
+    // 5. The target moves. Nothing in the document changed and its link is now broken, which is
+    //    precisely the stale-documentation signal this slice exists to produce.
+    remove(&root, TARGET);
+    write(&root, MOVED_TARGET, &target_source("return 2;"));
+    check("doc-link-target-moved", &applied, &mut link_steps);
+
+    // The graph must actually show the break, not merely agree with a from-scratch index that is
+    // equally wrong.
+    {
+        let conn = open_db(&root);
+        assert_eq!(
+            scalar(
+                &conn,
+                "SELECT count(*) FROM entity e
+                   JOIN occurrence o ON o.entity_id = e.entity_id
+                  WHERE e.kind = 'unresolved' AND o.file_path = 'docs/links.md'"
+            ),
+            1,
+            "the moved target left no broken-link entity behind"
+        );
+    }
+
+    assert_eq!(
+        link_steps,
+        vec![
+            "doc-link-add",
+            "doc-link-target-edited",
+            "doc-link-target-deleted",
+            "doc-link-target-restored",
+            "doc-link-target-moved",
+        ]
+    );
+
     assert!(
         applied.len() >= 20,
         "the property must be exercised over at least 20 edits, applied {}",
