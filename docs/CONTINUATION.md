@@ -140,7 +140,10 @@ T8 before Slice 8. `docs/THREAT-MODEL.md` §6 tracks gate status.
 - **Recall on real repositories is unmeasured.** Precision is measured and gated.
 - 38.1% of call sites on the resolution corpus are honestly `Unresolved`; real repositories will
   be higher. Any method call on a typed receiver is unresolvable without type inference.
-- No UI yet — `nerve serve` serves a placeholder page.
+- FTS matching is prefix-per-token, so `Through` never finds `callThroughMissingImport`. The UI
+  states the rule and offers alternative queries rather than faking fuzzy results.
+- Overview has no language breakdown: no language aggregate exists in `StatusReport` or the API.
+  Deferred as a small `nerve-store` query; correctly refused in the UI rather than fabricated.
 - CommonJS `module.exports` is unmodelled; move proposals are file-level only.
 - A transient file-read error treats that file as removed until the next successful run.
 - The scoped pruner's completeness is checked empirically, not proved. **If a future code path
