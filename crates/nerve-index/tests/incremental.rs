@@ -1328,6 +1328,94 @@ fn incremental_and_full_agree_under_a_seeded_edit_sequence() {
         ]
     );
 
+    // ---- the supersession sequence ----------------------------------------------------------
+    //
+    // Slice 5d-ii gives a document one dependency a link does not: a **bare** `ADR-<digits>`
+    // target resolves against the identifiers parsed from every indexed document's file name, so
+    // adding or deleting an unrelated document can move the answer — including into and out of
+    // ambiguity — while the citing document's bytes never change once. Scripted rather than
+    // sampled, for the same reason the link sequence is: a sampler that happened not to draw the
+    // ambiguity transition would report a property it never tested.
+    const SUPERSEDER: &str = "docs/decisions/ADR-0900-head.md";
+    const SUPERSEDED: &str = "docs/decisions/ADR-0901-target.md";
+    const DUPLICATE: &str = "notes/ADR-0901-duplicate.md";
+    let adr =
+        |title: &str, field: &str| format!("# {title}\n\n**Status:** Accepted{field}\n\nB.\n");
+
+    // Both documents, and no field yet, so that "field added" is an edit to an existing document
+    // rather than the arrival of a new one.
+    write(&root, SUPERSEDER, &adr("ADR-0900", ""));
+    write(&root, SUPERSEDED, &adr("ADR-0901", ""));
+    index(&root);
+
+    let mut supersession_steps: Vec<&'static str> = Vec::new();
+    let check_supersession = |label: &'static str,
+                              steps: &mut Vec<&'static str>|
+     -> nerve_index::IndexOutcome {
+        let outcome = index(&root);
+        let actual = dump_json(&root);
+        let (_reference_dir, expected) = dump_of_a_from_scratch_index(&root);
+        assert_eq!(
+            actual, expected,
+            "incremental and full disagree after {label}\n\
+                 re-extracted {} file(s), resolution-changed {}",
+            outcome.incremental.files_re_extracted, outcome.incremental.files_resolution_changed
+        );
+        steps.push(label);
+        outcome
+    };
+
+    // 1. The field is added. One document changed, and it resolves.
+    write(
+        &root,
+        SUPERSEDER,
+        &adr("ADR-0900", " · **Supersedes:** ADR-0901"),
+    );
+    let outcome = check_supersession("supersedes-add", &mut supersession_steps);
+    assert_eq!(outcome.supersession_edges, 1);
+
+    // 2. The target is deleted. `ADR-0900-head.md` is byte-identical to the run before, so only
+    //    the identifier re-resolution can seed it — and if it is not seeded, the graph keeps an
+    //    edge into a document that no longer exists.
+    remove(&root, SUPERSEDED);
+    let outcome = check_supersession("supersedes-target-deleted", &mut supersession_steps);
+    assert_eq!(outcome.supersession_edges, 0);
+    assert!(
+        outcome.incremental.files_resolution_changed >= 1,
+        "the citing document was not seeded by identifier re-resolution"
+    );
+
+    // 3. The target comes back. The unresolved entity must go and the edge must resolve again.
+    write(&root, SUPERSEDED, &adr("ADR-0901", ""));
+    let outcome = check_supersession("supersedes-target-restored", &mut supersession_steps);
+    assert_eq!(outcome.supersession_edges, 1);
+
+    // 4. A second document carries the same identifier. The target is now ambiguous, and Nerve
+    //    must withdraw the edge rather than keep the one it already had.
+    write(&root, DUPLICATE, &adr("ADR-0901", ""));
+    let outcome = check_supersession("supersedes-target-ambiguous", &mut supersession_steps);
+    assert_eq!(
+        outcome.supersession_edges, 0,
+        "an identifier two documents carry must not keep resolving to the first of them"
+    );
+    assert!(outcome.incremental.files_resolution_changed >= 1);
+
+    // 5. The duplicate goes away. Ambiguity is not a sticky state.
+    remove(&root, DUPLICATE);
+    let outcome = check_supersession("supersedes-target-unambiguous", &mut supersession_steps);
+    assert_eq!(outcome.supersession_edges, 1);
+
+    assert_eq!(
+        supersession_steps,
+        vec![
+            "supersedes-add",
+            "supersedes-target-deleted",
+            "supersedes-target-restored",
+            "supersedes-target-ambiguous",
+            "supersedes-target-unambiguous",
+        ]
+    );
+
     assert!(
         applied.len() >= 20,
         "the property must be exercised over at least 20 edits, applied {}",

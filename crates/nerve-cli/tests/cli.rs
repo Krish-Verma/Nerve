@@ -367,7 +367,11 @@ fn every_json_output_parses_and_carries_its_required_keys() {
     assert_eq!(runs[2]["extractor_id"], "ts-js-reference");
     assert_eq!(runs[2]["extractor_version"], "1.0.0");
     assert_eq!(runs[3]["extractor_id"], "md-structural");
-    assert_eq!(runs[3]["extractor_version"], "1.1.0");
+    // Slice 5d-ii: `SUPERSEDES` edges from the four explicit supersession fields. The version
+    // moved with the behaviour and in the same commit as it, because that is what makes every
+    // document re-scan once on this build rather than keep a graph the current rules would not
+    // produce.
+    assert_eq!(runs[3]["extractor_version"], "1.2.0");
     require_keys(&runs[0], &["run_id", "state_id", "status"]);
 
     let search = json(&run(&["search", "area", "--path", root, "--json"]));

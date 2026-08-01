@@ -497,6 +497,17 @@ fn run_index(output: &Output, path: Option<PathBuf>, full: bool) -> i32 {
             for (form, count) in &outcome.unsupported_markdown_by_form {
                 output.line(format!("    {form:<28} {count}"));
             }
+            // A cycle is reported, never suppressed: each edge is individually evidenced by an
+            // explicit statement in a real file, and deleting one to make the graph acyclic
+            // would hide evidence. A contradiction is a document another document claims to have
+            // replaced, whose own status still says `Accepted` — a string comparison.
+            output.line(format!(
+                "  supersession   {} edges, {} cycle(s) over {} documents, {} status contradiction(s)",
+                outcome.supersession_edges,
+                outcome.supersession_cycles,
+                outcome.supersession_cycle_documents,
+                outcome.supersession_contradictions
+            ));
             output.line(format!("  duration_ms    {}", outcome.duration_ms));
             if partial {
                 output.line(format!(
@@ -527,6 +538,10 @@ fn run_index(output: &Output, path: Option<PathBuf>, full: bool) -> i32 {
                 "document_sections": outcome.document_sections,
                 "unsupported_markdown": outcome.unsupported_markdown,
                 "unsupported_markdown_by_form": outcome.unsupported_markdown_by_form,
+                "supersession_edges": outcome.supersession_edges,
+                "supersession_cycles": outcome.supersession_cycles,
+                "supersession_cycle_documents": outcome.supersession_cycle_documents,
+                "supersession_contradictions": outcome.supersession_contradictions,
                 "entities_total": outcome.entities_total,
                 "entities_by_kind": outcome.entities_by_kind,
                 "assertions_total": outcome.assertions_total,

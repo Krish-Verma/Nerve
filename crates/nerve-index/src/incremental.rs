@@ -212,7 +212,22 @@ pub fn classify(
                 _ => false,
             }
         });
-        if moved {
+        // A **bare** supersession identifier (Slice 5d-ii) resolves against the ADR identifiers
+        // parsed from indexed document file names, so adding, deleting or renaming a document can
+        // move its answer — including into and out of ambiguity — with the citing document's
+        // bytes unchanged. A link-form target needs nothing extra here: the supersession field's
+        // link is one of the cached `destinations` above, and it resolves by the same rule.
+        let identifier_moved = path_set_moved
+            && facts
+                .document
+                .supersession
+                .iter()
+                .filter(|statement| statement.link.is_none())
+                .any(|statement| {
+                    docref::resolve_adr_identifier(&statement.target, &after_all)
+                        != docref::resolve_adr_identifier(&statement.target, &before_all)
+                });
+        if moved || identifier_moved {
             set.unchanged.remove(path);
             set.resolution_changed.insert(path.clone());
         }
@@ -636,6 +651,91 @@ mod tests {
         );
         assert!(set.resolution_changed.is_empty(), "{set:?}");
         assert!(set.unchanged.contains("README.md"));
+    }
+
+    /// Give a previously indexed document a cached bare supersession identifier.
+    fn with_supersedes(previous: &mut BTreeMap<String, PreviousModule>, path: &str, target: &str) {
+        previous.get_mut(path).unwrap().facts = Some(ModuleFacts {
+            document: crate::facts::DocumentCounters {
+                supersession: vec![crate::facts::CachedSupersession {
+                    direction: "supersedes".to_string(),
+                    target: target.to_string(),
+                    link: None,
+                }],
+                ..crate::facts::DocumentCounters::default()
+            },
+            ..ModuleFacts::default()
+        });
+    }
+
+    /// A bare `ADR-<digits>` target resolves against the identifiers parsed from document file
+    /// names, so the path set can move its answer — including into and out of ambiguity — while
+    /// the citing document's bytes stand still.
+    #[test]
+    fn a_document_is_seeded_when_a_bare_supersession_identifier_would_resolve_differently() {
+        let head = "docs/decisions/ADR-0900-head.md";
+        let target = "docs/decisions/ADR-0901-target.md";
+        let duplicate = "notes/ADR-0901-duplicate.md";
+
+        // Added: `ADR-0901` named nothing, and now names exactly one document.
+        let mut before = previous(&[(head, "h1")]);
+        with_supersedes(&mut before, head, "ADR-0901");
+        let set = classify(&before, &current(&[(head, "h1"), (target, "h2")]), false);
+        assert_eq!(set.resolution_changed, [head.to_string()].into());
+
+        // Removed: the edge goes from resolved to unresolved, which is the signal.
+        let mut before = previous(&[(head, "h1"), (target, "h2")]);
+        with_supersedes(&mut before, head, "ADR-0901");
+        let set = classify(&before, &current(&[(head, "h1")]), false);
+        assert_eq!(set.resolution_changed, [head.to_string()].into());
+
+        // Ambiguous: a second document carrying the identifier must withdraw the edge, so the
+        // document that cited it has to be re-extracted.
+        let mut before = previous(&[(head, "h1"), (target, "h2")]);
+        with_supersedes(&mut before, head, "ADR-0901");
+        let set = classify(
+            &before,
+            &current(&[(head, "h1"), (target, "h2"), (duplicate, "h3")]),
+            false,
+        );
+        assert_eq!(set.resolution_changed, [head.to_string()].into());
+
+        // Untouched: an unrelated document appearing must not re-resolve every ADR.
+        let mut before = previous(&[(head, "h1"), (target, "h2")]);
+        with_supersedes(&mut before, head, "ADR-0901");
+        let set = classify(
+            &before,
+            &current(&[(head, "h1"), (target, "h2"), ("docs/other.md", "h3")]),
+            false,
+        );
+        assert!(set.resolution_changed.is_empty(), "{set:?}");
+        assert!(set.unchanged.contains(head));
+    }
+
+    /// A **link**-form supersession target needs nothing of its own here: the field's link is one
+    /// of the cached destinations, and it re-resolves by the rule above.
+    #[test]
+    fn a_link_form_supersession_target_is_covered_by_the_cached_destinations() {
+        let head = "docs/decisions/ADR-0900-head.md";
+        let mut before = previous(&[(head, "h1")]);
+        before.get_mut(head).unwrap().facts = Some(ModuleFacts {
+            document: crate::facts::DocumentCounters {
+                destinations: vec!["ADR-0901-target.md".to_string()],
+                supersession: vec![crate::facts::CachedSupersession {
+                    direction: "supersedes".to_string(),
+                    target: "[ADR-0901](ADR-0901-target.md)".to_string(),
+                    link: Some("ADR-0901-target.md".to_string()),
+                }],
+                ..crate::facts::DocumentCounters::default()
+            },
+            ..ModuleFacts::default()
+        });
+        let set = classify(
+            &before,
+            &current(&[(head, "h1"), ("docs/decisions/ADR-0901-target.md", "h2")]),
+            false,
+        );
+        assert_eq!(set.resolution_changed, [head.to_string()].into());
     }
 
     /// A line anchor is resolved against the target's symbols and records the hash it was

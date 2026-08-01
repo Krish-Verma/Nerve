@@ -84,6 +84,26 @@ pub struct CachedCounters {
     pub unmodelled_by_form: BTreeMap<String, usize>,
 }
 
+/// One supersession field a document wrote, reduced to what re-resolution needs.
+///
+/// Cached for the same reason [`DocumentCounters::destinations`] is, and for one more: the cycle
+/// and status-contradiction counters are properties of the **whole** repository's supersession
+/// graph, and a run that re-extracted one file must still be able to report them. Without the
+/// cache those counters would say "no cycles" after any one-file edit in a repository that has
+/// one, which is not a smaller answer but a false one.
+///
+/// Holds the field's value and the link destination it named — no prose, no heading text.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedSupersession {
+    /// `supersedes` or `superseded_by`, from `docs::SupersessionDirection::as_str`.
+    pub direction: String,
+    /// The field value exactly as written.
+    pub target: String,
+    /// The destination of the Markdown link the value consists of, when it consists of one.
+    #[serde(default)]
+    pub link: Option<String>,
+}
+
 /// Per-document tallies, kept for the same reason [`CachedCounters`] is: a run that re-extracts
 /// one file must still be able to report what the whole repository's documents contain.
 ///
@@ -109,6 +129,15 @@ pub struct DocumentCounters {
     /// a cache miss, and a cache miss re-extracts the repository for nothing.
     #[serde(default)]
     pub destinations: Vec<String>,
+    /// The ADR status recorded in the document's metadata, when it has one.
+    ///
+    /// The string, not a parsed value: the status-contradiction check is a string comparison and
+    /// needs no semantics, and `unparsed` is a value the vocabulary can carry.
+    #[serde(default)]
+    pub adr_status: Option<String>,
+    /// Supersession fields the document wrote, in source order. See [`CachedSupersession`].
+    #[serde(default)]
+    pub supersession: Vec<CachedSupersession>,
 }
 
 /// Everything an unchanged module must remember for another module to be re-extracted.
@@ -142,6 +171,16 @@ impl ModuleFacts {
                 is_adr: extraction.adr.is_adr,
                 unsupported: extraction.unsupported.clone(),
                 destinations: crate::docref::cached_destinations(&extraction.links),
+                adr_status: extraction.adr.status_value().map(str::to_string),
+                supersession: extraction
+                    .supersession
+                    .iter()
+                    .map(|statement| CachedSupersession {
+                        direction: statement.direction.as_str().to_string(),
+                        target: statement.raw_target.clone(),
+                        link: statement.link_destination.clone(),
+                    })
+                    .collect(),
             },
             ..ModuleFacts::default()
         }

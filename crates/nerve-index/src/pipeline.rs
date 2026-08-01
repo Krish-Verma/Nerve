@@ -98,8 +98,11 @@ use nerve_core::vocab::{Directness, EntityKind, EvidenceSourceType, Relation, Un
 
 use crate::config::{self, Config};
 use crate::discover;
-use crate::docref::{self, AnchorOutcome, DocumentLinks, LinkOutcome, LinkSite};
-use crate::docs::{self, DocumentExtraction};
+use crate::docref::{
+    self, AnchorOutcome, DocumentLinks, DocumentSupersessions, LinkOutcome, LinkSite,
+    SupersessionOutcome, SupersessionSite,
+};
+use crate::docs::{self, DocumentExtraction, SupersessionDirection};
 use crate::error::{IndexError, Result};
 use crate::exports::ExportIndex;
 use crate::extract::{
@@ -264,6 +267,17 @@ pub struct IndexOutcome {
     pub unsupported_markdown: usize,
     /// Breakdown of the above by form tag.
     pub unsupported_markdown_by_form: BTreeMap<String, usize>,
+    /// `Document SUPERSEDES Document` edges over the whole repository.
+    pub supersession_edges: usize,
+    /// Groups of mutually superseding documents. **Not suppressed** — see
+    /// [`supersession_cycles`]: each edge is individually evidenced, so a cycle is reported
+    /// rather than broken.
+    pub supersession_cycles: usize,
+    /// Documents lying in one of those groups.
+    pub supersession_cycle_documents: usize,
+    /// Documents another document claims to have superseded, whose own status still reads
+    /// `Accepted`. A string comparison; no semantics required.
+    pub supersession_contradictions: usize,
     /// Entity counts by kind, over the whole database.
     pub entities_by_kind: BTreeMap<String, i64>,
     /// Assertion counts by relation, over the whole database.
@@ -284,6 +298,17 @@ pub struct IndexOutcome {
     pub status: RunStatus,
     /// What was re-extracted, skipped and removed.
     pub incremental: IncrementalReport,
+}
+
+/// One document the graph builder is about to emit, with everything resolution concluded.
+///
+/// A struct rather than a tuple because it now carries four things and a positional read of
+/// `(file, extraction, links, supersessions)` at the call site says nothing about which is which.
+struct DocumentTarget<'a> {
+    file: &'a LoadedFile,
+    extraction: &'a DocumentExtraction,
+    links: &'a DocumentLinks,
+    supersessions: &'a DocumentSupersessions,
 }
 
 struct LoadedFile {
@@ -690,6 +715,20 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
             )
         })
         .collect();
+    let document_supersessions: BTreeMap<String, DocumentSupersessions> = document_extractions
+        .iter()
+        .map(|(rel_path, extraction)| {
+            (
+                rel_path.clone(),
+                docref::resolve_document_supersessions(
+                    &root,
+                    rel_path,
+                    &extraction.supersession,
+                    &corpus,
+                ),
+            )
+        })
+        .collect();
 
     // The export closure spans every module, so it is built from the whole corpus: freshly
     // parsed modules for the invalidation set, and modules reconstructed from the cache for
@@ -772,6 +811,14 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     }
     let unsupported_markdown: usize = unsupported_markdown_by_form.values().sum();
 
+    // Supersession over the **whole** repository, from cached and fresh facts alike. A cycle and
+    // a status contradiction are properties of the graph, not of one file, so a run that
+    // re-extracted one document must still report them; computing them from this run's
+    // extractions alone would report "no cycles" for a repository that has one.
+    let supersedes = supersession_edges(&root, &facts_by_path, &corpus);
+    let (supersession_cycle_count, supersession_cycle_documents) = supersession_cycles(&supersedes);
+    let supersession_contradiction_count = supersession_contradictions(&supersedes, &facts_by_path);
+
     let files_with_syntax_errors = facts_by_path
         .values()
         .filter(|facts| facts.counters.has_syntax_error)
@@ -838,12 +885,18 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     reference_batch
         .verify_declared_source_types(refs::EXTRACTOR_ID, &refs::DECLARED_SOURCE_TYPES)?;
 
-    let document_targets: Vec<(&LoadedFile, &DocumentExtraction, &DocumentLinks)> = loaded
+    let document_targets: Vec<DocumentTarget<'_>> = loaded
         .iter()
         .filter_map(|file| {
             let extraction = document_extractions.get(&file.rel_path)?;
             let links = document_links.get(&file.rel_path)?;
-            Some((file, extraction, links))
+            let supersessions = document_supersessions.get(&file.rel_path)?;
+            Some(DocumentTarget {
+                file,
+                extraction,
+                links,
+                supersessions,
+            })
         })
         .collect();
     let document_batch = build_document_graph(&config.project_id, &document_targets);
@@ -1187,6 +1240,10 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         document_sections,
         unsupported_markdown,
         unsupported_markdown_by_form,
+        supersession_edges: supersedes.len(),
+        supersession_cycles: supersession_cycle_count,
+        supersession_cycle_documents,
+        supersession_contradictions: supersession_contradiction_count,
         entities_by_kind: report.entities_by_kind,
         assertions_by_relation: report.assertions_by_relation,
         entities_total: report.entities_total,
@@ -1786,6 +1843,224 @@ fn claim_unresolved_document_link(
     );
 }
 
+/// The whole repository's supersession graph, oriented `source replaces target`.
+///
+/// Built from [`ModuleFacts`] rather than from this run's extractions, so that it describes the
+/// repository and not the fraction of it that was re-read — the same reason the Markdown
+/// refusal tallies are built that way. Resolution is the same function the graph builder used, so
+/// a cached statement and a freshly scanned one cannot be answered differently.
+fn supersession_edges(
+    root: &Path,
+    facts_by_path: &BTreeMap<String, ModuleFacts>,
+    corpus: &docref::Corpus<'_>,
+) -> BTreeSet<(String, String)> {
+    let mut edges = BTreeSet::new();
+    for (rel_path, facts) in facts_by_path {
+        for statement in &facts.document.supersession {
+            let outcome = docref::resolve_supersession(
+                root,
+                rel_path,
+                &statement.target,
+                statement.link.as_deref(),
+                corpus,
+            );
+            let SupersessionOutcome::Document { path } = outcome else {
+                continue;
+            };
+            if statement.direction == SupersessionDirection::SupersededBy.as_str() {
+                edges.insert((path, rel_path.clone()));
+            } else {
+                edges.insert((rel_path.clone(), path));
+            }
+        }
+    }
+    edges
+}
+
+/// Groups of mutually superseding documents, and how many documents are in them.
+///
+/// **A cycle is not suppressed.** Each edge is individually backed by an explicit statement in a
+/// real file, and deleting one to make the graph acyclic would hide evidence and make the choice
+/// of which to delete arbitrary. Nerve's rule is that contradictory is a value rather than an
+/// omission, so a cycle is detected, counted and reported, and every edge stands.
+///
+/// The count is of strongly connected components of size greater than one — exactly "sets of
+/// documents that each transitively replace the other" — computed by Kosaraju with explicit
+/// stacks, because a recursive walk over an attacker-supplied graph is a stack overflow waiting
+/// for a long enough chain. Self-supersession never reaches here: it resolves to `Unresolved`,
+/// so no self-loop exists to special-case.
+fn neighbours<'a>(map: &'a BTreeMap<&str, Vec<&'a str>>, node: &str) -> &'a [&'a str] {
+    map.get(node).map(Vec::as_slice).unwrap_or(&[])
+}
+
+fn supersession_cycles(edges: &BTreeSet<(String, String)>) -> (usize, usize) {
+    let mut nodes: BTreeSet<&str> = BTreeSet::new();
+    let mut forward: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut backward: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (source, target) in edges {
+        nodes.insert(source.as_str());
+        nodes.insert(target.as_str());
+        forward
+            .entry(source.as_str())
+            .or_default()
+            .push(target.as_str());
+        backward
+            .entry(target.as_str())
+            .or_default()
+            .push(source.as_str());
+    }
+    let mut visited: BTreeSet<&str> = BTreeSet::new();
+    let mut order: Vec<&str> = Vec::new();
+    for node in &nodes {
+        if !visited.insert(node) {
+            continue;
+        }
+        let mut stack = vec![(*node, 0usize)];
+        while let Some((current, index)) = stack.pop() {
+            let next = neighbours(&forward, current);
+            if index < next.len() {
+                stack.push((current, index + 1));
+                if visited.insert(next[index]) {
+                    stack.push((next[index], 0));
+                }
+            } else {
+                order.push(current);
+            }
+        }
+    }
+
+    let mut assigned: BTreeSet<&str> = BTreeSet::new();
+    let (mut components, mut documents) = (0usize, 0usize);
+    for node in order.iter().rev() {
+        if !assigned.insert(node) {
+            continue;
+        }
+        let mut size = 0usize;
+        let mut stack = vec![*node];
+        while let Some(current) = stack.pop() {
+            size += 1;
+            for next in neighbours(&backward, current) {
+                if assigned.insert(next) {
+                    stack.push(next);
+                }
+            }
+        }
+        if size > 1 {
+            components += 1;
+            documents += size;
+        }
+    }
+    (components, documents)
+}
+
+/// Documents that are the target of a `SUPERSEDES` edge while their own status still reads
+/// `Accepted`.
+///
+/// A string comparison, exactly as the Slice 5 plan §2.3 promised: no semantics are required to
+/// see that a document another document claims to have replaced still claims to be in force.
+/// Counted per document, not per edge — a decision superseded twice contradicts itself once.
+fn supersession_contradictions(
+    edges: &BTreeSet<(String, String)>,
+    facts_by_path: &BTreeMap<String, ModuleFacts>,
+) -> usize {
+    let targets: BTreeSet<&String> = edges.iter().map(|(_, target)| target).collect();
+    targets
+        .into_iter()
+        .filter(|target| {
+            facts_by_path
+                .get(*target)
+                .and_then(|facts| facts.document.adr_status.as_deref())
+                == Some(docs::AdrStatus::Accepted.as_str())
+        })
+        .count()
+}
+
+/// The `details` payload shared by every supersession observation.
+///
+/// Uniform across the resolved and the unresolved shape, for the same reason
+/// [`link_details`] is: "which supersession claims are broken?" must read the same keys whatever
+/// the answer was.
+fn supersession_details(
+    site: &SupersessionSite,
+    resolved_path: Option<&str>,
+    reason: Option<&str>,
+) -> serde_json::Value {
+    // Every path that matched an ambiguous identifier. Recorded so the refusal names what it
+    // refused rather than only that it refused: the whole value of declining to guess is that a
+    // reader can see the alternatives and decide.
+    let candidates = match &site.outcome {
+        SupersessionOutcome::Ambiguous { candidates } => Some(candidates.clone()),
+        _ => None,
+    };
+    serde_json::json!({
+        // Which field was written. The stored edge always means "source replaces target", so
+        // this is the only record of which way round the document said it.
+        "field": site.direction.as_str(),
+        "form": site.form,
+        "raw_target": site.raw_target,
+        "resolved_path": resolved_path,
+        "candidates": candidates,
+        "reason": reason,
+    })
+}
+
+/// Emit one supersession edge whose far end is an `Unresolved` entity.
+///
+/// The endpoint the unresolved entity takes is the one the document named it for. A
+/// `**Superseded by:** ADR-9999` says "ADR-9999 replaces me"; recording it the other way round
+/// would be a claim the document did not make, and the relation is stored one way only.
+fn claim_unresolved_supersession(
+    builder: &mut GraphBuilder,
+    project_id: &str,
+    rel_path: &str,
+    content_hash: &str,
+    document_entity: &str,
+    site: &SupersessionSite,
+    reason: &str,
+) {
+    let entity_id = ids::unresolved_id(
+        project_id,
+        rel_path,
+        UnresolvedCategory::DocumentSupersedes,
+        &site.raw_target,
+    );
+    builder.add_entity(EntityRecord {
+        entity_id: entity_id.clone(),
+        kind: EntityKind::Unresolved,
+        // Named by the field value exactly as written, which is the one rule that covers a bare
+        // identifier, a Markdown link and an empty field alike.
+        name: site.raw_target.clone(),
+        scope_path: rel_path.to_string(),
+        language: None,
+        meta: Some(
+            serde_json::json!({
+                "category": UnresolvedCategory::DocumentSupersedes.as_str(),
+                "importer": rel_path,
+                "raw_specifier": site.raw_target,
+                "field": site.direction.as_str(),
+                "reason": reason,
+            })
+            .to_string(),
+        ),
+    });
+    builder.add_occurrence(&entity_id, rel_path, site.span, content_hash);
+    let (source, target) = match site.direction {
+        SupersessionDirection::Supersedes => (document_entity, entity_id.as_str()),
+        SupersessionDirection::SupersededBy => (entity_id.as_str(), document_entity),
+    };
+    builder.claim(
+        source,
+        Relation::Supersedes,
+        target,
+        // Nothing was resolved. All the document states is a field value, so `DIRECT`.
+        Evidence::DOCUMENT,
+        rel_path,
+        site.span,
+        content_hash,
+        supersession_details(site, None, Some(reason)),
+    );
+}
+
 /// Turn scanned documents into entities, occurrences, assertions and observations.
 ///
 /// A separate batch under a separate extractor run, exactly as `ts-js-reference` is. It emits:
@@ -1811,8 +2086,10 @@ fn claim_unresolved_document_link(
 /// - a **bare code-span mention** — `` `parseConfig` `` in prose. Turning that into an edge is
 ///   name matching, which ADR-0002 refuses as a basis for identity.
 ///
-/// `SUPERSEDES` is not emitted here either. It stays declared-and-unemitted until the slice that
-/// can produce it with evidence.
+/// Slice 5d-ii adds `Document SUPERSEDES Document`, from **explicit evidence only**: one of the
+/// four supersession fields, resolved to exactly one indexed document. A `Superseded` status with
+/// no target, adjacency of ADR numbers, similarity of subject and prose containing the word are
+/// none of them evidence, and none of them produce an edge.
 ///
 /// Every observation is `DOCUMENT_STATED`, including the two filesystem-shaped edges and every
 /// resolved link. That is what makes THREAT-MODEL.md T7 a property of the *file* rather than of
@@ -1822,13 +2099,16 @@ fn claim_unresolved_document_link(
 /// Heading text and link destinations become entity names and byte spans. They are never
 /// interpreted, rendered, followed or executed. `nerve_core::ids::section_id` strips control
 /// characters before heading text can reach an identity tuple.
-fn build_document_graph(
-    project_id: &str,
-    targets: &[(&LoadedFile, &DocumentExtraction, &DocumentLinks)],
-) -> GraphBatch {
+fn build_document_graph(project_id: &str, targets: &[DocumentTarget<'_>]) -> GraphBatch {
     let mut builder = GraphBuilder::new(docs::EXTRACTOR_ID, docs::EXTRACTOR_VERSION);
 
-    for (file, extraction, resolved) in targets.iter().copied() {
+    for target in targets {
+        let DocumentTarget {
+            file,
+            extraction,
+            links: resolved,
+            supersessions,
+        } = *target;
         let rel_path = file.rel_path.as_str();
         let hash = file.content_hash.as_str();
         let name = last_segment(rel_path);
@@ -1863,6 +2143,10 @@ fn build_document_graph(
                     // bare fragment, and a code-span mention would otherwise be
                     // indistinguishable from a document Nerve never looked at.
                     "links": resolved.outcomes,
+                    // Counted for the same reason `links` is, and with one more: an external
+                    // supersession target produces no row at all, so without the count it would
+                    // be indistinguishable from a document that named nothing.
+                    "supersession": supersessions.outcomes,
                     "code_span_mentions": extraction.code_span_mentions,
                 })
                 .to_string(),
@@ -2040,6 +2324,59 @@ fn build_document_graph(
                 }
             }
         }
+
+        // ---- supersession ----------------------------------------------------------------
+        //
+        // The subject is always the **document**, never the section the field sits in: a
+        // decision is superseded, not a heading. The two directions produce the same edge with
+        // the endpoints swapped, so `A SUPERSEDES B` always means A replaced B, and asking "what
+        // replaced this?" is a reverse traversal rather than a second row.
+        for site in &supersessions.sites {
+            match &site.outcome {
+                // Counted in the document's `supersession` meta and emitted nowhere. Nothing
+                // failed, and nothing in this repository was named. Never fetched.
+                SupersessionOutcome::External { .. } => {}
+
+                SupersessionOutcome::Document { path } => {
+                    let target_document = ids::document_id(project_id, path);
+                    let (source, target) = match site.direction {
+                        SupersessionDirection::Supersedes => {
+                            (document_entity, target_document.as_str())
+                        }
+                        SupersessionDirection::SupersededBy => {
+                            (target_document.as_str(), document_entity)
+                        }
+                    };
+                    builder.claim(
+                        source,
+                        Relation::Supersedes,
+                        target,
+                        Evidence::DOCUMENT_RESOLVED,
+                        rel_path,
+                        site.span,
+                        hash,
+                        supersession_details(site, Some(path.as_str()), None),
+                    );
+                }
+
+                // The reason is read back off the outcome rather than restated here, so the
+                // closed vocabulary has one definition and cannot drift into two.
+                other => {
+                    let Some(reason) = other.unresolved_reason() else {
+                        continue;
+                    };
+                    claim_unresolved_supersession(
+                        &mut builder,
+                        project_id,
+                        rel_path,
+                        hash,
+                        document_entity,
+                        site,
+                        reason,
+                    );
+                }
+            }
+        }
     }
 
     builder.batch
@@ -2067,6 +2404,84 @@ mod tests {
         assert_eq!(ImportForm::ReExport.as_str(), "re-export");
         assert_eq!(ImportForm::Require.as_str(), "require");
         assert_eq!(ImportForm::DynamicLiteral.as_str(), "dynamic-literal");
+    }
+
+    fn edge_set(pairs: &[(&str, &str)]) -> BTreeSet<(String, String)> {
+        pairs
+            .iter()
+            .map(|(from, to)| ((*from).to_string(), (*to).to_string()))
+            .collect()
+    }
+
+    /// A cycle is counted, and an acyclic graph produces no false one. Both directions matter:
+    /// under-reporting hides a contradiction, over-reporting turns an ordinary chain into an
+    /// alarm.
+    #[test]
+    fn a_supersession_cycle_is_counted_and_a_chain_is_not() {
+        // The fixture's shape: a three-document cycle beside a two-hop chain that touches it.
+        assert_eq!(
+            supersession_cycles(&edge_set(&[("a", "b"), ("b", "c"), ("c", "a")])),
+            (1, 3)
+        );
+        assert_eq!(
+            supersession_cycles(&edge_set(&[("x", "y"), ("y", "z")])),
+            (0, 0)
+        );
+        assert_eq!(supersession_cycles(&edge_set(&[])), (0, 0));
+
+        // Two disjoint cycles joined by one edge are two groups, not one. A weakly connected
+        // component would say one, and would be wrong.
+        assert_eq!(
+            supersession_cycles(&edge_set(&[
+                ("a", "b"),
+                ("b", "a"),
+                ("b", "c"),
+                ("c", "d"),
+                ("d", "c"),
+            ])),
+            (2, 4)
+        );
+    }
+
+    /// A long chain must not overflow the stack. The walk is iterative for exactly this reason:
+    /// the graph is built out of repository content, and repository content is hostile.
+    #[test]
+    fn a_very_long_supersession_chain_does_not_overflow() {
+        let paths: Vec<String> = (0..50_000).map(|index| format!("d{index}.md")).collect();
+        let edges: BTreeSet<(String, String)> = paths
+            .windows(2)
+            .map(|pair| (pair[0].clone(), pair[1].clone()))
+            .collect();
+        assert_eq!(supersession_cycles(&edges), (0, 0));
+    }
+
+    #[test]
+    fn a_contradiction_is_a_string_comparison_over_the_targets_own_status() {
+        let facts = |status: Option<&str>| ModuleFacts {
+            document: facts::DocumentCounters {
+                adr_status: status.map(str::to_string),
+                ..facts::DocumentCounters::default()
+            },
+            ..ModuleFacts::default()
+        };
+        let by_path: BTreeMap<String, ModuleFacts> = [
+            ("a.md".to_string(), facts(Some("Accepted"))),
+            ("b.md".to_string(), facts(Some("Superseded"))),
+            ("c.md".to_string(), facts(None)),
+        ]
+        .into_iter()
+        .collect();
+
+        // Counted per document, not per edge: `a.md` is superseded twice and contradicts itself
+        // once. `b.md` says Superseded and agrees; `c.md` is not an ADR and states no status.
+        let edges = edge_set(&[
+            ("x.md", "a.md"),
+            ("y.md", "a.md"),
+            ("z.md", "b.md"),
+            ("w.md", "c.md"),
+        ]);
+        assert_eq!(supersession_contradictions(&edges, &by_path), 1);
+        assert_eq!(supersession_contradictions(&edge_set(&[]), &by_path), 0);
     }
 
     fn fs_entry(rel_path: &str, kind: FileKind) -> FsEntry {

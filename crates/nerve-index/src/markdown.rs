@@ -78,6 +78,14 @@ pub const MAX_LINKS_PER_DOCUMENT: usize = 10_000;
 /// macOS; nothing longer can name a file, so anything longer is refused rather than stored.
 pub const MAX_LINK_DESTINATION_BYTES: usize = 1024;
 
+/// Bytes of a supersession field's value the scanner is willing to carry.
+///
+/// The value becomes an `Unresolved` entity's name when it resolves to nothing, and the whole
+/// line is attacker-controlled. A target is a link or an `ADR-<digits>` identifier; neither is
+/// long, so anything longer is refused and counted rather than stored at whatever length it
+/// happens to be. The same reasoning and the same number as [`MAX_RAW_STATUS_BYTES`].
+pub const MAX_SUPERSESSION_TARGET_BYTES: usize = 200;
+
 /// Bytes of inline code span content examined when counting bare code mentions.
 ///
 /// A code span is prose, and prose is unbounded. Only short spans can be an identifier, so the
@@ -116,6 +124,13 @@ pub mod form {
     /// than ignored, on the same principle as `heading-in-block-quote`: the reader is told the
     /// number instead of being left to assume there was nothing there.
     pub const LINK_IN_LINK_TEXT: &str = "link-in-link-text";
+    /// A supersession field whose value is longer than
+    /// [`super::MAX_SUPERSESSION_TARGET_BYTES`].
+    ///
+    /// The field is still recorded as a statement — the document did write it — but its value is
+    /// not stored, and it resolves to `document_supersedes_unparsed`. Counted rather than
+    /// dropped, on the same principle as every other bound here.
+    pub const SUPERSESSION_TARGET_TOO_LONG: &str = "supersession-target-too-long";
 }
 
 /// One heading the scanner is willing to vouch for.
@@ -191,6 +206,25 @@ pub struct RawLink {
     pub span: Span,
 }
 
+/// One line the block scan classified as **prose**, with its byte range.
+///
+/// Exactly the lines offered to the inline link parser, and recorded for the same reason the
+/// link parser is called where it is: block structure is resolved first, so a line inside a
+/// fenced block, an indented code block or front matter never appears here at all.
+///
+/// Slice 5d-ii reads supersession fields out of this list rather than re-splitting the source.
+/// That is what makes `**Supersedes:** ADR-0001` inside a ```` ```markdown ```` fence produce
+/// nothing: not a rule the field parser applies, but a line it is never shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProseLine {
+    /// Byte offset of the first byte of the line.
+    pub start: usize,
+    /// Byte offset one past the last byte of the line, excluding the line terminator.
+    pub end: usize,
+    /// 1-based line number.
+    pub number: usize,
+}
+
 /// What the scan refused, and how often.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScanCounters {
@@ -218,6 +252,8 @@ pub struct DocumentScan {
     pub front_matter: Option<Span>,
     /// Link destinations in source order. Never followed, never resolved here.
     pub links: Vec<RawLink>,
+    /// Lines the block scan classified as prose, in source order. See [`ProseLine`].
+    pub prose_lines: Vec<ProseLine>,
     /// Inline code spans whose content is a bare identifier.
     ///
     /// **Counted, never emitted.** A `` `parseConfig` `` in prose is not evidence that the
@@ -946,6 +982,7 @@ pub fn scan(source: &str) -> DocumentScan {
 
     let mut headings: Vec<Heading> = Vec::new();
     let mut links = LinkScan::new();
+    let mut prose_lines: Vec<ProseLine> = Vec::new();
     let mut refused_headings = 0usize;
     // The immediately preceding line, when it is a paragraph line that a setext underline could
     // convert into a heading, plus whether the paragraph it belongs to is longer than one line.
@@ -1042,6 +1079,11 @@ pub fn scan(source: &str) -> DocumentScan {
         if let Some((level, text)) = atx_heading(line.text) {
             // A heading line is prose too: `## See [the resolver](../src/resolve.rs)` is a link
             // the document really wrote, and the section it belongs to is the one it introduces.
+            prose_lines.push(ProseLine {
+                start: line.start,
+                end: line.end,
+                number: line.number,
+            });
             scan_line_links(
                 line.text,
                 line.start,
@@ -1083,6 +1125,11 @@ pub fn scan(source: &str) -> DocumentScan {
             counters.count(form::HTML_BLOCK);
         }
 
+        prose_lines.push(ProseLine {
+            start: line.start,
+            end: line.end,
+            number: line.number,
+        });
         scan_line_links(
             line.text,
             line.start,
@@ -1112,6 +1159,7 @@ pub fn scan(source: &str) -> DocumentScan {
         headings,
         front_matter: front_matter_span,
         links: links.links,
+        prose_lines,
         code_span_mentions: links.code_span_mentions,
         line_count: lines.len(),
         counters,

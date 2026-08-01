@@ -1,0 +1,245 @@
+{
+  "_": [
+    "Hand-written ground truth for fixtures/md-supersession, read by",
+    "crates/nerve-index/tests/document_supersession.rs. Selectors: doc:<path>.",
+    "Derived from docs/plans/slice-05d-ii-fixture-spec.md, which was authored before any",
+    "implementation existed. Every entry was checked against the fixture by hand. If the",
+    "implementation disagrees with this file, tighten the implementation.",
+    "An edge is written source-replaces-target, which is the only direction SUPERSEDES is stored",
+    "in: `from` replaced `to`. `stated_in` lists every file that says so, so that one assertion",
+    "carrying two observations is asserted rather than assumed."
+  ],
+
+  "resolved": [
+    {
+      "from": "doc:docs/decisions/ADR-0002-replacement.md",
+      "to": "doc:docs/decisions/ADR-0001-original.md",
+      "stated_in": [
+        "docs/decisions/ADR-0001-original.md",
+        "docs/decisions/ADR-0002-replacement.md"
+      ],
+      "note": "both directions of one edge: ADR-0001 says `Superseded by`, ADR-0002 says `Supersedes`. One assertion, two observations, in two different files"
+    },
+    {
+      "from": "doc:docs/decisions/ADR-0003-bare-identifier.md",
+      "to": "doc:docs/decisions/ADR-0004-bare-target.md",
+      "stated_in": ["docs/decisions/ADR-0003-bare-identifier.md"],
+      "note": "bare identifier: ADR-0004 resolves against the identifier parsed from the file name, with no link"
+    },
+    {
+      "from": "doc:docs/decisions/ADR-0006-section-target.md",
+      "to": "doc:docs/decisions/ADR-0005-section-form.md",
+      "stated_in": ["docs/decisions/ADR-0005-section-form.md"],
+      "note": "the `## Superseded by` section form, stated by the superseded document and stored the other way round"
+    },
+    {
+      "from": "doc:docs/decisions/ADR-0007-cycle-a.md",
+      "to": "doc:docs/decisions/ADR-0008-cycle-b.md",
+      "stated_in": ["docs/decisions/ADR-0007-cycle-a.md"],
+      "note": "cycle edge 1 of 3, emitted like any other because it is individually evidenced"
+    },
+    {
+      "from": "doc:docs/decisions/ADR-0008-cycle-b.md",
+      "to": "doc:docs/decisions/ADR-0009-cycle-c.md",
+      "stated_in": ["docs/decisions/ADR-0008-cycle-b.md"],
+      "note": "cycle edge 2 of 3"
+    },
+    {
+      "from": "doc:docs/decisions/ADR-0009-cycle-c.md",
+      "to": "doc:docs/decisions/ADR-0007-cycle-a.md",
+      "stated_in": ["docs/decisions/ADR-0009-cycle-c.md"],
+      "note": "cycle edge 3 of 3, closing the cycle; suppressing it would hide the statement ADR-0009 actually makes"
+    },
+    {
+      "from": "doc:docs/decisions/ADR-0020-contradicts.md",
+      "to": "doc:docs/decisions/ADR-0019-contradiction-target.md",
+      "stated_in": ["docs/decisions/ADR-0020-contradicts.md"],
+      "note": "link form; the target's own status still reads Accepted, which is the contradiction below"
+    },
+    {
+      "from": "doc:docs/decisions/ADR-0021-chain-head.md",
+      "to": "doc:docs/decisions/ADR-0002-replacement.md",
+      "stated_in": ["docs/decisions/ADR-0021-chain-head.md"],
+      "note": "head of the two-hop chain; the second hop is the ADR-0002 -> ADR-0001 edge above"
+    },
+    {
+      "from": "doc:notes/design-note.md",
+      "to": "doc:notes/old-note.md",
+      "stated_in": ["notes/design-note.md"],
+      "note": "a non-ADR document. The explicit field is the evidence, not the file name"
+    }
+  ],
+
+  "unresolved": [
+    {
+      "stated_in": "docs/decisions/ADR-0010-self.md",
+      "field": "supersedes",
+      "target_name": "ADR-0010",
+      "reason": "document_supersedes_self",
+      "note": "the identifier resolves to the document the field is written in; a document cannot replace itself"
+    },
+    {
+      "stated_in": "docs/decisions/ADR-0011-missing-target.md",
+      "field": "supersedes",
+      "target_name": "ADR-9999",
+      "reason": "document_supersedes_target_not_indexed",
+      "note": "no indexed document carries that identifier"
+    },
+    {
+      "stated_in": "docs/decisions/ADR-0013-ambiguous-reference.md",
+      "field": "supersedes",
+      "target_name": "ADR-0012",
+      "reason": "document_supersedes_target_ambiguous",
+      "candidates": [
+        "docs/decisions/ADR-0012-first.md",
+        "notes/ADR-0012-second.md"
+      ],
+      "note": "two documents carry ADR-0012; neither is chosen, and both are named in the details"
+    },
+    {
+      "stated_in": "docs/decisions/ADR-0014-empty-field.md",
+      "field": "supersedes",
+      "target_name": "",
+      "reason": "document_supersedes_unparsed",
+      "note": "the field is present with nothing after it. Present-and-empty is a value, not an absence"
+    },
+    {
+      "stated_in": "docs/decisions/ADR-0016-traversal.md",
+      "field": "supersedes",
+      "target_name": "[escape](../../../../../etc/passwd)",
+      "reason": "document_link_refused",
+      "note": "the destination climbs above the repository root and is refused by the same guard a prose link goes through; reason reused from Slice 5c on purpose"
+    }
+  ],
+
+  "external": [
+    {
+      "stated_in": "docs/decisions/ADR-0015-external.md",
+      "destination": "https://example.com/adr-1",
+      "why": "counted, never fetched, and never an entity: nothing failed and nothing in this repository was named"
+    }
+  ],
+
+  "silent": [
+    {
+      "file": "docs/decisions/ADR-0004-bare-target.md",
+      "why": "the target of a bare identifier states nothing itself"
+    },
+    {
+      "file": "docs/decisions/ADR-0006-section-target.md",
+      "why": "named by another document's section; it writes no field"
+    },
+    {
+      "file": "docs/decisions/ADR-0012-first.md",
+      "why": "one of the two ambiguous identifiers; it writes no field"
+    },
+    {
+      "file": "notes/ADR-0012-second.md",
+      "why": "the other ambiguous identifier; an ADR wherever it sits, and still silent"
+    },
+    {
+      "file": "docs/decisions/ADR-0017-prose-only.md",
+      "why": "prose containing the word, and a code span containing the field's text. Neither is a field"
+    },
+    {
+      "file": "docs/decisions/ADR-0018-status-only.md",
+      "why": "a Superseded status with no target. A status is not a target"
+    },
+    {
+      "file": "docs/decisions/ADR-0019-contradiction-target.md",
+      "why": "the target of ADR-0020; it writes no field of its own"
+    },
+    {
+      "file": "docs/decisions/ADR-0022-code-block.md",
+      "why": "the field is inside a fenced code block, which the block scan resolves before any field is read"
+    },
+    {
+      "file": "notes/old-note.md",
+      "why": "named by design-note.md; it writes no field"
+    },
+    {
+      "file": "README.md",
+      "why": "the corpus README states nothing about supersession"
+    }
+  ],
+
+  "cycles": {
+    "count": 1,
+    "documents": [
+      "docs/decisions/ADR-0007-cycle-a.md",
+      "docs/decisions/ADR-0008-cycle-b.md",
+      "docs/decisions/ADR-0009-cycle-c.md"
+    ],
+    "why": "three documents each transitively replacing the other. Detected, counted and reported; every edge stands, because deleting one to make the graph acyclic would hide evidence and the choice of which to delete would be arbitrary"
+  },
+
+  "contradictions": [
+    {
+      "document": "docs/decisions/ADR-0002-replacement.md",
+      "why": "ADR-0021 supersedes it and its own status still reads Accepted"
+    },
+    {
+      "document": "docs/decisions/ADR-0007-cycle-a.md",
+      "why": "ADR-0009 supersedes it and its own status still reads Accepted"
+    },
+    {
+      "document": "docs/decisions/ADR-0008-cycle-b.md",
+      "why": "ADR-0007 supersedes it and its own status still reads Accepted"
+    },
+    {
+      "document": "docs/decisions/ADR-0009-cycle-c.md",
+      "why": "ADR-0008 supersedes it and its own status still reads Accepted"
+    },
+    {
+      "document": "docs/decisions/ADR-0019-contradiction-target.md",
+      "why": "ADR-0020 supersedes it and its own status still reads Accepted. This is the case the fixture spec names; the other four fall out of the same string comparison applied without exception"
+    }
+  ],
+
+  "chain": {
+    "hops": [
+      "doc:docs/decisions/ADR-0021-chain-head.md",
+      "doc:docs/decisions/ADR-0002-replacement.md",
+      "doc:docs/decisions/ADR-0001-original.md"
+    ],
+    "why": "a chain is a path over SUPERSEDES and needs no storage of its own"
+  },
+
+  "forbidden": [
+    {
+      "from": "doc:docs/decisions/ADR-0017-prose-only.md",
+      "to": "doc:docs/decisions/ADR-0001-original.md",
+      "why": "prose saying the word, and a code span containing the field's text, are not evidence"
+    },
+    {
+      "from": "doc:docs/decisions/ADR-0022-code-block.md",
+      "to": "doc:docs/decisions/ADR-0001-original.md",
+      "why": "a field inside a fenced code block is documentation of the syntax, not a use of it"
+    },
+    {
+      "from": "doc:docs/decisions/ADR-0013-ambiguous-reference.md",
+      "to": "doc:docs/decisions/ADR-0012-first.md",
+      "why": "an ambiguous identifier must never be resolved by path order"
+    },
+    {
+      "from": "doc:docs/decisions/ADR-0013-ambiguous-reference.md",
+      "to": "doc:notes/ADR-0012-second.md",
+      "why": "nor by the other path order"
+    },
+    {
+      "from": "doc:docs/decisions/ADR-0010-self.md",
+      "to": "doc:docs/decisions/ADR-0010-self.md",
+      "why": "a document cannot replace itself, so no self-edge exists to make a one-node cycle"
+    },
+    {
+      "from": "doc:docs/decisions/ADR-0018-status-only.md",
+      "to": "doc:docs/decisions/ADR-0001-original.md",
+      "why": "a Superseded status names nothing, and nothing may be inferred from ADR number adjacency"
+    },
+    {
+      "from": "doc:docs/decisions/ADR-0021-chain-head.md",
+      "to": "doc:docs/decisions/ADR-0001-original.md",
+      "why": "the chain is two hops and must not be collapsed into a transitive edge nobody wrote"
+    }
+  ]
+}

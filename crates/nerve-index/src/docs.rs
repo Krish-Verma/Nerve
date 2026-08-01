@@ -25,7 +25,10 @@ use nerve_core::ids;
 use nerve_core::model::Span;
 use nerve_core::vocab::{Directness, EvidenceSourceType};
 
-use crate::markdown::{self, DocumentScan, HeadingStyle, RawLink, MAX_RAW_STATUS_BYTES};
+use crate::markdown::{
+    self, form, DocumentScan, HeadingStyle, RawLink, MAX_RAW_STATUS_BYTES,
+    MAX_SUPERSESSION_TARGET_BYTES,
+};
 
 /// Extractor identity, recorded on every observation and on its `extractor_run` row.
 pub const EXTRACTOR_ID: &str = "md-structural";
@@ -36,7 +39,11 @@ pub const EXTRACTOR_ID: &str = "md-structural";
 /// links. Output over identical bytes changed, so the version had to move with it — that is the
 /// whole contract of the field, and it is what makes every document re-scan on the first run of
 /// this build rather than keep a graph the current rules would not produce.
-pub const EXTRACTOR_VERSION: &str = "1.1.0";
+///
+/// `1.2.0` is Slice 5d-ii: `SUPERSEDES` edges read out of the four explicit supersession fields.
+/// The same argument applies — a document whose bytes never changed can now produce an edge it
+/// did not produce before, so every document must be re-scanned once on this build.
+pub const EXTRACTOR_VERSION: &str = "1.2.0";
 
 /// The only evidence source type this extractor may emit (ADR-0003, THREAT-MODEL.md T7).
 pub const DECLARED_SOURCE_TYPES: [EvidenceSourceType; 1] = [EvidenceSourceType::DocumentStated];
@@ -150,6 +157,81 @@ impl AdrFacts {
     }
 }
 
+/// Which way a supersession field points.
+///
+/// Both normalise to the **same** stored edge — `A SUPERSEDES B` means A replaces B — with the
+/// endpoints swapped for [`SupersessionDirection::SupersededBy`]. The relation is stored one way
+/// only, so a reverse lookup is a query rather than a second edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupersessionDirection {
+    /// `**Supersedes:** <target>` — this document replaces `<target>`.
+    Supersedes,
+    /// `**Superseded by:** <target>` — `<target>` replaces this document.
+    SupersededBy,
+}
+
+impl SupersessionDirection {
+    /// Value recorded in observation details and in the extraction cache.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SupersessionDirection::Supersedes => "supersedes",
+            SupersessionDirection::SupersededBy => "superseded_by",
+        }
+    }
+}
+
+/// The two field labels, and the two section headings that carry the same meaning.
+///
+/// Closed. Nothing else is evidence of supersession — not a `Superseded` status with no target,
+/// not adjacency of ADR numbers, not similarity of subject, not prose containing the word.
+const SUPERSESSION_LABELS: [(&str, &str, SupersessionDirection); 2] = [
+    (
+        "**Supersedes:**",
+        "Supersedes",
+        SupersessionDirection::Supersedes,
+    ),
+    (
+        "**Superseded by:**",
+        "Superseded by",
+        SupersessionDirection::SupersededBy,
+    ),
+];
+
+/// Which of the two recognised places carried a supersession field.
+pub mod supersession_form {
+    /// A `**Supersedes:**` / `**Superseded by:**` field in the header block.
+    pub const HEADER_LINE: &str = "header-line";
+    /// The first non-empty line of a `## Supersedes` / `## Superseded by` section.
+    pub const SECTION: &str = "supersession-section";
+}
+
+/// One supersession statement a document wrote, **uninterpreted**.
+///
+/// What the target *names* depends on every other file in the repository, so it is decided in
+/// [`crate::docref`] and not here. This type records what the document said and where.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupersessionStatement {
+    /// Which of the two fields carried it.
+    pub direction: SupersessionDirection,
+    /// Which of the two places it was written in. See [`supersession_form`].
+    pub form: &'static str,
+    /// The field value exactly as written, trimmed. Repository content; inert.
+    ///
+    /// Empty when the field was present with nothing after it, and empty when the value was
+    /// longer than [`MAX_SUPERSESSION_TARGET_BYTES`]. Both resolve to `unparsed`; the second is
+    /// additionally counted under [`form::SUPERSESSION_TARGET_TOO_LONG`].
+    pub raw_target: String,
+    /// The destination of the Markdown link the value consists of, when it consists of exactly
+    /// one.
+    ///
+    /// Taken from the link the scanner already recorded rather than re-parsed, so link syntax has
+    /// one definition. `None` when the value is a bare identifier, is empty, or contains more
+    /// than one link — a value naming two destinations names neither unambiguously.
+    pub link_destination: Option<String>,
+    /// The line the field was written on. This is the citation the observation carries.
+    pub span: Span,
+}
+
 /// One section of a document, with the identity it will carry into the graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SectionDef {
@@ -187,6 +269,8 @@ pub struct DocumentExtraction {
     pub sections: Vec<SectionDef>,
     /// ADR recognition and status.
     pub adr: AdrFacts,
+    /// Supersession fields the document wrote, in source order, uninterpreted.
+    pub supersession: Vec<SupersessionStatement>,
     /// Front matter span, when the document opens with one.
     pub front_matter: Option<Span>,
     /// Link destinations the document wrote, in source order, uninterpreted.
@@ -255,7 +339,7 @@ fn file_stem(name: &str) -> &str {
 ///
 /// Returned in canonical upper case with the digits exactly as written, so `adr-0006-x.md` and
 /// `ADR-0006-x.md` produce the same id and `ADR-6` and `ADR-0006` do not.
-fn adr_id_from_name(name: &str) -> Option<String> {
+pub fn adr_id_from_name(name: &str) -> Option<String> {
     let stem = file_stem(name);
     let rest = stem.strip_prefix("ADR-").or_else(|| {
         stem.get(..4)
@@ -264,6 +348,25 @@ fn adr_id_from_name(name: &str) -> Option<String> {
     })?;
     let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
     if digits.is_empty() {
+        return None;
+    }
+    Some(format!("ADR-{digits}"))
+}
+
+/// `ADR-<digits>` when the **whole** of `text` is one, in the same canonical spelling
+/// [`adr_id_from_name`] produces.
+///
+/// Strict where the file-name reader is not: `ADR-0004` is an identifier, `ADR-0004 and others`
+/// is prose. A supersession field's value is a target or it is unparsed, and taking a prefix of
+/// it would be a guess about which of several things the author meant.
+pub fn bare_adr_identifier(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    let prefix = trimmed.get(..4)?;
+    if !prefix.eq_ignore_ascii_case("adr-") {
+        return None;
+    }
+    let digits = &trimmed[4..];
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
     Some(format!("ADR-{digits}"))
@@ -293,6 +396,18 @@ fn status_from_header_line(text: &str) -> Option<&str> {
     } else {
         Some(value)
     }
+}
+
+/// End of the header block: the first level-2-or-deeper heading, or the end of the file.
+///
+/// The same rule the `**Status:**` reader uses, factored out so the two cannot drift: a field
+/// beside the status on one line is in the header block exactly when the status is.
+fn header_block_end(source: &str, scan: &DocumentScan) -> usize {
+    scan.headings
+        .iter()
+        .find(|heading| heading.level >= 2)
+        .map(|heading| heading.heading_span.start_byte)
+        .unwrap_or(source.len())
 }
 
 /// Record a status value, refusing one too long to be a status word.
@@ -328,12 +443,7 @@ fn read_adr(rel_path: &str, source: &str, scan: &DocumentScan) -> AdrFacts {
     }
 
     // Form 1: a `**Status:**` line in the header block, before the first level-2 heading.
-    let header_end = scan
-        .headings
-        .iter()
-        .find(|heading| heading.level >= 2)
-        .map(|heading| heading.heading_span.start_byte)
-        .unwrap_or(source.len());
+    let header_end = header_block_end(source, scan);
     for (line_number, line) in (1usize..).zip(source[..header_end].split('\n')) {
         let line = line.strip_suffix('\r').unwrap_or(line);
         if let Some(value) = status_from_header_line(line) {
@@ -365,6 +475,193 @@ fn read_adr(rel_path: &str, source: &str, scan: &DocumentScan) -> AdrFacts {
         }
     }
     facts
+}
+
+/// `text` with `label` removed from its front, matched case-insensitively.
+///
+/// ASCII-only comparison, so `label.len()` is also the length of the match and the caller can use
+/// it as a byte offset. `get` rather than slicing, so a multi-byte character straddling the
+/// boundary is a non-match rather than a panic.
+fn strip_field_label<'a>(text: &'a str, label: &str) -> Option<&'a str> {
+    let prefix = text.get(..label.len())?;
+    prefix
+        .eq_ignore_ascii_case(label)
+        .then(|| &text[label.len()..])
+}
+
+/// The `·`-separated fields of one header line, each with its byte offset within the line.
+///
+/// Nerve's own ADRs write `**Status:** Accepted · **Date:** 2026-07-31 · **Slice:** 3b`, so a
+/// `**Supersedes:**` field may sit beside other fields on one line and a value ends at the first
+/// `·` as well as at the end of the line. That is the same rule [`status_from_header_line`]
+/// applies; this splits so that the *second* field on a line can be read too.
+fn header_fields(text: &str) -> Vec<(usize, &str)> {
+    let mut fields = Vec::new();
+    let mut offset = 0usize;
+    for field in text.split('·') {
+        fields.push((offset, field));
+        offset += field.len() + '·'.len_utf8();
+    }
+    fields
+}
+
+/// Read one field value out of a line, returning it with its byte range within `text`.
+///
+/// The trailing `*` strip mirrors the status reader, so `**Supersedes:** ADR-1**` and
+/// `**Supersedes:** ADR-1` are the same value.
+fn supersession_field(text: &str, label: &str) -> Option<(usize, usize)> {
+    for (field_offset, field) in header_fields(text) {
+        let lead = field.len() - field.trim_start().len();
+        let Some(rest) = strip_field_label(field.trim_start(), label) else {
+            continue;
+        };
+        let rest_offset = field_offset + lead + label.len();
+        let value_lead = rest.len() - rest.trim_start().len();
+        let value = rest.trim().trim_end_matches('*').trim();
+        let start = rest_offset + value_lead;
+        return Some((start, start + value.len()));
+    }
+    None
+}
+
+/// Accumulates the supersession statements of one document while it is being read.
+struct SupersessionScan<'a> {
+    source: &'a str,
+    links: &'a [RawLink],
+    unsupported: &'a mut BTreeMap<String, usize>,
+    statements: Vec<SupersessionStatement>,
+}
+
+impl SupersessionScan<'_> {
+    /// Record one statement, refusing a value too long to be a target.
+    fn push(
+        &mut self,
+        direction: SupersessionDirection,
+        form_tag: &'static str,
+        value: (usize, usize),
+        line: markdown::ProseLine,
+    ) {
+        let raw = &self.source[value.0..value.1];
+        let raw_target = if raw.len() > MAX_SUPERSESSION_TARGET_BYTES {
+            *self
+                .unsupported
+                .entry(form::SUPERSESSION_TARGET_TOO_LONG.to_string())
+                .or_insert(0) += 1;
+            String::new()
+        } else {
+            raw.to_string()
+        };
+
+        // The link the scanner already recorded, when the value consists of exactly one. Two
+        // destinations in one field name neither unambiguously, so the value stays a bare string
+        // and resolves as unparsed.
+        let mut inside = self
+            .links
+            .iter()
+            .filter(|link| value.0 <= link.span.start_byte && link.span.start_byte < value.1);
+        let link_destination = match (inside.next(), inside.next()) {
+            (Some(link), None) if !raw_target.is_empty() => Some(link.destination.clone()),
+            _ => None,
+        };
+
+        self.statements.push(SupersessionStatement {
+            direction,
+            form: form_tag,
+            raw_target,
+            link_destination,
+            span: Span {
+                start_byte: line.start,
+                end_byte: line.end,
+                start_line: line.number,
+                start_col: 0,
+                end_line: line.number,
+                end_col: line.end - line.start,
+            },
+        });
+    }
+}
+
+/// Read every supersession field a document wrote. Four forms, and nothing else.
+///
+/// | Form | Meaning |
+/// |---|---|
+/// | `**Supersedes:** <target>` in the header block | this document supersedes `<target>` |
+/// | `**Superseded by:** <target>` in the header block | `<target>` supersedes this document |
+/// | First non-empty line of a `## Supersedes` section | as above |
+/// | First non-empty line of a `## Superseded by` section | as above |
+///
+/// Every line considered comes from [`DocumentScan::prose_lines`], which is exactly the set of
+/// lines the block scan classified as prose. That is what suppresses a field written inside a
+/// fenced code block: not a rule applied here, but a line this function is never shown.
+///
+/// Unlike the status reader this does **not** stop at the first match. A document that both
+/// supersedes one decision and is superseded by another states two facts, and reading only the
+/// first would silently drop one of them.
+fn read_supersession(
+    source: &str,
+    scan: &DocumentScan,
+    unsupported: &mut BTreeMap<String, usize>,
+) -> Vec<SupersessionStatement> {
+    let mut scanner = SupersessionScan {
+        source,
+        links: &scan.links,
+        unsupported,
+        statements: Vec::new(),
+    };
+
+    // Forms 1 and 2: fields in the header block, in source order.
+    let header_end = header_block_end(source, scan);
+    for line in scan
+        .prose_lines
+        .iter()
+        .filter(|line| line.start < header_end)
+    {
+        let text = &source[line.start..line.end];
+        for (label, _, direction) in SUPERSESSION_LABELS {
+            let Some((start, end)) = supersession_field(text, label) else {
+                continue;
+            };
+            scanner.push(
+                direction,
+                supersession_form::HEADER_LINE,
+                (line.start + start, line.start + end),
+                *line,
+            );
+        }
+    }
+
+    // Forms 3 and 4: the first non-empty prose line of a section named for the field.
+    for (_, heading_text, direction) in SUPERSESSION_LABELS {
+        let Some(section) = scan
+            .headings
+            .iter()
+            .find(|heading| heading.text.trim().eq_ignore_ascii_case(heading_text))
+        else {
+            continue;
+        };
+        let body_start = section.heading_span.end_byte.min(source.len());
+        let body_end = section.section_span.end_byte.min(source.len());
+        let Some(line) = scan
+            .prose_lines
+            .iter()
+            .find(|line| line.start >= body_start && line.end <= body_end)
+        else {
+            continue;
+        };
+        // A prose line is never blank by construction, so the first one found is the first
+        // non-empty line of the section.
+        let text = &source[line.start..line.end];
+        let value = text.trim();
+        let lead = text.len() - text.trim_start().len();
+        scanner.push(
+            direction,
+            supersession_form::SECTION,
+            (line.start + lead, line.start + lead + value.len()),
+            *line,
+        );
+    }
+
+    scanner.statements
 }
 
 /// Turn the scanner's flat heading list into a nested section tree with stable identities.
@@ -423,15 +720,18 @@ fn build_sections(project_id: &str, rel_path: &str, scan: &DocumentScan) -> Vec<
 pub fn extract_document(project_id: &str, rel_path: &str, source: &str) -> DocumentExtraction {
     let scan = markdown::scan(source);
     let line_count = scan.line_count.max(1);
+    let mut unsupported = scan.counters.unsupported.clone();
+    let supersession = read_supersession(source, &scan, &mut unsupported);
     DocumentExtraction {
         rel_path: rel_path.to_string(),
         entity_id: ids::document_id(project_id, rel_path),
         sections: build_sections(project_id, rel_path, &scan),
         adr: read_adr(rel_path, source, &scan),
+        supersession,
         front_matter: scan.front_matter,
         links: scan.links.clone(),
         code_span_mentions: scan.code_span_mentions,
-        unsupported: scan.counters.unsupported.clone(),
+        unsupported,
         file_span: Span {
             start_byte: 0,
             end_byte: source.len(),
@@ -709,6 +1009,141 @@ mod tests {
             Some("Child"),
             "the enclosing `Top` section covers it too; the innermost wins"
         );
+    }
+
+    fn supersession(source: &str) -> Vec<(&'static str, &'static str, String, Option<String>)> {
+        extract("docs/decisions/ADR-0100-x.md", source)
+            .supersession
+            .into_iter()
+            .map(|statement| {
+                (
+                    statement.direction.as_str(),
+                    statement.form,
+                    statement.raw_target,
+                    statement.link_destination,
+                )
+            })
+            .collect()
+    }
+
+    /// The exact shape the fixture corpus writes: the field sits beside the status on one line.
+    #[test]
+    fn a_supersedes_field_is_read_beside_other_fields_on_one_header_line() {
+        assert_eq!(
+            supersession("# T\n\n**Status:** Accepted · **Supersedes:** ADR-0004\n\ntext\n"),
+            vec![(
+                "supersedes",
+                supersession_form::HEADER_LINE,
+                "ADR-0004".to_string(),
+                None
+            )]
+        );
+        assert_eq!(
+            supersession(
+                "# T\n\n**Status:** Superseded · **Superseded by:** [ADR-2](ADR-2-x.md)\n"
+            ),
+            vec![(
+                "superseded_by",
+                supersession_form::HEADER_LINE,
+                "[ADR-2](ADR-2-x.md)".to_string(),
+                Some("ADR-2-x.md".to_string())
+            )]
+        );
+    }
+
+    /// A document may state both directions. Stopping at the first would drop one of them.
+    #[test]
+    fn both_directions_can_be_stated_by_one_document() {
+        let read = supersession(
+            "# T\n\n**Supersedes:** ADR-0001\n**Superseded by:** ADR-0003\n\n## Context\n",
+        );
+        assert_eq!(read.len(), 2);
+        assert_eq!(read[0].0, "supersedes");
+        assert_eq!(read[1].0, "superseded_by");
+    }
+
+    #[test]
+    fn a_section_supplies_the_target_when_no_header_field_does() {
+        assert_eq!(
+            supersession("# T\n\n**Status:** Superseded\n\n## Superseded by\n\nADR-0006\n"),
+            vec![(
+                "superseded_by",
+                supersession_form::SECTION,
+                "ADR-0006".to_string(),
+                None
+            )]
+        );
+        assert_eq!(
+            supersession("# T\n\n## Supersedes\n\n[a](./a.md)\n")[0].3,
+            Some("./a.md".to_string())
+        );
+    }
+
+    /// The field is present and says nothing. That is a value, not an absence.
+    #[test]
+    fn an_empty_field_is_recorded_rather_than_skipped() {
+        let read = supersession("# T\n\n**Status:** Accepted · **Supersedes:**\n\ntext\n");
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].2, "");
+        assert_eq!(read[0].3, None);
+    }
+
+    /// Block structure is resolved before this function runs, so a field inside a fence is a line
+    /// it is never shown.
+    #[test]
+    fn a_field_inside_a_fenced_code_block_produces_no_statement() {
+        let source = "# T\n\n**Status:** Accepted\n\n```markdown\n**Supersedes:** ADR-0001\n```\n";
+        assert!(supersession(source).is_empty());
+    }
+
+    /// Prose containing the word, and a code span containing the field's text, are not fields.
+    #[test]
+    fn prose_and_a_code_span_are_not_evidence_of_supersession() {
+        let source = "# T\n\n**Status:** Accepted\n\n\
+                      This supersedes ADR-0001 in spirit, and `Supersedes: ADR-0001` is a span.\n";
+        assert!(supersession(source).is_empty());
+    }
+
+    /// A field written after the header block is not a header field, and a section not named for
+    /// one of the two labels is not a supersession section.
+    #[test]
+    fn a_field_outside_the_header_block_and_an_unrelated_section_produce_nothing() {
+        let source = "# T\n\n## Context\n\n**Supersedes:** ADR-0001\n";
+        assert!(supersession(source).is_empty());
+    }
+
+    #[test]
+    fn a_value_too_long_to_be_a_target_is_refused_and_counted() {
+        let long = "x".repeat(MAX_SUPERSESSION_TARGET_BYTES + 1);
+        let source = format!("# T\n\n**Supersedes:** {long}\n");
+        let extraction = extract("docs/decisions/ADR-0101-x.md", &source);
+        assert_eq!(extraction.supersession.len(), 1);
+        assert_eq!(extraction.supersession[0].raw_target, "");
+        assert_eq!(
+            extraction
+                .unsupported
+                .get(form::SUPERSESSION_TARGET_TOO_LONG),
+            Some(&1)
+        );
+    }
+
+    #[test]
+    fn a_bare_identifier_is_the_whole_value_or_it_is_not_one() {
+        assert_eq!(
+            bare_adr_identifier("ADR-0004"),
+            Some("ADR-0004".to_string())
+        );
+        assert_eq!(bare_adr_identifier(" adr-12 "), Some("ADR-12".to_string()));
+        for text in [
+            "ADR-0004 and others",
+            "ADR-",
+            "ADR",
+            "",
+            "the old note",
+            "ADR-4x",
+        ] {
+            assert_eq!(bare_adr_identifier(text), None, "{text}");
+        }
     }
 
     /// The scanner's block ordering, restated where the extractor consumes it: a destination

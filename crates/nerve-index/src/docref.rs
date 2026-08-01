@@ -57,6 +57,7 @@ use std::path::Path;
 use nerve_core::model::Span;
 
 use crate::discover;
+use crate::docs::{SupersessionDirection, SupersessionStatement};
 use crate::error::IndexError;
 use crate::markdown::{LinkForm, RawLink};
 
@@ -74,6 +75,28 @@ pub mod reason {
     pub const REFUSED: &str = "document_link_refused";
     /// A `#L<n>` anchor that no symbol covers, or that lies past the end of the file.
     pub const ANCHOR_NO_SYMBOL: &str = "document_anchor_no_symbol";
+
+    // ---- supersession (Slice 5d-ii) --------------------------------------------------------
+    //
+    // Same closed-vocabulary contract as the three above, and deliberately in the same module:
+    // one place enumerates every reason a document reference can fail to name something, whether
+    // the reference was a link or a supersession field.
+
+    /// The field named a target and no indexed **document** matches it.
+    ///
+    /// Covers a `ADR-9999` nothing carries, a path naming no indexed file, and a path naming an
+    /// indexed file that is not a document — the `SUPERSEDES` relation runs between documents,
+    /// and a `.ts` file has no `Document` entity to point at.
+    pub const SUPERSEDES_TARGET_NOT_INDEXED: &str = "document_supersedes_target_not_indexed";
+    /// More than one indexed document carries the identifier the field named.
+    ///
+    /// Refused rather than broken by declaration order or by path order. Which of two `ADR-0012`
+    /// documents an author meant is exactly the guess ADR-0002 forbids.
+    pub const SUPERSEDES_TARGET_AMBIGUOUS: &str = "document_supersedes_target_ambiguous";
+    /// The field named the document it is written in. A document cannot replace itself.
+    pub const SUPERSEDES_SELF: &str = "document_supersedes_self";
+    /// The field was present and its value is empty, too long, or not a target form.
+    pub const SUPERSEDES_UNPARSED: &str = "document_supersedes_unparsed";
 }
 
 /// Outcome tags counted per document and reported over the whole repository.
@@ -90,6 +113,12 @@ pub mod outcome {
     pub const EXTERNAL: &str = "document_link_external";
     /// A destination that is only a `#fragment`.
     pub const FRAGMENT_ONLY: &str = "document_link_fragment_only";
+
+    /// A supersession field that resolved to exactly one indexed document.
+    pub const SUPERSEDES_RESOLVED: &str = "document_supersedes_resolved";
+    /// A supersession field naming an external destination. Counted, never fetched, never an
+    /// entity: nothing failed, and nothing in this repository was named.
+    pub const SUPERSEDES_EXTERNAL: &str = "document_supersedes_external";
 }
 
 /// A `#L<n>` or `#L<n>-L<m>` line anchor.
@@ -498,6 +527,191 @@ pub fn resolve_document_links(
     resolved
 }
 
+/// What one supersession field's target resolved to.
+///
+/// Six values, closed, and every one of them recorded: five produce an `Unresolved` entity with
+/// the matching reason, and [`SupersessionOutcome::External`] produces a counter and nothing
+/// else, because nothing failed and nothing in this repository was named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SupersessionOutcome {
+    /// Exactly one indexed document. This is the only outcome that produces an edge.
+    Document {
+        /// Repository-relative path of the target document.
+        path: String,
+    },
+    /// A reference to something outside the repository. Counted, never fetched.
+    External {
+        /// The scheme as written, or `//` for a protocol-relative destination.
+        scheme: String,
+    },
+    /// The path guard refused it, or it climbed above the repository root.
+    Refused,
+    /// The target named no indexed document.
+    NotIndexed,
+    /// More than one indexed document carries the identifier named.
+    Ambiguous {
+        /// Every path that matched, sorted. Recorded so the refusal names what it refused.
+        candidates: Vec<String>,
+    },
+    /// The target is the document the field is written in.
+    SelfTarget,
+    /// The field was present and its value is empty, too long, or not a target form.
+    Unparsed,
+}
+
+impl SupersessionOutcome {
+    /// The counter key this outcome contributes.
+    pub fn counter_key(&self) -> &'static str {
+        match self {
+            SupersessionOutcome::Document { .. } => outcome::SUPERSEDES_RESOLVED,
+            SupersessionOutcome::External { .. } => outcome::SUPERSEDES_EXTERNAL,
+            SupersessionOutcome::Refused => reason::REFUSED,
+            SupersessionOutcome::NotIndexed => reason::SUPERSEDES_TARGET_NOT_INDEXED,
+            SupersessionOutcome::Ambiguous { .. } => reason::SUPERSEDES_TARGET_AMBIGUOUS,
+            SupersessionOutcome::SelfTarget => reason::SUPERSEDES_SELF,
+            SupersessionOutcome::Unparsed => reason::SUPERSEDES_UNPARSED,
+        }
+    }
+
+    /// The reason recorded on an `Unresolved` entity, when this outcome produces one.
+    pub fn unresolved_reason(&self) -> Option<&'static str> {
+        match self {
+            SupersessionOutcome::Document { .. } | SupersessionOutcome::External { .. } => None,
+            other => Some(other.counter_key()),
+        }
+    }
+}
+
+/// Every indexed document whose file name carries `identifier`, sorted.
+///
+/// **Pure**: no filesystem access. It exists so that change detection can ask "would this bare
+/// identifier resolve differently now?" the same way [`resolve_path`] lets it ask that about a
+/// link destination.
+pub fn resolve_adr_identifier(identifier: &str, paths: &BTreeSet<String>) -> Vec<String> {
+    let Some(wanted) = crate::docs::bare_adr_identifier(identifier) else {
+        return Vec::new();
+    };
+    paths
+        .iter()
+        .filter(|path| crate::lang::path_is_document(path))
+        .filter(|path| {
+            let name = match path.rfind('/') {
+                Some(index) => &path[index + 1..],
+                None => path.as_str(),
+            };
+            crate::docs::adr_id_from_name(name).as_deref() == Some(wanted.as_str())
+        })
+        .cloned()
+        .collect()
+}
+
+/// Resolve one supersession target. Two mechanisms, tried in order, and nothing else.
+///
+/// 1. **A Markdown link.** Routed through [`resolve_destination`] — the same path normalisation,
+///    the same repository-root containment, the same refusals. No second resolution rule exists,
+///    which is what keeps `**Supersedes:** [x](../../etc/passwd)` refused for the same reason
+///    `[x](../../etc/passwd)` in prose is.
+/// 2. **A bare `ADR-<digits>` identifier**, resolved against the identifiers parsed from indexed
+///    document file names.
+///
+/// A resolved path that is not a document is [`SupersessionOutcome::NotIndexed`]: `SUPERSEDES`
+/// runs between documents, and a `.ts` file has no `Document` entity to be the far end of one.
+pub fn resolve_supersession(
+    root: &Path,
+    document_rel_path: &str,
+    raw_target: &str,
+    link_destination: Option<&str>,
+    corpus: &Corpus<'_>,
+) -> SupersessionOutcome {
+    if let Some(destination) = link_destination {
+        return match resolve_destination(root, document_rel_path, destination, corpus) {
+            LinkOutcome::External { scheme } => SupersessionOutcome::External { scheme },
+            LinkOutcome::Refused => SupersessionOutcome::Refused,
+            // A bare `#heading` names a place inside this document, not a document. Heading
+            // anchors are not modelled, so there is nothing here to resolve against.
+            LinkOutcome::FragmentOnly => SupersessionOutcome::Unparsed,
+            LinkOutcome::NotIndexed { .. } => SupersessionOutcome::NotIndexed,
+            LinkOutcome::File { path, .. } => {
+                if path == document_rel_path {
+                    SupersessionOutcome::SelfTarget
+                } else if crate::lang::path_is_document(&path) {
+                    SupersessionOutcome::Document { path }
+                } else {
+                    SupersessionOutcome::NotIndexed
+                }
+            }
+        };
+    }
+
+    let Some(identifier) = crate::docs::bare_adr_identifier(raw_target) else {
+        return SupersessionOutcome::Unparsed;
+    };
+    let mut candidates = resolve_adr_identifier(&identifier, corpus.indexed);
+    match candidates.len() {
+        0 => SupersessionOutcome::NotIndexed,
+        1 if candidates[0] == document_rel_path => SupersessionOutcome::SelfTarget,
+        1 => SupersessionOutcome::Document {
+            path: candidates.remove(0),
+        },
+        _ => SupersessionOutcome::Ambiguous { candidates },
+    }
+}
+
+/// One resolved supersession statement, ready for the graph builder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupersessionSite {
+    /// Which field carried it, and therefore which way the stored edge points.
+    pub direction: SupersessionDirection,
+    /// Which of the two recognised places it was written in.
+    pub form: &'static str,
+    /// The field value exactly as written. Repository content; inert.
+    pub raw_target: String,
+    /// The line the field was written on. The citation the observation carries.
+    pub span: Span,
+    /// What resolution concluded.
+    pub outcome: SupersessionOutcome,
+}
+
+/// Everything resolution concluded about one document's supersession fields.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DocumentSupersessions {
+    /// Resolved sites, in source order.
+    pub sites: Vec<SupersessionSite>,
+    /// Outcome tallies by key. Every key is from [`outcome`] or [`reason`].
+    pub outcomes: BTreeMap<String, usize>,
+}
+
+/// Resolve every supersession field in one document.
+pub fn resolve_document_supersessions(
+    root: &Path,
+    document_rel_path: &str,
+    statements: &[SupersessionStatement],
+    corpus: &Corpus<'_>,
+) -> DocumentSupersessions {
+    let mut resolved = DocumentSupersessions::default();
+    for statement in statements {
+        let outcome = resolve_supersession(
+            root,
+            document_rel_path,
+            &statement.raw_target,
+            statement.link_destination.as_deref(),
+            corpus,
+        );
+        *resolved
+            .outcomes
+            .entry(outcome.counter_key().to_string())
+            .or_insert(0) += 1;
+        resolved.sites.push(SupersessionSite {
+            direction: statement.direction,
+            form: statement.form,
+            raw_target: statement.raw_target.clone(),
+            span: statement.span,
+            outcome,
+        });
+    }
+    resolved
+}
+
 /// Every destination a document wrote, deduplicated and sorted.
 ///
 /// This is the document counterpart of [`crate::facts::ModuleFacts::import_specifiers`], and it
@@ -684,6 +898,143 @@ mod tests {
         assert_eq!(
             cached_destinations(&[link("./b.md"), link("./a.md"), link("./b.md")]),
             vec!["./a.md".to_string(), "./b.md".to_string()]
+        );
+    }
+
+    /// A bare identifier resolves against document file names only, and returns **every** match
+    /// rather than the first: the count is what decides between resolved and ambiguous.
+    #[test]
+    fn a_bare_identifier_resolves_against_every_indexed_document_that_carries_it() {
+        let set = indexed(&[
+            "docs/decisions/ADR-0012-first.md",
+            "notes/ADR-0012-second.md",
+            "docs/decisions/ADR-0004-target.md",
+            "src/ADR-0004-lookalike.ts",
+        ]);
+        assert_eq!(
+            resolve_adr_identifier("ADR-0004", &set),
+            vec!["docs/decisions/ADR-0004-target.md".to_string()],
+            "a source file whose name looks like an ADR is not a document"
+        );
+        assert_eq!(
+            resolve_adr_identifier("ADR-0012", &set),
+            vec![
+                "docs/decisions/ADR-0012-first.md".to_string(),
+                "notes/ADR-0012-second.md".to_string()
+            ]
+        );
+        assert!(resolve_adr_identifier("ADR-9999", &set).is_empty());
+        assert!(resolve_adr_identifier("the old note", &set).is_empty());
+        // `ADR-12` and `ADR-0012` are different identifiers, and neither is coerced to the other.
+        assert!(resolve_adr_identifier("ADR-12", &set).is_empty());
+    }
+
+    /// Every row of the plan's outcome table, over one corpus.
+    #[test]
+    fn every_supersession_outcome_is_reachable_and_distinct() {
+        let set = indexed(&[
+            "docs/decisions/ADR-0001-a.md",
+            "docs/decisions/ADR-0002-b.md",
+            "docs/decisions/ADR-0012-first.md",
+            "notes/ADR-0012-second.md",
+            "src/app.ts",
+        ]);
+        let symbols = BTreeMap::new();
+        let hashes = BTreeMap::new();
+        let corpus = Corpus {
+            indexed: &set,
+            symbols: &symbols,
+            content_hashes: &hashes,
+        };
+        let root = std::env::temp_dir();
+        let here = "docs/decisions/ADR-0001-a.md";
+        let resolve =
+            |raw: &str, link: Option<&str>| resolve_supersession(&root, here, raw, link, &corpus);
+
+        assert_eq!(
+            resolve("ADR-0002", None),
+            SupersessionOutcome::Document {
+                path: "docs/decisions/ADR-0002-b.md".to_string()
+            }
+        );
+        assert_eq!(
+            resolve("[b](ADR-0002-b.md)", Some("ADR-0002-b.md")),
+            SupersessionOutcome::Document {
+                path: "docs/decisions/ADR-0002-b.md".to_string()
+            }
+        );
+        assert_eq!(resolve("ADR-9999", None), SupersessionOutcome::NotIndexed);
+        assert_eq!(
+            resolve("ADR-0012", None),
+            SupersessionOutcome::Ambiguous {
+                candidates: vec![
+                    "docs/decisions/ADR-0012-first.md".to_string(),
+                    "notes/ADR-0012-second.md".to_string()
+                ]
+            }
+        );
+        assert_eq!(resolve("ADR-0001", None), SupersessionOutcome::SelfTarget);
+        assert_eq!(
+            resolve("[me](ADR-0001-a.md)", Some("ADR-0001-a.md")),
+            SupersessionOutcome::SelfTarget
+        );
+        assert_eq!(resolve("", None), SupersessionOutcome::Unparsed);
+        assert_eq!(
+            resolve("the old decision", None),
+            SupersessionOutcome::Unparsed
+        );
+        assert_eq!(
+            resolve(
+                "[e](../../../../etc/passwd)",
+                Some("../../../../etc/passwd")
+            ),
+            SupersessionOutcome::Refused
+        );
+        assert_eq!(
+            resolve(
+                "[x](https://example.invalid/x)",
+                Some("https://example.invalid/x")
+            ),
+            SupersessionOutcome::External {
+                scheme: "https".to_string()
+            }
+        );
+        // `SUPERSEDES` runs between documents. A code file has no `Document` entity to be the
+        // far end of one, so naming it is a target that is not indexed *as a document*.
+        assert_eq!(
+            resolve("[a](../../src/app.ts)", Some("../../src/app.ts")),
+            SupersessionOutcome::NotIndexed
+        );
+
+        // Every outcome maps to its own counter key, and only the two that name something real
+        // decline to produce an `Unresolved` entity.
+        let keys: BTreeSet<&str> = [
+            SupersessionOutcome::Document {
+                path: "x".to_string(),
+            },
+            SupersessionOutcome::External {
+                scheme: "https".to_string(),
+            },
+            SupersessionOutcome::Refused,
+            SupersessionOutcome::NotIndexed,
+            SupersessionOutcome::Ambiguous { candidates: vec![] },
+            SupersessionOutcome::SelfTarget,
+            SupersessionOutcome::Unparsed,
+        ]
+        .iter()
+        .map(SupersessionOutcome::counter_key)
+        .collect();
+        assert_eq!(keys.len(), 7, "two outcomes share a counter key");
+        assert_eq!(
+            SupersessionOutcome::Document {
+                path: "x".to_string()
+            }
+            .unresolved_reason(),
+            None
+        );
+        assert_eq!(
+            SupersessionOutcome::SelfTarget.unresolved_reason(),
+            Some(reason::SUPERSEDES_SELF)
         );
     }
 
