@@ -163,12 +163,28 @@ not exist. Verified to fail correctly by injecting `Command::new` into `gitinfo.
 
 ### T11 — Unbounded request-header read in the HTTP server (A3) — **accepted risk**
 
-`tiny_http 0.12.0` reads request header lines without an upper bound (`client.rs::read_next_line`
-grows a buffer until CRLF). A local process — including one owned by *another* local user, since
-loopback is reachable by any local UID — can exhaust memory by sending a header line that never
-terminates.
+**Re-examined 2026-07-31 against the vendored source, as the corrective item required.** The
+original finding is confirmed and is slightly wider than first recorded. `tiny_http 0.12.0` is
+unbounded in **two** independent ways:
 
-**Why this is accepted rather than fixed now:**
+1. **Line length.** `client.rs::read_next_line` (lines 79–100) pushes bytes into a `Vec` in a
+   `loop` until it sees CRLF, with no ceiling. A header line that never terminates grows it
+   without limit.
+2. **Header count.** `client.rs::read` (lines 116–129) reads header lines in a `loop` that exits
+   only on an empty line, pushing each into a `Vec` with no cap. An attacker need not send one
+   enormous line; an endless stream of short ones has the same effect.
+
+**No mitigation is reachable at Nerve's layer.** This was checked, not assumed:
+
+- `ServerConfig` (`lib.rs:174`) exposes exactly two fields, `addr` and `ssl`. There is no limit,
+  timeout or capacity knob.
+- `Server::from_listener` accepts `L: Into<Listener>`, but `Listener` (`connection.rs:11`) is a
+  **closed enum** over `TcpListener` and `UnixListener`, with `From` impls only for those two.
+  There is no seam through which a length-limited reader or a socket read timeout can be injected.
+- The header read happens on tiny_http's own thread before `recv()` returns, so nothing in Nerve's
+  routing, guard or worker pool is reached in time to intervene.
+
+**Why this remains accepted rather than fixed:**
 - The impact is **availability of the user's own development tool**, not confidentiality or
   integrity. No data is disclosed: the header is consumed before `recv()` returns, so the request
   never reaches routing, and the token gate is not the thing being bypassed.
@@ -214,4 +230,4 @@ responsive, because the accept/read pool is separate from the query workers.
 |---|---|
 | **No-subprocess test.** T1 was guaranteed only by inspection. | ✅ **Done** — `crates/nerve-cli/tests/no_subprocess.rs`, 4 tests, mutation-verified |
 | **Networking terminology.** Docs and tests claimed "no networking crates", which became false when `tiny_http` landed. | ✅ **Done** — the claim is now "no outbound network client", with the inbound listener named explicitly |
-| **T11 availability bound.** `tiny_http` header read is unbounded. | ⬜ Open — see T11; re-examine before private beta |
+| **T11 availability bound.** `tiny_http` header read is unbounded. | ✅ **Investigated 2026-07-31** — confirmed and widened (line length *and* header count), and proven unfixable at Nerve's layer: `ServerConfig` has no knob and `Listener` is a closed enum. Remains an **accepted** local-availability risk with the revisit conditions in T11 unchanged. |

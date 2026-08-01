@@ -12,7 +12,8 @@ Authoritative slice list. Update the status column at the end of every slice.
 | 3b | Normalize repository state out of `occurrence`/`observation` and out of `occurrence_id` — removes the O(repository) restatement pass | ✅ Complete (2026-07-31) — 306 tests; **24.9% → 2.0%**; counted-writes gate; found and fixed a silent data-destruction bug |
 | 4a | `nerve serve` — loopback HTTP, read-only JSON API, T4/T5/T6 security controls | ✅ Complete (2026-07-31) — 427 tests; token/origin/host/traversal/symlink/XSS all attack-verified |
 | 4b | `apps/nerve-web` — the visual explorer SPA, asset embedding, screenshot QA | ✅ Complete (2026-07-31) — 435 tests, 31 screenshots reviewed, 0 CSP violations; **fixed a 4a bug that made the UI unloadable** |
-| 5 | Markdown + ADR evidence — sections, citations, document↔code identity links | ⬜ Not started |
+| 5a | Markdown + ADR ingestion — `Document`/`Section` entities, `CONTAINS` structure, ADR status, T7 controls | ⬜ Not started |
+| 5b | Document↔code links — `REFERENCES` by explicit path, `SUPERSEDES`, unresolved reasons, measured precision | ⬜ Not started |
 | 6 | Test evidence (**coverage only**) — `TEST_COVERS_SYMBOL`, freshness, affected-test experiment | ⬜ Not started |
 | 7 | CLI + query expansion — `impact`, `gaps`, `check`, evidence packets | ⬜ Not started |
 | 8 | MCP — one default investigation tool | ⬜ Not started |
@@ -109,6 +110,21 @@ surfaces. It is split into **2a** (resolution + relations + measured precision) 
 - **Found and fixed a silent data-destruction bug**: only `nerve init` migrated, so a v3 binary
   indexing an un-migrated v2 database dropped every insert after deleting rows — 49 entities to
   33, exit code 0. Report: `docs/reports/slice-03b-report.md`.
+
+## Slice 5 scope split (2026-07-31)
+
+Row 5 was one row covering an ingestion path, a resolver with a precision gate, an invalidation
+extension and a UI surface. It is split into **5a** (ingestion, structure, ADR status, T7) and
+**5b** (link resolution, precision gate, surfacing) on the same seam as 2a/2b and 4a/4b, and for
+the same recorded reason: a slice bundling two surfaces stalled an implementation agent, and the
+same work split in two succeeded. Rationale, pushback and acceptance criteria:
+`docs/plans/slice-05-document-evidence.md`.
+
+Four points of pushback are recorded there and are binding on the implementation: the briefed
+relation names (`DOCUMENT_CONTAINS_SECTION`, …) are rejected because Nerve's relation vocabulary is
+endpoint-kind-agnostic; `ADR_DESCRIBES_COMPONENT` is refused as non-deterministic; "ADR status" is
+a property, not an entity; and `tree-sitter-md` is rejected because it requires tree-sitter 0.26
+against this workspace's 0.25.
 
 ## Security gate
 
