@@ -4,10 +4,26 @@
 //! be byte-identical across runs, and an ordered parallel merge is a later slice — introducing
 //! it alongside deletion and invalidation would confound two new causes of divergence.
 //!
-//! Two extractors run per index, each with its own `extractor_run` row and its own batch
+//! Three extractors run per index, each with its own `extractor_run` row and its own batch
 //! verified against its own declared source types. Keeping them separate is what makes a
 //! `DELETE FROM observation WHERE extractor_id = 'ts-js-reference'` a complete retraction of
 //! everything resolution claimed, with the structural graph untouched.
+//!
+//! # Documents (Slice 5a)
+//!
+//! `md-structural` runs over the discovered `.md` / `.markdown` files. The split is total: a
+//! document is never parsed with a grammar, never enters module resolution, and never
+//! contributes an observation that is not `DOCUMENT_STATED`. The last of those is the
+//! THREAT-MODEL.md **T7** control, and it is stated as an invariant over the whole database
+//! rather than as a rule each emission site is trusted to follow —
+//!
+//! > No observation whose `file_path` is a document has any `evidence_source_type` other than
+//! > `DOCUMENT_STATED`.
+//!
+//! That is why `md-structural`, not `ts-js-structural`, emits a document's `File` entity and the
+//! `CONTAINS` edge that holds it: those observations cite a `.md` path, so they fall on the
+//! document side of the invariant. Directory containment stays with `ts-js-structural`, because
+//! its evidence cites a directory rather than any file.
 //!
 //! # Incremental indexing (Slice 3)
 //!
@@ -63,6 +79,7 @@ use nerve_core::vocab::{Directness, EntityKind, EvidenceSourceType, Relation, Un
 
 use crate::config::{self, Config};
 use crate::discover;
+use crate::docs::{self, DocumentExtraction};
 use crate::error::{IndexError, Result};
 use crate::exports::ExportIndex;
 use crate::extract::{
@@ -71,7 +88,7 @@ use crate::extract::{
 use crate::facts::{self, ModuleFacts};
 use crate::gitinfo;
 use crate::incremental::{self, MoveCandidate, PreviousModule};
-use crate::lang::Language;
+use crate::lang::{path_is_document, FileKind, Language, MARKDOWN_LANGUAGE};
 use crate::refs::{self, RefTarget, ReferenceExtraction};
 use crate::resolve;
 
@@ -213,6 +230,19 @@ pub struct IndexOutcome {
     pub unmodelled_call_sites: usize,
     /// Breakdown of the above by form tag.
     pub unmodelled_by_form: BTreeMap<String, usize>,
+    /// Documents read, over the whole repository.
+    pub documents_processed: usize,
+    /// Documents recognised as ADRs.
+    pub adr_documents: usize,
+    /// Sections the documents contributed.
+    pub document_sections: usize,
+    /// Markdown constructs refused by the scanner, over the whole repository.
+    ///
+    /// Every resource bound and every construct outside the supported subset lands here. Nothing
+    /// is truncated silently: a document that hit a bound says so through this map.
+    pub unsupported_markdown: usize,
+    /// Breakdown of the above by form tag.
+    pub unsupported_markdown_by_form: BTreeMap<String, usize>,
     /// Entity counts by kind, over the whole database.
     pub entities_by_kind: BTreeMap<String, i64>,
     /// Assertion counts by relation, over the whole database.
@@ -237,10 +267,17 @@ pub struct IndexOutcome {
 
 struct LoadedFile {
     rel_path: String,
-    language: Language,
+    kind: FileKind,
     source: String,
     content_hash: String,
     size_bytes: u64,
+}
+
+impl LoadedFile {
+    /// The grammar this file is parsed with. `None` for a document, which is never parsed.
+    fn language(&self) -> Option<Language> {
+        self.kind.language()
+    }
 }
 
 /// Accumulates the graph for one run, deduplicating by content-derived key as it goes.
@@ -369,6 +406,12 @@ impl Evidence {
         source_type: EvidenceSourceType::AstResolved,
         directness: Directness::Resolved,
     };
+
+    /// A document states this. The only profile `md-structural` may emit (THREAT-MODEL.md T7).
+    const DOCUMENT: Evidence = Evidence {
+        source_type: EvidenceSourceType::DocumentStated,
+        directness: docs::DIRECTNESS,
+    };
 }
 
 fn parent_directory(rel_path: &str) -> Option<String> {
@@ -415,33 +458,39 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     // parsing and extraction, which dominate.
     let mut loaded: Vec<LoadedFile> = Vec::new();
     let mut files_failed = 0usize;
+    let mut documents_failed = 0usize;
     for file in &discovery.files {
-        let Ok(metadata) = std::fs::metadata(&file.abs_path) else {
+        // A refusal is attributed to the extractor that would have read the file, so that a
+        // document too large to scan is reported against `md-structural` and not against a
+        // TypeScript run that never saw it. The `index.max_file_bytes` ceiling is the document
+        // byte bound: reusing it is deliberate (plan §3.6) rather than inventing a second limit.
+        let readable = std::fs::metadata(&file.abs_path).ok().and_then(|metadata| {
+            if metadata.len() > config.index.max_file_bytes {
+                return None;
+            }
+            let bytes = std::fs::read(&file.abs_path).ok()?;
+            let content_hash = ids::content_hash(&bytes);
+            let source = String::from_utf8(bytes).ok()?;
+            Some((metadata.len(), content_hash, source))
+        });
+        let Some((size_bytes, content_hash, source)) = readable else {
             files_failed += 1;
-            continue;
-        };
-        if metadata.len() > config.index.max_file_bytes {
-            files_failed += 1;
-            continue;
-        }
-        let Ok(bytes) = std::fs::read(&file.abs_path) else {
-            files_failed += 1;
-            continue;
-        };
-        let content_hash = ids::content_hash(&bytes);
-        let Ok(source) = String::from_utf8(bytes) else {
-            files_failed += 1;
+            if file.kind.is_doc() {
+                documents_failed += 1;
+            }
             continue;
         };
         loaded.push(LoadedFile {
             rel_path: file.rel_path.clone(),
-            language: file.language,
+            kind: file.kind,
             source,
             content_hash,
-            size_bytes: metadata.len(),
+            size_bytes,
         });
     }
     loaded.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    let documents_loaded = loaded.iter().filter(|file| file.kind.is_doc()).count();
+    let code_loaded = loaded.len() - documents_loaded;
 
     // ---- repository state ----------------------------------------------------------------
     let mut pairs: Vec<(String, String)> = loaded
@@ -478,8 +527,16 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         .collect();
     let changes = incremental::classify(&previous, &current_hashes, options.full);
 
-    let indexed: BTreeSet<String> = current_hashes.keys().cloned().collect();
-    let mut known_paths = indexed.clone();
+    // `indexed` is what module resolution consults, and it holds **code paths only**. A
+    // specifier that could resolve to a document would produce an `IMPORTS` edge whose target is
+    // a `Module` entity no extractor ever creates — a dangling foreign key, and a claim that a
+    // README is a module.
+    let indexed: BTreeSet<String> = loaded
+        .iter()
+        .filter(|file| !file.kind.is_doc())
+        .map(|file| file.rel_path.clone())
+        .collect();
+    let mut known_paths: BTreeSet<String> = current_hashes.keys().cloned().collect();
     known_paths.extend(previous.keys().cloned());
     let invalidated =
         incremental::invalidation_set(&conn, &config.project_id, &changes.seed(), &known_paths)?;
@@ -498,19 +555,32 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
 
     // ---- extract the invalidation set ----------------------------------------------------
     let mut extractions: BTreeMap<String, ModuleExtraction> = BTreeMap::new();
+    let mut document_extractions: BTreeMap<String, DocumentExtraction> = BTreeMap::new();
     for file in &loaded {
         if !target_paths.contains(&file.rel_path) {
             continue;
         }
-        extractions.insert(
-            file.rel_path.clone(),
-            extract::extract_module(
-                &config.project_id,
-                &file.rel_path,
-                file.language,
-                &file.source,
-            )?,
-        );
+        match file.language() {
+            Some(language) => {
+                extractions.insert(
+                    file.rel_path.clone(),
+                    extract::extract_module(
+                        &config.project_id,
+                        &file.rel_path,
+                        language,
+                        &file.source,
+                    )?,
+                );
+            }
+            // A document has no grammar and no imports, so it invalidates only itself: nothing
+            // resolves through it, and in Slice 5a nothing resolves out of it either.
+            None => {
+                document_extractions.insert(
+                    file.rel_path.clone(),
+                    docs::extract_document(&config.project_id, &file.rel_path, &file.source),
+                );
+            }
+        }
     }
 
     // The export closure spans every module, so it is built from the whole corpus: freshly
@@ -519,6 +589,7 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     // that has to keep working when the other file was not re-parsed.
     let export_sources: Vec<ModuleExtraction> = loaded
         .iter()
+        .filter(|file| !file.kind.is_doc())
         .map(|file| match extractions.get(&file.rel_path) {
             Some(extraction) => facts::export_source_of(extraction),
             None => cached_facts(&previous, &file.rel_path).as_export_source(&file.rel_path),
@@ -531,12 +602,15 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         let Some(extraction) = extractions.get(&file.rel_path) else {
             continue;
         };
+        let Some(language) = file.language() else {
+            continue;
+        };
         reference_extractions.insert(
             file.rel_path.clone(),
             refs::extract_references(
                 &config.project_id,
                 &file.rel_path,
-                file.language,
+                language,
                 &file.source,
                 extraction,
                 &export_index,
@@ -551,17 +625,44 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     // per-file tallies of skipped files come from the cache.
     let mut facts_by_path: BTreeMap<String, ModuleFacts> = BTreeMap::new();
     for file in &loaded {
-        let facts = match (
-            extractions.get(&file.rel_path),
-            reference_extractions.get(&file.rel_path),
-        ) {
-            (Some(extraction), Some(references)) => {
-                ModuleFacts::from_extraction(extraction, references, &file.source)
-            }
-            _ => cached_facts(&previous, &file.rel_path),
+        let facts = match document_extractions.get(&file.rel_path) {
+            Some(extraction) => ModuleFacts::from_document(extraction),
+            None => match (
+                extractions.get(&file.rel_path),
+                reference_extractions.get(&file.rel_path),
+            ) {
+                (Some(extraction), Some(references)) => {
+                    ModuleFacts::from_extraction(extraction, references, &file.source)
+                }
+                _ => cached_facts(&previous, &file.rel_path),
+            },
         };
         facts_by_path.insert(file.rel_path.clone(), facts);
     }
+
+    // Document tallies over the whole repository: freshly scanned documents plus the cached
+    // counts of the ones this run did not re-read.
+    let mut unsupported_markdown_by_form: BTreeMap<String, usize> = BTreeMap::new();
+    let mut adr_documents = 0usize;
+    let mut document_sections = 0usize;
+    for file in &loaded {
+        if !file.kind.is_doc() {
+            continue;
+        }
+        let Some(facts) = facts_by_path.get(&file.rel_path) else {
+            continue;
+        };
+        document_sections += facts.document.sections;
+        if facts.document.is_adr {
+            adr_documents += 1;
+        }
+        for (form, count) in &facts.document.unsupported {
+            *unsupported_markdown_by_form
+                .entry(form.clone())
+                .or_insert(0) += count;
+        }
+    }
+    let unsupported_markdown: usize = unsupported_markdown_by_form.values().sum();
 
     let files_with_syntax_errors = facts_by_path
         .values()
@@ -617,6 +718,18 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     let reference_batch = build_reference_graph(&config.project_id, &reference_targets);
     reference_batch
         .verify_declared_source_types(refs::EXTRACTOR_ID, &refs::DECLARED_SOURCE_TYPES)?;
+
+    let document_targets: Vec<(&LoadedFile, &DocumentExtraction)> = loaded
+        .iter()
+        .filter_map(|file| {
+            document_extractions
+                .get(&file.rel_path)
+                .map(|extraction| (file, extraction))
+        })
+        .collect();
+    let document_batch = build_document_graph(&config.project_id, &document_targets);
+    document_batch
+        .verify_declared_source_types(docs::EXTRACTOR_ID, &docs::DECLARED_SOURCE_TYPES)?;
 
     // ---- identity links ------------------------------------------------------------------
     let removed_candidates: Vec<MoveCandidate> = changes
@@ -742,8 +855,8 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         nerve_store::finish_extractor_run(
             &tx,
             structural_run,
-            loaded.len() as i64,
-            files_failed as i64,
+            code_loaded as i64,
+            (files_failed - documents_failed) as i64,
             status.as_str(),
         )?;
 
@@ -764,8 +877,28 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         nerve_store::finish_extractor_run(
             &tx,
             reference_run,
-            loaded.len() as i64,
-            files_failed as i64,
+            code_loaded as i64,
+            (files_failed - documents_failed) as i64,
+            status.as_str(),
+        )?;
+
+        // `md-structural` runs unconditionally, exactly as the other two do. A run over a
+        // repository with no documents records that Nerve looked and found none, which is a
+        // fact; making the row conditional on content would make its absence ambiguous.
+        let document_run = nerve_store::begin_extractor_run(
+            &tx,
+            &repo_id,
+            &state_id,
+            docs::EXTRACTOR_ID,
+            docs::EXTRACTOR_VERSION,
+        )?;
+        rows_written +=
+            nerve_store::persist_batch(&tx, &repo_id, document_run, &document_batch, &mut touched)?;
+        nerve_store::finish_extractor_run(
+            &tx,
+            document_run,
+            documents_loaded as i64,
+            documents_failed as i64,
             status.as_str(),
         )?;
 
@@ -803,15 +936,24 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
                 .get(&file.rel_path)
                 .cloned()
                 .unwrap_or_default();
+            // A document's row records `md-structural`'s version in both version columns:
+            // one extractor produced the whole entry, so a bump to either TS/JS extractor must
+            // not invalidate every README, and a bump to `md-structural` must invalidate them
+            // all. `load_previous_modules` reads the columns back through the same rule.
+            let (structural_version, reference_version) = if file.kind.is_doc() {
+                (docs::EXTRACTOR_VERSION, docs::EXTRACTOR_VERSION)
+            } else {
+                (EXTRACTOR_VERSION, refs::EXTRACTOR_VERSION)
+            };
             rows_written += nerve_store::upsert_module_facts(
                 &tx,
                 &repo_id,
                 &nerve_store::ModuleFactsRow {
                     rel_path: file.rel_path.clone(),
                     content_hash: file.content_hash.clone(),
-                    language: file.language.as_str().to_string(),
-                    structural_version: EXTRACTOR_VERSION.to_string(),
-                    reference_version: refs::EXTRACTOR_VERSION.to_string(),
+                    language: file.kind.as_str().to_string(),
+                    structural_version: structural_version.to_string(),
+                    reference_version: reference_version.to_string(),
                     facts: facts.to_json()?,
                 },
             )?;
@@ -896,6 +1038,11 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         dynamic_imports_without_specifier,
         unmodelled_call_sites,
         unmodelled_by_form,
+        documents_processed: documents_loaded,
+        adr_documents,
+        document_sections,
+        unsupported_markdown,
+        unsupported_markdown_by_form,
         entities_by_kind: report.entities_by_kind,
         assertions_by_relation: report.assertions_by_relation,
         entities_total: report.entities_total,
@@ -911,9 +1058,16 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
 
 /// Read the previous run's per-module cache, deciding for each row whether it can be reused.
 ///
-/// A row is reusable only when its payload parses **and** both extractor versions match this
-/// build. A version bump means the extractor's output may differ over identical bytes, which is
-/// exactly what the version field exists to say, so every file is re-extracted.
+/// A row is reusable only when its payload parses **and** the extractor versions that wrote it
+/// match this build. A version bump means the extractor's output may differ over identical
+/// bytes, which is exactly what the version field exists to say, so every affected file is
+/// re-extracted.
+///
+/// The versions compared depend on which extractor owns the row. A document is produced entirely
+/// by `md-structural`, so bumping a TypeScript extractor must not re-scan every document, and
+/// bumping `md-structural` must re-scan all of them. The row says which it is, through the
+/// `language` column and the path — both, so that a row rewritten by hand cannot smuggle a
+/// document past the TS/JS version check.
 fn load_previous_modules(
     conn: &nerve_store::Connection,
     repo_id: &str,
@@ -922,9 +1076,15 @@ fn load_previous_modules(
     let mut previous = BTreeMap::new();
     for (rel_path, row) in rows {
         let facts = ModuleFacts::from_json(&row.facts);
-        let reusable = facts.is_some()
-            && row.structural_version == EXTRACTOR_VERSION
-            && row.reference_version == refs::EXTRACTOR_VERSION;
+        let is_document = path_is_document(&rel_path) || row.language == MARKDOWN_LANGUAGE;
+        let versions_match = if is_document {
+            row.structural_version == docs::EXTRACTOR_VERSION
+                && row.reference_version == docs::EXTRACTOR_VERSION
+        } else {
+            row.structural_version == EXTRACTOR_VERSION
+                && row.reference_version == refs::EXTRACTOR_VERSION
+        };
+        let reusable = facts.is_some() && versions_match;
         previous.insert(
             rel_path,
             PreviousModule {
@@ -1032,7 +1192,7 @@ fn build_graph(
             kind: EntityKind::File,
             name: name.to_string(),
             scope_path: parent.clone().unwrap_or_default(),
-            language: Some(file.language.as_str().to_string()),
+            language: Some(file.kind.as_str().to_string()),
             meta: Some(
                 serde_json::json!({
                     "extension": name.rsplit('.').next().unwrap_or_default(),
@@ -1065,7 +1225,7 @@ fn build_graph(
             kind: EntityKind::Module,
             name: file_stem(name).to_string(),
             scope_path: rel_path.to_string(),
-            language: Some(file.language.as_str().to_string()),
+            language: Some(file.kind.as_str().to_string()),
             meta: None,
         });
         builder.add_occurrence(&module_entity, rel_path, extraction.file_span, hash);
@@ -1077,7 +1237,7 @@ fn build_graph(
             rel_path,
             extraction.file_span,
             hash,
-            serde_json::json!({ "language": file.language.as_str() }),
+            serde_json::json!({ "language": file.kind.as_str() }),
         );
 
         // Symbols.
@@ -1087,7 +1247,7 @@ fn build_graph(
                 kind: symbol.kind,
                 name: symbol.name.clone(),
                 scope_path: symbol.scope_path.clone(),
-                language: Some(file.language.as_str().to_string()),
+                language: Some(file.kind.as_str().to_string()),
                 meta: symbol.meta.clone(),
             });
             builder.add_occurrence(&symbol.entity_id, rel_path, symbol.span, hash);
@@ -1318,6 +1478,159 @@ fn build_reference_graph(
                 site.span,
                 hash,
                 site.details.clone(),
+            );
+        }
+    }
+
+    builder.batch
+}
+
+/// Turn scanned documents into entities, occurrences, assertions and observations.
+///
+/// A separate batch under a separate extractor run, exactly as `ts-js-reference` is. It emits:
+///
+/// - the document's `File` entity and the `CONTAINS` edge from its directory,
+/// - `File CONTAINS Document`,
+/// - `Document CONTAINS Section` for top-level headings,
+/// - `Section CONTAINS Section` for nested ones.
+///
+/// Every observation is `DOCUMENT_STATED` / `DIRECT`, including the two filesystem-shaped edges.
+/// That is what makes THREAT-MODEL.md T7 a property of the *file* rather than of each emission
+/// site, and therefore checkable by one query over the whole `observation` table.
+///
+/// Heading text becomes an entity name and a byte span. It is never interpreted, never
+/// rendered, never followed and never executed. `nerve_core::ids::section_id` strips its control
+/// characters before it can reach an identity tuple.
+fn build_document_graph(
+    project_id: &str,
+    targets: &[(&LoadedFile, &DocumentExtraction)],
+) -> GraphBatch {
+    let mut builder = GraphBuilder::new(docs::EXTRACTOR_ID, docs::EXTRACTOR_VERSION);
+    let repo_id = ids::repository_id(project_id);
+
+    for (file, extraction) in targets.iter().copied() {
+        let rel_path = file.rel_path.as_str();
+        let hash = file.content_hash.as_str();
+        let name = last_segment(rel_path);
+        let parent = parent_directory(rel_path);
+        let file_entity = ids::file_id(project_id, rel_path);
+        let document_entity = extraction.entity_id.as_str();
+
+        builder.add_entity(EntityRecord {
+            entity_id: file_entity.clone(),
+            kind: EntityKind::File,
+            name: name.to_string(),
+            scope_path: parent.clone().unwrap_or_default(),
+            language: Some(MARKDOWN_LANGUAGE.to_string()),
+            meta: Some(
+                serde_json::json!({
+                    "extension": name.rsplit('.').next().unwrap_or_default(),
+                    "size_bytes": file.size_bytes,
+                })
+                .to_string(),
+            ),
+        });
+        builder.add_occurrence(&file_entity, rel_path, extraction.file_span, hash);
+
+        let parent_id = match &parent {
+            Some(parent) => ids::directory_id(project_id, parent),
+            None => repo_id.clone(),
+        };
+        builder.claim(
+            &parent_id,
+            Relation::Contains,
+            &file_entity,
+            Evidence::DOCUMENT,
+            rel_path,
+            Span::NONE,
+            hash,
+            serde_json::json!({ "child_kind": "file" }),
+        );
+
+        let adr = &extraction.adr;
+        builder.add_entity(EntityRecord {
+            entity_id: document_entity.to_string(),
+            kind: EntityKind::Document,
+            name: file_stem(name).to_string(),
+            scope_path: rel_path.to_string(),
+            language: Some(MARKDOWN_LANGUAGE.to_string()),
+            meta: Some(
+                serde_json::json!({
+                    "adr": adr.is_adr,
+                    "adr_id": adr.id,
+                    "status": adr.status_value(),
+                    "sections": extraction.sections.len(),
+                    "has_front_matter": extraction.front_matter.is_some(),
+                    "unsupported": extraction.unsupported,
+                })
+                .to_string(),
+            ),
+        });
+        builder.add_occurrence(document_entity, rel_path, extraction.file_span, hash);
+        builder.claim(
+            &file_entity,
+            Relation::Contains,
+            document_entity,
+            Evidence::DOCUMENT,
+            rel_path,
+            extraction.file_span,
+            hash,
+            serde_json::json!({
+                "child_kind": "document",
+                "adr": adr.is_adr,
+                "adr_id": adr.id,
+                "status": adr.status_value(),
+                // The exact place the status was read from, so the claim carries its citation.
+                "status_line": adr.status_line,
+                "status_form": adr.status_form,
+                // Preserved only when the value is outside the closed vocabulary, and only when
+                // it is short enough to be a status word at all. Never coerced.
+                "status_raw": adr.status_raw,
+                "status_refused_as_too_long": adr.status_refused_as_too_long,
+                "unsupported": extraction.unsupported,
+            }),
+        );
+
+        for section in &extraction.sections {
+            builder.add_entity(EntityRecord {
+                entity_id: section.entity_id.clone(),
+                kind: EntityKind::Section,
+                name: section.name.clone(),
+                scope_path: rel_path.to_string(),
+                language: Some(MARKDOWN_LANGUAGE.to_string()),
+                meta: Some(
+                    serde_json::json!({
+                        "level": section.level,
+                        "heading_path": section.heading_path,
+                        "sibling_ordinal": section.sibling_ordinal,
+                        "style": section.style.as_str(),
+                    })
+                    .to_string(),
+                ),
+            });
+            builder.add_occurrence(&section.entity_id, rel_path, section.section_span, hash);
+
+            let (container, child_kind) = match &section.parent {
+                Some(parent_section) => (parent_section.clone(), "section"),
+                None => (document_entity.to_string(), "document"),
+            };
+            builder.claim(
+                &container,
+                Relation::Contains,
+                &section.entity_id,
+                Evidence::DOCUMENT,
+                rel_path,
+                // The heading line is the evidence; the section span is where the entity is.
+                section.heading_span,
+                hash,
+                serde_json::json!({
+                    "child_kind": "section",
+                    "container_kind": child_kind,
+                    "level": section.level,
+                    "heading_path": section.heading_path,
+                    "sibling_ordinal": section.sibling_ordinal,
+                    "style": section.style.as_str(),
+                }),
             );
         }
     }

@@ -70,7 +70,68 @@ fn a_nul_byte_in_a_path_is_refused() {
     let root = std::fs::canonicalize(dir.path()).unwrap();
     let crafted = PathBuf::from("a\0b.ts");
     let err = canonical_child(&root, &crafted).unwrap_err();
-    assert!(matches!(err, IndexError::PathEscapesRoot(_)), "{err}");
+    assert!(
+        matches!(err, IndexError::ControlCharacterInPath(_)),
+        "{err}"
+    );
+}
+
+/// Every C0 byte is refused, not only NUL — because `rel_path` is a field of every canonical
+/// identity tuple (ADR-0002) and `0x1f` is that encoding's field separator.
+#[test]
+fn any_control_character_in_a_path_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    for byte in ['\u{0}', '\u{1}', '\u{9}', '\u{a}', '\u{1f}'] {
+        let crafted = PathBuf::from(format!("a{byte}b.ts"));
+        let err = canonical_child(&root, &crafted).unwrap_err();
+        assert!(
+            matches!(err, IndexError::ControlCharacterInPath(_)),
+            "{byte:?} was not refused: {err}"
+        );
+    }
+}
+
+/// The attack this closes, end to end, with the two files that actually collided.
+///
+/// `docs/a.md` declares `# Parent.md` then `## Child`, so its inner section's tuple is
+/// `(section, project, "docs/a.md", "Parent.md", "Child", 0)`. A second file *named*
+/// `docs/a.md<0x1f>Parent.md` declaring `# Child` has the tuple
+/// `(section, project, "docs/a.md<0x1f>Parent.md", "Child", 0)` — which encodes to **identical
+/// bytes**, because the separator inside the name splits that one field into two.
+///
+/// Before the control-character refusal, indexing this tree produced one section entity with
+/// occurrences in two different files. Sanitising heading text does not help: the forged
+/// separator never passes through a heading.
+#[cfg(unix)]
+#[test]
+fn a_control_character_in_a_file_name_cannot_forge_another_files_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "docs/a.md",
+        "# Parent.md\n\n## Child\n\nhonest\n",
+    );
+    std::fs::write(
+        dir.path().join("docs").join("a.md\u{1f}Parent.md"),
+        "# Child\n\nforged\n",
+    )
+    .unwrap();
+
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let report = discover(&root, &config()).unwrap();
+
+    assert_eq!(
+        report.files.len(),
+        1,
+        "only the honest document may be indexed, found {:?}",
+        report.files.iter().map(|f| &f.rel_path).collect::<Vec<_>>()
+    );
+    assert_eq!(report.files[0].rel_path, "docs/a.md");
+    assert_eq!(
+        report.refused_paths, 1,
+        "the hostile name must be counted as refused, never silently dropped"
+    );
 }
 
 #[test]
@@ -276,17 +337,96 @@ fn node_modules_dot_git_and_dot_nerve_are_pruned() {
     assert_eq!(discovered(&root, &config()), vec!["src/a.ts".to_string()]);
 }
 
+/// **Slice 5a acceptance criterion 1.** Every exclusion rule applies to a document exactly as it
+/// applies to source. Discovery decides whether Nerve may read a file at all; it does not know
+/// or care which extractor will be handed the bytes.
+#[test]
+fn every_exclusion_rule_applies_to_documents_too() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), ".gitignore", "ignored/\n*.generated.md\n");
+    write(dir.path(), ".nerveignore", "vendor-docs/\n");
+    write(dir.path(), "docs/keep.md", "# keep\n");
+    write(dir.path(), "docs/keep.markdown", "# keep\n");
+    write(dir.path(), "ignored/hidden.md", "# hidden\n");
+    write(dir.path(), "docs/api.generated.md", "# generated\n");
+    write(dir.path(), "vendor-docs/vendored.md", "# vendored\n");
+    write(dir.path(), "node_modules/pkg/readme.md", "# packaged\n");
+    write(dir.path(), ".git/notes.md", "# git internals\n");
+    write(dir.path(), ".nerve/cache/stale.md", "# stale\n");
+    // The deny-list matches on the file name, so a secret named like a document is still denied.
+    write(dir.path(), "docs/secrets.md", "# not for the index\n");
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+
+    let report = discover(&root, &config()).unwrap();
+    assert_eq!(
+        report
+            .files
+            .iter()
+            .map(|file| file.rel_path.clone())
+            .collect::<Vec<_>>(),
+        vec!["docs/keep.markdown".to_string(), "docs/keep.md".to_string()]
+    );
+    assert_eq!(report.denied_secrets, vec!["docs/secrets.md".to_string()]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_document_is_not_followed() {
+    let outer = tempfile::tempdir().unwrap();
+    write(outer.path(), "outside.md", "# leaked\n");
+    let root = outer.path().join("repo");
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    write(&root, "docs/inside.md", "# inside\n");
+    std::os::unix::fs::symlink(outer.path().join("outside.md"), root.join("docs/linked.md"))
+        .unwrap();
+
+    let root = std::fs::canonicalize(&root).unwrap();
+    let report = discover(&root, &config()).unwrap();
+    assert_eq!(
+        report
+            .files
+            .into_iter()
+            .map(|file| file.rel_path)
+            .collect::<Vec<_>>(),
+        vec!["docs/inside.md".to_string()]
+    );
+    assert_eq!(report.skipped_symlinks, 1);
+}
+
+/// Markdown became an indexed kind in Slice 5a, so `README.md` is discovered rather than
+/// skipped. Everything Nerve has no extractor for is still skipped and counted.
 #[test]
 fn unsupported_extensions_are_skipped_not_failed() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "src/a.ts", "export const a = 1;\n");
     write(dir.path(), "README.md", "# hello\n");
+    write(dir.path(), "NOTES.markdown", "# notes\n");
     write(dir.path(), "data.json", "{}\n");
+    write(dir.path(), "notes.txt", "plain\n");
     let root = std::fs::canonicalize(dir.path()).unwrap();
 
     let report = discover(&root, &config()).unwrap();
-    assert_eq!(report.files.len(), 1);
-    assert_eq!(report.skipped_unsupported, 2);
+    assert_eq!(
+        report
+            .files
+            .iter()
+            .map(|file| file.rel_path.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            "NOTES.markdown".to_string(),
+            "README.md".to_string(),
+            "src/a.ts".to_string()
+        ]
+    );
+    assert_eq!(report.skipped_unsupported, 2, "data.json and notes.txt");
+    assert_eq!(
+        report
+            .files
+            .iter()
+            .filter(|file| file.kind.is_doc())
+            .count(),
+        2
+    );
 }
 
 #[test]

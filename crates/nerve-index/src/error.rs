@@ -33,6 +33,14 @@ pub enum IndexError {
     #[error("path is not valid UTF-8: {0}")]
     NonUtf8Path(PathBuf),
 
+    /// A path contained a C0 control character and was refused.
+    ///
+    /// Reported distinctly from [`IndexError::PathEscapesRoot`] because it is a different
+    /// finding: the path did not escape anything, it attacked identity. See the comment on
+    /// `canonical_child`.
+    #[error("path contains a control character: {0:?}")]
+    ControlCharacterInPath(PathBuf),
+
     /// `.nerve/config.toml` is missing, unreadable, or malformed.
     #[error("config error at {path}: {message}")]
     Config {

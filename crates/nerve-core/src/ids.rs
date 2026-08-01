@@ -71,6 +71,77 @@ pub fn module_id(project_id: &str, rel_path: &str) -> String {
     )
 }
 
+/// `("document", project_id, rel_path)`
+///
+/// Mirrors [`module_id`]: a document is 1:1 with a file, and its identity is the path it lives
+/// at, never its title. A title is prose and prose is rewritten.
+pub fn document_id(project_id: &str, rel_path: &str) -> String {
+    prefixed(
+        EntityKind::Document,
+        &[EntityKind::Document.as_str(), project_id, rel_path],
+    )
+}
+
+/// Remove every byte below `0x20` from attacker-controlled text.
+///
+/// Heading text comes from a repository, which is untrusted input (THREAT-MODEL.md, A1). The
+/// canonical tuple encoding is injective **only because no field can contain the separator**,
+/// so a heading holding a literal `0x1f` would let its author choose where one tuple field ends
+/// and the next begins, and thereby forge the identity of a section somewhere else in the same
+/// document. Stripping the whole C0 range rather than just `0x1f` avoids relying on the rest of
+/// the pipeline to be careful with the other control characters.
+///
+/// This is a *stripping* rule, not an escaping one: the result is used for identity only, never
+/// for display, so it does not have to be reversible.
+pub fn strip_control(text: &str) -> String {
+    text.chars().filter(|c| (*c as u32) >= 0x20).collect()
+}
+
+/// `("section", project_id, rel_path, <heading chain…>, sibling_ordinal)`
+///
+/// `heading_path` is the chain of heading texts from the outermost enclosing heading down to
+/// and including this section's own heading. Every segment enters the tuple as **its own
+/// field**, and every segment is passed through [`strip_control`] first.
+///
+/// Both of those are load-bearing, and the second alone is not enough. Slice 5a's plan specified
+/// a single `>`-joined field; that is forgeable, because `>` is ordinary heading text. In one
+/// document,
+///
+/// ```text
+/// # A>B          # A
+/// ## C           ## B
+///                ### C
+/// ```
+///
+/// both `C` sections have the chain `A>B>C` and sibling ordinal 0, so a joined field collides
+/// them — the very attack the control-character strip exists to prevent, carried by a printable
+/// byte instead. Spreading the chain across tuple fields removes the class: the unit separator
+/// cannot appear in a segment, so the encoding is injective in the number of segments as well
+/// as in their contents.
+///
+/// `sibling_ordinal` disambiguates two sections with identical heading text under the same
+/// parent. It is scoped to the parent, so inserting a section elsewhere in the document does not
+/// churn the ids of unrelated sections.
+pub fn section_id(
+    project_id: &str,
+    rel_path: &str,
+    heading_path: &[&str],
+    sibling_ordinal: u32,
+) -> String {
+    let sanitized: Vec<String> = heading_path
+        .iter()
+        .map(|part| strip_control(part))
+        .collect();
+    let ordinal = sibling_ordinal.to_string();
+    let mut fields: Vec<&str> = Vec::with_capacity(heading_path.len() + 4);
+    fields.push(EntityKind::Section.as_str());
+    fields.push(project_id);
+    fields.push(rel_path);
+    fields.extend(sanitized.iter().map(String::as_str));
+    fields.push(&ordinal);
+    prefixed(EntityKind::Section, &fields)
+}
+
 /// `("<kind>", project_id, module_rel_path, scope_path, name, disambiguator)`
 ///
 /// Valid only for [`EntityKind::is_symbol`] kinds.
@@ -188,6 +259,8 @@ mod tests {
                 unresolved_id(PID, "src/a.ts", UnresolvedCategory::Module, "./missing"),
                 "unres",
             ),
+            (document_id(PID, "docs/README.md"), "doc"),
+            (section_id(PID, "docs/README.md", &["Title"], 0), "sect"),
         ];
         for (id, prefix) in cases {
             assert!(id.starts_with(&format!("{prefix}_")), "{id} lacks {prefix}");
@@ -230,6 +303,73 @@ mod tests {
             unresolved_id(PID, "src/a.ts", UnresolvedCategory::Value, "parse"),
             unresolved_id(PID, "src/a.tsvalue", UnresolvedCategory::Value, "parse")
         );
+    }
+
+    /// The document counterpart of
+    /// [`unresolved_modules_and_values_with_the_same_name_are_distinct`]: heading text is
+    /// attacker-controlled, and the attack is to make one section's tuple *become* another's.
+    ///
+    /// Both separators are tried. `0x1f` is the canonical field separator and is stripped;
+    /// `>` is the separator the Slice 5a plan proposed for the joined heading path, and it is
+    /// printable, so it cannot be stripped — the chain must therefore not be joined at all.
+    #[test]
+    fn a_heading_cannot_forge_another_sections_identity() {
+        // 1. A literal unit separator inside a heading must not merge two tuple fields.
+        let honest = section_id(PID, "docs/a.md", &["Parent", "Child"], 0);
+        let forged = section_id(PID, "docs/a.md", &["Parent\u{1f}Child"], 0);
+        assert_ne!(
+            honest, forged,
+            "a 0x1f in a heading forged a nested section"
+        );
+
+        // The strip must not be reversible either: two different forgeries that only differ in
+        // control characters land on the same id as the plain text they decorate, which is the
+        // point — the control characters are simply not part of identity.
+        assert_eq!(
+            section_id(PID, "docs/a.md", &["Plain"], 0),
+            section_id(PID, "docs/a.md", &["Pl\u{1f}ain"], 0)
+        );
+        assert_eq!(strip_control("a\u{0}b\u{1f}c\n"), "abc");
+
+        // 2. A `>` inside a heading must not forge a differently nested section. `#A>B / ##C`
+        //    and `#A / ##B / ###C` are different structures in the same document.
+        assert_ne!(
+            section_id(PID, "docs/a.md", &["A>B", "C"], 0),
+            section_id(PID, "docs/a.md", &["A", "B", "C"], 0),
+            "a `>` in a heading forged a section at another nesting level"
+        );
+
+        // 3. The ordinal is a field of its own and cannot be absorbed into the heading either.
+        assert_ne!(
+            section_id(PID, "docs/a.md", &["Repeat"], 1),
+            section_id(PID, "docs/a.md", &["Repeat", "1"], 0)
+        );
+    }
+
+    #[test]
+    fn section_id_varies_with_every_tuple_field() {
+        let base = section_id(PID, "docs/a.md", &["Top", "Inner"], 0);
+        for other in [
+            section_id("other", "docs/a.md", &["Top", "Inner"], 0),
+            section_id(PID, "docs/b.md", &["Top", "Inner"], 0),
+            section_id(PID, "docs/a.md", &["Top", "Other"], 0),
+            section_id(PID, "docs/a.md", &["Other", "Inner"], 0),
+            section_id(PID, "docs/a.md", &["Inner"], 0),
+            section_id(PID, "docs/a.md", &["Top", "Inner"], 1),
+        ] {
+            assert_ne!(base, other);
+        }
+    }
+
+    /// A document is identified by its path, exactly as a module is, and the two must not
+    /// collide even though their tuples carry the same path.
+    #[test]
+    fn document_and_module_identities_are_domain_separated() {
+        assert_ne!(
+            document_id(PID, "docs/README.md")[4..],
+            module_id(PID, "docs/README.md")[4..]
+        );
+        assert_ne!(document_id(PID, "docs/a.md"), document_id(PID, "docs/b.md"));
     }
 
     #[test]

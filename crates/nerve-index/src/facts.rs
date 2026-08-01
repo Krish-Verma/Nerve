@@ -84,6 +84,20 @@ pub struct CachedCounters {
     pub unmodelled_by_form: BTreeMap<String, usize>,
 }
 
+/// Per-document tallies, kept for the same reason [`CachedCounters`] is: a run that re-extracts
+/// one file must still be able to report what the whole repository's documents contain.
+///
+/// Holds counts and form tags only — no heading text, no prose, no source at rest.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentCounters {
+    /// Sections the document contributed.
+    pub sections: usize,
+    /// Whether the document was recognised as an ADR.
+    pub is_adr: bool,
+    /// Constructs the Markdown scanner refused, by form tag.
+    pub unsupported: BTreeMap<String, usize>,
+}
+
 /// Everything an unchanged module must remember for another module to be re-extracted.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModuleFacts {
@@ -97,6 +111,27 @@ pub struct ModuleFacts {
     pub symbols: Vec<CachedSymbol>,
     /// Per-file tallies.
     pub counters: CachedCounters,
+    /// Per-document tallies. Empty for source files.
+    ///
+    /// `serde(default)` so a cache payload written before Slice 5a still parses: an unreadable
+    /// payload is a cache miss, and a cache miss re-extracts the whole repository for nothing.
+    #[serde(default)]
+    pub document: DocumentCounters,
+}
+
+impl ModuleFacts {
+    /// The cache entry for a document. It imports nothing and exports nothing, so every
+    /// cross-module field is empty by construction rather than by omission.
+    pub fn from_document(extraction: &crate::docs::DocumentExtraction) -> ModuleFacts {
+        ModuleFacts {
+            document: DocumentCounters {
+                sections: extraction.sections.len(),
+                is_adr: extraction.adr.is_adr,
+                unsupported: extraction.unsupported.clone(),
+            },
+            ..ModuleFacts::default()
+        }
+    }
 }
 
 /// Resolve a module's local export map exactly the way the graph builder and the export index
@@ -230,6 +265,7 @@ impl ModuleFacts {
                 unmodelled_call_sites: references.unmodelled_call_sites,
                 unmodelled_by_form: references.unmodelled_by_form.clone(),
             },
+            document: DocumentCounters::default(),
         }
     }
 

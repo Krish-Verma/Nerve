@@ -35,6 +35,7 @@ use nerve_core::ids;
 
 use crate::error::Result;
 use crate::facts::{CachedSymbol, ModuleFacts};
+use crate::lang::path_is_document;
 use crate::resolve;
 
 /// How one path differs from the previously indexed tree.
@@ -95,6 +96,17 @@ pub struct PreviousModule {
     pub facts: Option<ModuleFacts>,
 }
 
+/// The code files among a set of repository-relative paths.
+///
+/// Module resolution never sees a document (`crate::lang::FileKind`), so neither does anything
+/// that reasons about what resolution would answer.
+fn code_paths<'a>(paths: impl Iterator<Item = &'a String>) -> BTreeSet<String> {
+    paths
+        .filter(|path| !path_is_document(path))
+        .cloned()
+        .collect()
+}
+
 /// Classify the current tree against the previous index.
 ///
 /// `force_full` marks every present path modified, which is what `nerve index --full` does: the
@@ -129,9 +141,12 @@ pub fn classify(
         }
     }
 
-    if !set.added.is_empty() || !set.removed.is_empty() {
-        let before: BTreeSet<String> = previous.keys().cloned().collect();
-        let after: BTreeSet<String> = current.keys().cloned().collect();
+    // Specifier re-resolution reads the set of **code** paths, because that is the only set
+    // `resolve` consults. Adding or deleting a document cannot move a specifier, so gating on
+    // the whole path set would re-resolve every cached module every time a README changed.
+    let before: BTreeSet<String> = code_paths(previous.keys());
+    let after: BTreeSet<String> = code_paths(current.keys());
+    if before != after {
         for (path, module) in previous {
             if !after.contains(path) || set.modified.contains(path) {
                 continue;
@@ -452,6 +467,42 @@ mod tests {
             false,
         );
         assert_eq!(set.resolution_changed, ["src/app.ts".to_string()].into());
+    }
+
+    /// A document is not in the set `resolve` consults, so adding or deleting one cannot move a
+    /// specifier and must not seed a re-resolution of every cached module.
+    #[test]
+    fn adding_or_removing_a_document_never_seeds_a_resolution_recheck() {
+        let mut before = previous(&[("src/app.ts", "h1"), ("docs/gone.md", "h9")]);
+        before.get_mut("src/app.ts").unwrap().facts = Some(ModuleFacts {
+            import_specifiers: vec!["./impl".to_string(), "./gone".to_string()],
+            ..ModuleFacts::default()
+        });
+        let set = classify(
+            &before,
+            &current(&[("src/app.ts", "h1"), ("docs/added.md", "h2")]),
+            false,
+        );
+        assert_eq!(set.added, ["docs/added.md".to_string()].into());
+        assert_eq!(set.removed, ["docs/gone.md".to_string()].into());
+        assert!(
+            set.resolution_changed.is_empty(),
+            "a document changed what a specifier resolves to: {set:?}"
+        );
+        assert_eq!(set.unchanged, ["src/app.ts".to_string()].into());
+    }
+
+    /// A document is a file like any other as far as change detection goes.
+    #[test]
+    fn a_changed_document_is_classified_like_any_other_file() {
+        let set = classify(
+            &previous(&[("docs/a.md", "h1"), ("docs/b.md", "h2")]),
+            &current(&[("docs/a.md", "h1"), ("docs/b.md", "changed")]),
+            false,
+        );
+        assert_eq!(set.unchanged, ["docs/a.md".to_string()].into());
+        assert_eq!(set.modified, ["docs/b.md".to_string()].into());
+        assert_eq!(set.seed(), ["docs/b.md".to_string()].into());
     }
 
     #[test]

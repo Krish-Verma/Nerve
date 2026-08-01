@@ -1,9 +1,10 @@
 //! Nerve indexing pipeline.
 //!
-//! Discovery and ignore rules, path safety, tree-sitter parsing, the `ts-js-structural` and
-//! `ts-js-reference` extractors, lexical binding, export closure, specifier resolution, the
-//! `init` / `index` application entry points, and the query-time file prober that gives
-//! `nerve why` its freshness answer without loosening any of those path rules.
+//! Discovery and ignore rules, path safety, tree-sitter parsing, the `ts-js-structural`,
+//! `ts-js-reference` and `md-structural` extractors, lexical binding, export closure, specifier
+//! resolution, a hand-written Markdown block scanner, the `init` / `index` application entry
+//! points, and the query-time file prober that gives `nerve why` its freshness answer without
+//! loosening any of those path rules.
 //!
 //! This crate emits **observations only**. It cannot write `assertion_state`: that table is
 //! rebuilt by [`nerve_store::rebuild_assertion_state`] as a pure function of what was
@@ -15,6 +16,7 @@
 pub mod bind;
 pub mod config;
 pub mod discover;
+pub mod docs;
 pub mod error;
 pub mod exports;
 pub mod extract;
@@ -24,6 +26,7 @@ pub mod incremental;
 pub mod init;
 pub mod inspect;
 pub mod lang;
+pub mod markdown;
 pub mod pipeline;
 pub mod probe;
 pub mod refs;
@@ -32,17 +35,22 @@ pub mod resolve;
 pub use bind::{Binding, BindingTable, ThisResolution};
 pub use config::Config;
 pub use discover::{discover, DiscoveredFile, DiscoveryReport};
+pub use docs::{
+    extract_document, AdrFacts, AdrStatus, DocumentExtraction, SectionDef,
+    EXTRACTOR_ID as DOCUMENT_EXTRACTOR_ID, EXTRACTOR_VERSION as DOCUMENT_EXTRACTOR_VERSION,
+};
 pub use error::{IndexError, Result};
 pub use exports::ExportIndex;
 pub use extract::{extract_module, ModuleExtraction, EXTRACTOR_ID, EXTRACTOR_VERSION};
-pub use facts::{CachedCounters, CachedReExport, CachedSymbol, ModuleFacts};
+pub use facts::{CachedCounters, CachedReExport, CachedSymbol, DocumentCounters, ModuleFacts};
 pub use incremental::{
     classify, invalidation_set, propose_moves, ChangeKind, ChangeSet, MoveCandidate, MoveProposal,
     PreviousModule,
 };
 pub use init::{init, init_with_project_id, InitOutcome};
 pub use inspect::{index_freshness, partial_parses, IndexFreshness, PartialParse};
-pub use lang::Language;
+pub use lang::{path_is_document, FileKind, Language, DOCUMENT_EXTENSIONS, MARKDOWN_LANGUAGE};
+pub use markdown::{scan as scan_markdown, DocumentScan, Heading, HeadingStyle, ScanCounters};
 pub use pipeline::{
     index_repository, index_repository_with, IncrementalReport, IndexOptions, IndexOutcome,
     RunStatus,

@@ -116,7 +116,7 @@ fn re_indexing_is_idempotent() {
     assert_eq!(dump_json(&root), dump_before, "logical graph changed");
     assert_eq!(
         count(&conn, "extractor_run"),
-        runs_before + 2,
+        runs_before + 3,
         "extractor_run is a run log and grows by one row per extractor"
     );
 }
@@ -274,9 +274,13 @@ fn evidence_source_types_distinguish_read_from_resolved() {
     assert_eq!(mislabelled, 0);
 }
 
-/// Both extractors are recorded, each with its own run row and version.
+/// Every extractor is recorded, each with its own run row and version.
+///
+/// `md-structural` runs even though `ts-basic` holds no documents: the row says Nerve looked and
+/// found none, which is a fact. A row that appeared only when a document existed would make its
+/// absence ambiguous between "no documents" and "documents were never scanned".
 #[test]
-fn two_extractor_runs_are_recorded_per_index() {
+fn every_extractor_run_is_recorded_per_index() {
     let (_dir, root) = indexed_fixture();
     let conn = open_db(&root);
     let report = nerve_store::status(&conn).unwrap();
@@ -290,11 +294,22 @@ fn two_extractor_runs_are_recorded_per_index() {
         vec![
             ("ts-js-structural".to_string(), "1.1.0".to_string()),
             ("ts-js-reference".to_string(), "1.0.0".to_string()),
+            ("md-structural".to_string(), "1.0.0".to_string()),
         ]
     );
     assert_eq!(
         report.last_run.as_ref().unwrap().extractor_id,
-        "ts-js-reference"
+        "md-structural"
+    );
+    assert_eq!(
+        report
+            .runs
+            .iter()
+            .find(|run| run.extractor_id == "md-structural")
+            .unwrap()
+            .files_processed,
+        0,
+        "ts-basic has no documents"
     );
     assert!(report.is_healthy());
 }

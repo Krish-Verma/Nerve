@@ -483,6 +483,20 @@ fn run_index(output: &Output, path: Option<PathBuf>, full: bool) -> i32 {
             for (form, count) in &outcome.unmodelled_by_form {
                 output.line(format!("    {form:<18} {count}"));
             }
+            output.line(format!(
+                "  documents      {} scanned, {} ADRs, {} sections",
+                outcome.documents_processed, outcome.adr_documents, outcome.document_sections
+            ));
+            // Every Markdown construct outside the supported subset, and every resource bound
+            // that fired. Reported whether or not anyone asked: a bound that refused something
+            // silently would be indistinguishable from a document that contained nothing.
+            output.line(format!(
+                "  md-unsupported {} constructs refused",
+                outcome.unsupported_markdown
+            ));
+            for (form, count) in &outcome.unsupported_markdown_by_form {
+                output.line(format!("    {form:<28} {count}"));
+            }
             output.line(format!("  duration_ms    {}", outcome.duration_ms));
             if partial {
                 output.line(format!(
@@ -508,6 +522,11 @@ fn run_index(output: &Output, path: Option<PathBuf>, full: bool) -> i32 {
                 "dynamic_imports_without_specifier": outcome.dynamic_imports_without_specifier,
                 "unmodelled_call_sites": outcome.unmodelled_call_sites,
                 "unmodelled_by_form": outcome.unmodelled_by_form,
+                "documents_processed": outcome.documents_processed,
+                "adr_documents": outcome.adr_documents,
+                "document_sections": outcome.document_sections,
+                "unsupported_markdown": outcome.unsupported_markdown,
+                "unsupported_markdown_by_form": outcome.unsupported_markdown_by_form,
                 "entities_total": outcome.entities_total,
                 "entities_by_kind": outcome.entities_by_kind,
                 "assertions_total": outcome.assertions_total,

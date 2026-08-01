@@ -12,8 +12,9 @@ Authoritative slice list. Update the status column at the end of every slice.
 | 3b | Normalize repository state out of `occurrence`/`observation` and out of `occurrence_id` — removes the O(repository) restatement pass | ✅ Complete (2026-07-31) — 306 tests; **24.9% → 2.0%**; counted-writes gate; found and fixed a silent data-destruction bug |
 | 4a | `nerve serve` — loopback HTTP, read-only JSON API, T4/T5/T6 security controls | ✅ Complete (2026-07-31) — 427 tests; token/origin/host/traversal/symlink/XSS all attack-verified |
 | 4b | `apps/nerve-web` — the visual explorer SPA, asset embedding, screenshot QA | ✅ Complete (2026-07-31) — 435 tests, 31 screenshots reviewed, 0 CSP violations; **fixed a 4a bug that made the UI unloadable** |
-| 5a | Markdown + ADR ingestion — `Document`/`Section` entities, `CONTAINS` structure, ADR status, T7 controls | ⬜ Not started |
+| 5a | Markdown + ADR ingestion — `Document`/`Section` entities, `CONTAINS` structure, ADR status, T7 controls | ✅ Complete (2026-08-01) — 506 tests; T7 exhaustive and mutation-verified; **closed two identity-forgery vectors**, one of them pre-existing in every id constructor |
 | 5b | Document↔code links — `REFERENCES` by explicit path, `SUPERSEDES`, unresolved reasons, measured precision | ⬜ Not started |
+| 5c | **Corrective** — filesystem containment is not AST evidence | ⬜ Not started |
 | 6 | Test evidence (**coverage only**) — `TEST_COVERS_SYMBOL`, freshness, affected-test experiment | ⬜ Not started |
 | 7 | CLI + query expansion — `impact`, `gaps`, `check`, evidence packets | ⬜ Not started |
 | 8 | MCP — one default investigation tool | ⬜ Not started |
@@ -125,6 +126,30 @@ relation names (`DOCUMENT_CONTAINS_SECTION`, …) are rejected because Nerve's r
 endpoint-kind-agnostic; `ADR_DESCRIBES_COMPONENT` is refused as non-deterministic; "ADR status" is
 a property, not an entity; and `tree-sitter-md` is rejected because it requires tree-sitter 0.26
 against this workspace's 0.25.
+
+## Slice 5a — delivered
+
+- `.md`/`.markdown` discovered by the same rules as source; `md-structural 1.0.0` declaring
+  `[DOCUMENT_STATED]` and nothing else; `Document` and `Section` entities with spans, content
+  hashes and heading nesting; deterministic ADR recognition with a closed status vocabulary.
+- **T7 satisfied by an exhaustive query, not a spot check**: no observation whose `file_path` is a
+  document carries any source type but `DOCUMENT_STATED`. Mutation-verified — declaring
+  `AST_DIRECT` makes the test fail and name all 54 offenders.
+- **Two identity-forgery vectors closed.** The plan's `>`-joined `heading_path` was forgeable
+  through printable text (found by the implementer); and `rel_path` — a field of *every* identity
+  tuple — could carry a literal `0x1f`, which the orchestrator demonstrated merging two sections in
+  two different files onto one entity. `canonical_child` now refuses the whole C0 range at the
+  single path choke point, closing the class for every constructor, and counts the refusal.
+- No dependency added. No schema migration. Report: `docs/reports/slice-05a-report.md`.
+
+## Slice 5c — why it exists
+
+Indexing a documentation-only tree revealed 4 observations labelled `AST_DIRECT` in a repository
+with **no TypeScript**: directory containment, attributed to `ts-js-structural`. `AST_DIRECT` means
+"the syntax tree literally contains this relationship", and there is no syntax tree behind a
+directory. This is the same defect class Slice 2a corrected for resolved imports. It is pre-existing
+from Slice 1 and was made visible, not caused, by Slice 5a. The fix is a vocabulary addition plus a
+UI gloss, so it is its own slice rather than a review amendment.
 
 ## Security gate
 

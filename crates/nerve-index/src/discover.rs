@@ -3,6 +3,11 @@
 //! Repository content is untrusted input (SECURITY.md). Every path this module yields has
 //! been canonicalized and proven to live under the repository root, and no symlink is
 //! followed. Nothing here reads file contents.
+//!
+//! Documents are discovered by exactly the same rules as source: the deny-list, `.gitignore`,
+//! `.nerveignore`, the pruned directories, symlink refusal and the sort order apply to a `.md`
+//! file the way they apply to a `.ts` file. Discovery does not know what an extractor will do
+//! with a file; it only decides whether Nerve may read it at all.
 
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
@@ -11,7 +16,7 @@ use ignore::WalkBuilder;
 
 use crate::config::{is_denied, Config, PRUNED_DIRECTORIES};
 use crate::error::{IndexError, Result};
-use crate::lang::Language;
+use crate::lang::FileKind;
 
 /// A file selected for indexing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,8 +25,8 @@ pub struct DiscoveredFile {
     pub rel_path: String,
     /// Canonical absolute path.
     pub abs_path: PathBuf,
-    /// Grammar chosen from the extension.
-    pub language: Language,
+    /// What the file is: source with a grammar, or a document.
+    pub kind: FileKind,
 }
 
 /// What discovery found and what it refused.
@@ -37,6 +42,11 @@ pub struct DiscoveryReport {
     pub skipped_unsupported: usize,
     /// Entries skipped because they were symlinks.
     pub skipped_symlinks: usize,
+    /// Entries refused by [`canonical_child`] — traversal, control characters, non-UTF-8.
+    ///
+    /// Counted rather than listed, and counted rather than silently dropped: a refusal is a
+    /// finding, and the path that caused it is by definition hostile text we will not echo.
+    pub refused_paths: usize,
 }
 
 /// Canonicalize the repository root, asserting it is a directory.
@@ -56,8 +66,25 @@ pub fn canonical_child(root: &Path, candidate: &Path) -> Result<PathBuf> {
     if as_str.is_none() {
         return Err(IndexError::NonUtf8Path(candidate.to_path_buf()));
     }
-    if as_str.is_some_and(|s| s.contains('\0')) {
-        return Err(IndexError::PathEscapesRoot(candidate.to_path_buf()));
+    // Reject the whole C0 range, not only NUL.
+    //
+    // ADR-0002's canonical tuples are injective **only because no field can contain the unit
+    // separator**, and `rel_path` is a tuple field in every identity constructor. A file name is
+    // attacker-controlled (THREAT-MODEL A1) and `0x1f` is legal in one on Unix, so a path
+    // carrying a separator lets its author choose where one tuple field ends and the next
+    // begins — and thereby forge the identity of an entity in a different file.
+    //
+    // This was not hypothetical. Before this check, a repository containing `docs/a.md` with
+    // headings `# Parent.md` / `## Child`, plus a second file literally named
+    // `docs/a.md<0x1f>Parent.md` containing `# Child`, produced **one** section entity with two
+    // occurrences in two different files: the tuples encoded to identical bytes. Stripping
+    // control characters from heading text alone does not close this, because the collision is
+    // carried by the path field.
+    //
+    // Refusing at the choke point closes the class for every constructor at once — sections,
+    // symbols, modules and files — rather than leaving each to defend itself.
+    if as_str.is_some_and(|s| s.chars().any(|c| (c as u32) < 0x20)) {
+        return Err(IndexError::ControlCharacterInPath(candidate.to_path_buf()));
     }
 
     let joined = if candidate.is_absolute() {
@@ -176,14 +203,18 @@ pub fn discover(root: &Path, config: &Config) -> Result<DiscoveryReport> {
             .and_then(|e| e.to_str())
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let Some(language) = Language::from_extension(&extension) else {
+        let Some(kind) = FileKind::from_extension(&extension) else {
             report.skipped_unsupported += 1;
             continue;
         };
 
         let canonical = match canonical_child(&root, entry.path()) {
             Ok(canonical) => canonical,
-            Err(_) => continue,
+            // Refused, not missing. Counted so a hostile name cannot vanish without trace.
+            Err(_) => {
+                report.refused_paths += 1;
+                continue;
+            }
         };
         let rel_path = relative_path(&root, &canonical)?;
 
@@ -196,7 +227,7 @@ pub fn discover(root: &Path, config: &Config) -> Result<DiscoveryReport> {
         report.files.push(DiscoveredFile {
             rel_path,
             abs_path: canonical,
-            language,
+            kind,
         });
     }
 

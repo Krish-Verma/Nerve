@@ -358,7 +358,10 @@ fn deleting_a_file_removes_its_entities_assertions_and_observations() {
 #[test]
 fn deleting_everything_leaves_what_a_fresh_index_of_an_empty_tree_would() {
     let (_dir, root) = indexed_incremental_fixture();
+    // `README.md` goes too: since Slice 5a it is an indexed document, and "every file" means
+    // every file.
     for file in [
+        "README.md",
         "src/app.ts",
         "src/barrel.ts",
         "src/impl.ts",
@@ -370,7 +373,7 @@ fn deleting_everything_leaves_what_a_fresh_index_of_an_empty_tree_would() {
     }
     let outcome = index(&root);
     assert_eq!(outcome.files_processed, 0);
-    assert_eq!(outcome.incremental.files_removed, 6);
+    assert_eq!(outcome.incremental.files_removed, 7);
 
     let conn = open_db(&root);
     assert_eq!(count(&conn, "assertion"), 0);
@@ -840,6 +843,10 @@ fn materialize(root: &Path, modules: &[SyntheticModule]) {
 }
 
 fn collect_typescript(dir: &Path, out: &mut Vec<PathBuf>) {
+    collect_by_extension(dir, "ts", out);
+}
+
+fn collect_by_extension(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -848,10 +855,133 @@ fn collect_typescript(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in entries {
         let path = entry.path();
         if path.is_dir() {
-            collect_typescript(&path, out);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("ts") {
+            collect_by_extension(&path, extension, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some(extension) {
             out.push(path);
         }
+    }
+}
+
+// ---- documents in the property tree --------------------------------------------------------
+
+/// A Markdown document the property test mutates alongside the modules.
+///
+/// Documents matter to the equivalence property for a reason the modules cannot cover: a
+/// section's identity is a function of its **heading text and its position among its siblings**,
+/// not of a path. Renaming a heading therefore changes an entity id in a way no source edit
+/// does, and a stale section that an incremental run failed to delete shows up as a dump that
+/// a from-scratch index would never produce.
+#[derive(Debug, Clone)]
+struct SyntheticDoc {
+    rel_path: String,
+    /// Top-level heading texts, each with one child.
+    headings: Vec<String>,
+    /// Changes the body without changing any heading, so no identity moves.
+    salt: u64,
+    /// When true the first heading is spelled `<text> (revised)`.
+    renamed: bool,
+}
+
+impl SyntheticDoc {
+    fn render(&self) -> String {
+        let mut text = format!("---\ntitle: {}\n---\n\n", self.rel_path);
+        for (position, heading) in self.headings.iter().enumerate() {
+            let shown = if position == 0 && self.renamed {
+                format!("{heading} (revised)")
+            } else {
+                heading.clone()
+            };
+            text.push_str(&format!("# {shown}\n\nBody {} of {shown}.\n\n", self.salt));
+            text.push_str(&format!(
+                "## Detail\n\n```ts\n# not a heading {}\n```\n\n",
+                self.salt
+            ));
+            text.push_str("### Deeper\n\nText.\n\n");
+        }
+        text
+    }
+}
+
+fn starting_docs() -> Vec<SyntheticDoc> {
+    vec![
+        SyntheticDoc {
+            rel_path: "docs/overview.md".to_string(),
+            headings: vec!["Overview".to_string(), "Overview".to_string()],
+            salt: 1,
+            renamed: false,
+        },
+        SyntheticDoc {
+            rel_path: "docs/decisions/ADR-0001-first.md".to_string(),
+            headings: vec!["ADR-0001".to_string()],
+            salt: 2,
+            renamed: false,
+        },
+    ]
+}
+
+fn materialize_docs(root: &Path, docs: &[SyntheticDoc]) {
+    let wanted: BTreeSet<String> = docs.iter().map(|doc| doc.rel_path.clone()).collect();
+    let mut existing: Vec<PathBuf> = Vec::new();
+    collect_by_extension(&root.join("docs"), "md", &mut existing);
+    for path in existing {
+        let rel = path
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        if !wanted.contains(&rel) {
+            std::fs::remove_file(root.join(&rel)).unwrap();
+        }
+    }
+    for doc in docs {
+        write(root, &doc.rel_path, &doc.render());
+    }
+}
+
+/// Apply one document edit and name it. Draws from its own generator so that the code edit
+/// sequence — and every assertion already made about it — is bit-for-bit unchanged.
+fn apply_doc_edit(rng: &mut Rng, docs: &mut Vec<SyntheticDoc>, step: usize) -> &'static str {
+    match rng.below(5) {
+        0 => {
+            let victim = rng.below(docs.len());
+            docs[victim].salt = rng.next() % 1000;
+            "doc-modify"
+        }
+        1 => {
+            let victim = rng.below(docs.len());
+            docs[victim].renamed = !docs[victim].renamed;
+            "doc-rename-heading"
+        }
+        2 => {
+            docs.push(SyntheticDoc {
+                rel_path: format!("docs/added_{step}.md"),
+                headings: vec![format!("Added {step}"), "Shared".to_string()],
+                salt: rng.next() % 1000,
+                renamed: false,
+            });
+            "doc-add"
+        }
+        3 if docs.len() > 2 => {
+            let victim = rng.below(docs.len());
+            docs.remove(victim);
+            "doc-delete"
+        }
+        _ if docs.len() > 1 => {
+            let victim = rng.below(docs.len());
+            let name = docs[victim]
+                .rel_path
+                .rsplit('/')
+                .next()
+                .unwrap()
+                .to_string();
+            let destination = format!("docs/moved/{name}");
+            if docs.iter().any(|doc| doc.rel_path == destination) {
+                return "doc-move-skipped";
+            }
+            docs[victim].rel_path = destination;
+            "doc-move"
+        }
+        _ => "doc-move-skipped",
     }
 }
 
@@ -1022,16 +1152,22 @@ fn import_through(target: &SyntheticModule, rng: &mut Rng) -> SyntheticImport {
     }
 }
 
-/// **Acceptance criterion 2.** For a seeded sequence of mixed edits, an incremental re-index must
-/// produce a canonical dump byte-identical to a from-scratch index of the same tree, at *every*
-/// step.
+/// **Acceptance criterion 2**, and Slice 5a's acceptance criterion 7. For a seeded sequence of
+/// mixed edits over both source and documents, an incremental re-index must produce a canonical
+/// dump byte-identical to a from-scratch index of the same tree, at *every* step.
 ///
 /// The seed is fixed so a failure reproduces exactly. Divergence is reported with the step, the
 /// edit that caused it, and the first differing line — an equality assertion on two 100 kB JSON
 /// documents is otherwise unreadable.
+///
+/// Documents are driven by a **separate generator**, so the source edit sequence and every
+/// assertion already made about it are bit-for-bit what they were before Slice 5a. One document
+/// edit is applied per step, which makes the property strictly harder to satisfy rather than
+/// differently satisfied: every step now mixes a source change with a document change.
 #[test]
 fn incremental_and_full_agree_under_a_seeded_edit_sequence() {
     const SEED: u64 = 0x5117_3E03_1CE7_5EED;
+    const DOC_SEED: u64 = 0x00D0_C5EE_D0C5_EED1;
     const STEPS: usize = 24;
 
     let dir = tempfile::tempdir().unwrap();
@@ -1039,8 +1175,11 @@ fn incremental_and_full_agree_under_a_seeded_edit_sequence() {
     std::fs::create_dir_all(&root).unwrap();
 
     let mut rng = Rng(SEED);
+    let mut doc_rng = Rng(DOC_SEED);
     let mut modules = starting_modules();
+    let mut docs = starting_docs();
     materialize(&root, &modules);
+    materialize_docs(&root, &docs);
     nerve_index::init_with_project_id(&root, Some(TEST_PROJECT_ID)).unwrap();
     index(&root);
 
@@ -1061,8 +1200,10 @@ fn incremental_and_full_agree_under_a_seeded_edit_sequence() {
             "move" => "move",
             _ => "depend",
         });
+        kinds.insert(apply_doc_edit(&mut doc_rng, &mut docs, step));
         applied.push(description.clone());
         materialize(&root, &modules);
+        materialize_docs(&root, &docs);
 
         let outcome = index(&root);
         if let Some(factor) = outcome.incremental.amplification() {
@@ -1101,7 +1242,20 @@ fn incremental_and_full_agree_under_a_seeded_edit_sequence() {
         applied.len()
     );
     // A sequence that never deleted or moved anything would prove much less than it appears to.
-    for required in ["modify", "rename-export", "add", "delete", "move"] {
+    // The document half must cover the same ground, plus the heading rename, which is the only
+    // edit in either half that moves an entity id without moving a path.
+    for required in [
+        "modify",
+        "rename-export",
+        "add",
+        "delete",
+        "move",
+        "doc-modify",
+        "doc-rename-heading",
+        "doc-add",
+        "doc-delete",
+        "doc-move",
+    ] {
         assert!(
             kinds.contains(required),
             "the seeded sequence never performed a {required}; it exercised {kinds:?}"

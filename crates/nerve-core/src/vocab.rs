@@ -27,13 +27,17 @@ pub enum EntityKind {
     Class,
     /// A TypeScript interface.
     Interface,
+    /// A prose document. For Markdown this is 1:1 with a file.
+    Document,
+    /// A heading-delimited region of a document.
+    Section,
     /// A reference target that could not be resolved. A value, never an omission.
     Unresolved,
 }
 
 impl EntityKind {
     /// Every kind, in declaration order.
-    pub const ALL: [EntityKind; 9] = [
+    pub const ALL: [EntityKind; 11] = [
         EntityKind::Repository,
         EntityKind::Directory,
         EntityKind::File,
@@ -42,6 +46,8 @@ impl EntityKind {
         EntityKind::Method,
         EntityKind::Class,
         EntityKind::Interface,
+        EntityKind::Document,
+        EntityKind::Section,
         EntityKind::Unresolved,
     ];
 
@@ -56,6 +62,8 @@ impl EntityKind {
             EntityKind::Method => "method",
             EntityKind::Class => "class",
             EntityKind::Interface => "interface",
+            EntityKind::Document => "document",
+            EntityKind::Section => "section",
             EntityKind::Unresolved => "unresolved",
         }
     }
@@ -71,6 +79,8 @@ impl EntityKind {
             EntityKind::Method => "meth",
             EntityKind::Class => "class",
             EntityKind::Interface => "iface",
+            EntityKind::Document => "doc",
+            EntityKind::Section => "sect",
             EntityKind::Unresolved => "unres",
         }
     }
@@ -124,11 +134,13 @@ pub enum Relation {
     Extends,
     /// Interface implementation. Declared, not emitted in Slice 1.
     Implements,
+    /// One document supersedes another. Declared in Slice 5a, emitted in Slice 5b.
+    Supersedes,
 }
 
 impl Relation {
     /// Every relation, in declaration order.
-    pub const ALL: [Relation; 8] = [
+    pub const ALL: [Relation; 9] = [
         Relation::Contains,
         Relation::Defines,
         Relation::Imports,
@@ -137,6 +149,7 @@ impl Relation {
         Relation::References,
         Relation::Extends,
         Relation::Implements,
+        Relation::Supersedes,
     ];
 
     /// The relations Slice 1 is permitted to emit.
@@ -158,6 +171,7 @@ impl Relation {
             Relation::References => "REFERENCES",
             Relation::Extends => "EXTENDS",
             Relation::Implements => "IMPLEMENTS",
+            Relation::Supersedes => "SUPERSEDES",
         }
     }
 }
@@ -441,8 +455,20 @@ mod tests {
         assert_eq!(sorted.len(), prefixes.len(), "prefixes must be unique");
         assert_eq!(
             prefixes,
-            vec!["repo", "dir", "file", "mod", "fn", "meth", "class", "iface", "unres"]
+            vec![
+                "repo", "dir", "file", "mod", "fn", "meth", "class", "iface", "doc", "sect",
+                "unres"
+            ]
         );
+    }
+
+    /// A document and a section are named by their own tuples, not by the symbol tuple. If
+    /// either ever became a symbol kind, `select.rs` would fold a heading into a dotted
+    /// qualified name that appears nowhere in the repository.
+    #[test]
+    fn documents_and_sections_are_not_symbols() {
+        assert!(!EntityKind::Document.is_symbol());
+        assert!(!EntityKind::Section.is_symbol());
     }
 
     #[test]

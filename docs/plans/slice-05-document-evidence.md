@@ -218,5 +218,3 @@ invalidation closure across document→code edges belongs to 5b, where those edg
 No LLM. No summarisation. No fuzzy name matching. No link resolution (5b). No document rendering.
 No CommonMark conformance. No schema migration unless the entity kinds force one — they should not,
 since `entity.kind` carries no `CHECK` constraint (`nerve-store/src/schema.rs:46`).
-</content>
-</invoke>
