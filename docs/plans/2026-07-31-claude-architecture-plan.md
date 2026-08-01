@@ -1,7 +1,26 @@
 # Nerve — Architecture & Implementation Plan (Claude's independent position)
 
+> ## ⚠️ SUPERSEDED — HISTORICAL RECORD ONLY. DO NOT IMPLEMENT FROM THIS DOCUMENT.
+>
+> Superseded by `docs/plans/nerve-master-build-plan.md` (see its §2 for the itemised
+> withdrawals) and by the accepted ADRs in `docs/decisions/`. The authoritative slice list is
+> `docs/ROADMAP.md`; the current state is `docs/CONTINUATION.md`.
+>
+> **Specifically withdrawn** — these recommendations appear below and are **prohibited** by
+> `CLAUDE.md` §1 and `docs/CLEANROOM.md`:
+> - consuming CodeGraph's database as a static-graph source, or as an optional adapter
+> - positioning Nerve as complementary to a competitor rather than independent
+> - TypeScript/Node as the implementation language (superseded by Rust, ADR-0004)
+> - "missed-edge discovery via coverage" as the wedge experiment — **technically wrong**;
+>   coverage cannot establish call edges (ADR-0005)
+> - benchmarking GitNexus, whose PolyForm Noncommercial licence makes that a commercial use
+>
+> This file is retained **only** for its competitive and licensing research. It names competitor
+> products throughout; that is why this banner exists. Nothing in it may inform implementation.
+
 **Date:** 2026-07-31
-**Status:** Debate document. Nothing implemented. No repository created.
+**Status:** Superseded debate document, retained for research provenance.
+**Original status line (now false):** "Nothing implemented. No repository created."
 **Purpose:** An independent, opinionated architecture to be compared against a separately-produced ChatGPT plan, then synthesized.
 
 **Evidence labels used throughout:**
