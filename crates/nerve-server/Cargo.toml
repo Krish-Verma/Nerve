@@ -1,26 +1,18 @@
 [package]
-name = "nerve-cli"
+name = "nerve-server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Nerve command-line interface."
-
-[[bin]]
-name = "nerve"
-path = "src/main.rs"
+description = "Nerve local read-only HTTP surface: loopback-only, token-gated, no business logic."
 
 [dependencies]
 nerve-core.workspace = true
 nerve-index.workspace = true
-nerve-server.workspace = true
 nerve-store.workspace = true
-anyhow.workspace = true
-clap.workspace = true
-serde.workspace = true
 serde_json.workspace = true
-signal-hook.workspace = true
+tiny_http.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

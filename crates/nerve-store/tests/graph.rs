@@ -458,3 +458,194 @@ fn a_selector_matching_nothing_carries_suggestions() {
         other => panic!("expected no match, got {other:?}"),
     }
 }
+
+// ---- neighbourhood (Slice 4a) ----------------------------------------------------------------
+
+use nerve_store::{
+    entity_relation_counts, neighbourhood, occurrences_of, path_is_indexed, unresolved_entities,
+    NeighbourhoodQuery,
+};
+
+fn node_ids(report: &nerve_store::NeighbourhoodReport) -> Vec<String> {
+    report
+        .nodes
+        .iter()
+        .map(|node| node.entity.entity_id.clone())
+        .collect()
+}
+
+#[test]
+fn a_depth_one_neighbourhood_is_the_focus_and_its_immediate_edges() {
+    let conn = fixture();
+    let report = neighbourhood(&conn, "B", &NeighbourhoodQuery::default()).unwrap();
+
+    assert_eq!(report.focus.entity_id, "B");
+    assert_eq!(report.nodes[0].depth, 0);
+    assert_eq!(report.nodes[0].entity.entity_id, "B");
+    // A (calls B), C (called by B), U (imported by B).
+    assert_eq!(node_ids(&report), vec!["B", "A", "C", "U"]);
+    assert_eq!(report.edges.len(), 3);
+    assert_eq!(report.omitted_nodes, 0);
+    assert!(
+        !report.truncated,
+        "a complete answer is not a truncated one"
+    );
+    assert!(report.frontier_nodes > 0, "there is more to expand");
+}
+
+#[test]
+fn direction_forward_follows_only_outgoing_edges() {
+    let conn = fixture();
+    let report = neighbourhood(
+        &conn,
+        "B",
+        &NeighbourhoodQuery {
+            direction: Direction::Forward,
+            ..NeighbourhoodQuery::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(node_ids(&report), vec!["B", "C", "U"]);
+    for edge in &report.edges {
+        assert_eq!(edge.source_entity_id, "B");
+    }
+}
+
+#[test]
+fn depth_two_reaches_further_and_the_edges_stay_closed() {
+    let conn = fixture();
+    let report = neighbourhood(
+        &conn,
+        "A",
+        &NeighbourhoodQuery {
+            max_depth: 2,
+            ..NeighbourhoodQuery::default()
+        },
+    )
+    .unwrap();
+    let ids = node_ids(&report);
+    assert!(ids.contains(&"U".to_string()), "{ids:?}");
+
+    // Every reported edge names two reported nodes.
+    for edge in &report.edges {
+        assert!(ids.contains(&edge.source_entity_id), "{edge:?}");
+        assert!(ids.contains(&edge.target_entity_id), "{edge:?}");
+    }
+}
+
+#[test]
+fn the_node_budget_bites_and_says_how_much_it_left_out() {
+    let conn = fixture();
+    let report = neighbourhood(
+        &conn,
+        "B",
+        &NeighbourhoodQuery {
+            max_nodes: 2,
+            ..NeighbourhoodQuery::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(report.nodes.len(), 2);
+    assert!(report.truncated);
+    assert_eq!(
+        report.omitted_nodes, 2,
+        "two neighbours were refused a slot: {report:?}"
+    );
+}
+
+#[test]
+fn a_relation_filter_and_resolved_only_apply_to_the_neighbourhood() {
+    let conn = fixture();
+    let imports = neighbourhood(
+        &conn,
+        "B",
+        &NeighbourhoodQuery {
+            relations: vec![Relation::Imports],
+            ..NeighbourhoodQuery::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(node_ids(&imports), vec!["B", "U"]);
+
+    let resolved = neighbourhood(
+        &conn,
+        "B",
+        &NeighbourhoodQuery {
+            relations: vec![Relation::Imports],
+            resolved_only: true,
+            ..NeighbourhoodQuery::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        node_ids(&resolved),
+        vec!["B"],
+        "the unresolved edge is gone"
+    );
+    assert!(resolved.edges.is_empty());
+}
+
+#[test]
+fn an_isolated_entity_has_a_neighbourhood_of_exactly_itself() {
+    let conn = fixture();
+    let report = neighbourhood(&conn, "D", &NeighbourhoodQuery::default()).unwrap();
+    assert_eq!(node_ids(&report), vec!["D"]);
+    assert!(report.edges.is_empty());
+    assert!(!report.truncated);
+    assert_eq!(report.omitted_nodes, 0);
+    assert_eq!(report.frontier_nodes, 0);
+}
+
+#[test]
+fn the_same_neighbourhood_question_gives_a_byte_identical_answer() {
+    let conn = fixture();
+    let query = NeighbourhoodQuery {
+        max_depth: 2,
+        ..NeighbourhoodQuery::default()
+    };
+    let first = neighbourhood(&conn, "A", &query).unwrap();
+    for _ in 0..8 {
+        assert_eq!(neighbourhood(&conn, "A", &query).unwrap(), first);
+    }
+}
+
+#[test]
+fn occurrences_come_back_in_a_stable_order() {
+    let conn = fixture();
+    let occurrences = occurrences_of(&conn, "B").unwrap();
+    assert_eq!(occurrences.len(), 1);
+    assert_eq!(occurrences[0].file_path, "src/b.ts");
+    assert_eq!(occurrences[0].start_line, 2);
+    assert_eq!(occurrences[0].content_hash, "hash-of-file");
+    assert!(occurrences_of(&conn, "nope").unwrap().is_empty());
+}
+
+#[test]
+fn relation_counts_split_by_side() {
+    let conn = fixture();
+    let counts = entity_relation_counts(&conn, "B").unwrap();
+    assert_eq!(counts.outgoing.get("CALLS"), Some(&1));
+    assert_eq!(counts.outgoing.get("IMPORTS"), Some(&1));
+    assert_eq!(counts.incoming.get("CALLS"), Some(&1));
+    assert_eq!(counts.incoming.get("IMPORTS"), None);
+}
+
+#[test]
+fn the_unresolved_list_reports_how_often_each_target_was_wanted() {
+    let conn = fixture();
+    let rows = unresolved_entities(&conn, 10, 0).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].entity_id, "U");
+    assert_eq!(rows[0].name, "unknown");
+    assert_eq!(rows[0].referencing_assertions, 1);
+    assert!(unresolved_entities(&conn, 10, 1).unwrap().is_empty());
+}
+
+#[test]
+fn a_path_is_indexed_only_if_an_occurrence_names_it() {
+    let conn = fixture();
+    assert!(path_is_indexed(&conn, "src/b.ts").unwrap());
+    assert!(!path_is_indexed(&conn, "src/never.ts").unwrap());
+    assert!(!path_is_indexed(&conn, "../../etc/passwd").unwrap());
+    assert!(!path_is_indexed(&conn, "").unwrap());
+}

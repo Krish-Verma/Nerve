@@ -4,6 +4,7 @@ members = [
     "crates/nerve-core",
     "crates/nerve-store",
     "crates/nerve-index",
+    "crates/nerve-server",
     "crates/nerve-cli",
 ]
 
@@ -18,6 +19,7 @@ repository = "https://github.com/krishverma/nerve"
 nerve-core = { path = "crates/nerve-core" }
 nerve-store = { path = "crates/nerve-store" }
 nerve-index = { path = "crates/nerve-index" }
+nerve-server = { path = "crates/nerve-server" }
 
 anyhow = "1"
 blake3 = "1"
@@ -26,8 +28,10 @@ ignore = "0.4"
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+signal-hook = "0.4"
 tempfile = "3"
 thiserror = "2"
+tiny_http = { version = "0.12", default-features = false }
 toml = "0.9"
 tree-sitter = "0.25"
 tree-sitter-javascript = "0.25"

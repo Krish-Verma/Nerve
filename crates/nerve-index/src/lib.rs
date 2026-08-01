@@ -22,6 +22,7 @@ pub mod facts;
 pub mod gitinfo;
 pub mod incremental;
 pub mod init;
+pub mod inspect;
 pub mod lang;
 pub mod pipeline;
 pub mod probe;
@@ -40,12 +41,13 @@ pub use incremental::{
     PreviousModule,
 };
 pub use init::{init, init_with_project_id, InitOutcome};
+pub use inspect::{index_freshness, partial_parses, IndexFreshness, PartialParse};
 pub use lang::Language;
 pub use pipeline::{
     index_repository, index_repository_with, IncrementalReport, IndexOptions, IndexOutcome,
     RunStatus,
 };
-pub use probe::RepositoryProber;
+pub use probe::{RepositoryProber, SourceSnippet, MAX_SNIPPET_BYTES, MAX_SNIPPET_LINES};
 pub use refs::{
     extract_references, RefTarget, ReferenceExtraction, ReferenceSite, UnresolvedReason,
     EXTRACTOR_ID as REFERENCE_EXTRACTOR_ID, EXTRACTOR_VERSION as REFERENCE_EXTRACTOR_VERSION,

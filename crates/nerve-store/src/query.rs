@@ -219,6 +219,193 @@ pub fn importers_of(conn: &Connection, target_entity_id: &str) -> Result<Vec<Str
     Ok(out)
 }
 
+/// The single repository row, as recorded by `nerve init`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryInfo {
+    /// Content-derived repository identifier, the scope key of every other table.
+    pub repo_id: String,
+    /// Stable project identifier from `.nerve/config.toml`.
+    pub project_id: String,
+    /// Absolute root path recorded at `init`.
+    pub root_path: String,
+}
+
+/// Read the repository row.
+///
+/// [`status`] reports `project_id` and `root_path` but not `repo_id`, and `repo_id` is what
+/// every per-repository query is scoped by. Callers that need to ask a scoped question — the
+/// module cache, the partial-parse list — need it without recomputing it from the config.
+pub fn repository(conn: &Connection) -> Result<Option<RepositoryInfo>> {
+    Ok(conn
+        .query_row(
+            "SELECT repo_id, project_id, root_path FROM repository ORDER BY repo_id LIMIT 1",
+            [],
+            |row| {
+                Ok(RepositoryInfo {
+                    repo_id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    root_path: row.get(2)?,
+                })
+            },
+        )
+        .ok())
+}
+
+/// One recorded occurrence of an entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OccurrenceRow {
+    /// Content-derived occurrence identifier.
+    pub occurrence_id: String,
+    /// Repository-relative path.
+    pub file_path: String,
+    /// First byte of the span.
+    pub start_byte: i64,
+    /// One past the last byte of the span.
+    pub end_byte: i64,
+    /// First line of the span, 1-based.
+    pub start_line: i64,
+    /// Column of the first byte, 0-based.
+    pub start_col: i64,
+    /// Last line of the span, 1-based.
+    pub end_line: i64,
+    /// Column one past the last byte, 0-based.
+    pub end_col: i64,
+    /// Content hash of the file when the occurrence was recorded.
+    pub content_hash: String,
+}
+
+/// Every occurrence of one entity, in a stable order.
+pub fn occurrences_of(conn: &Connection, entity_id: &str) -> Result<Vec<OccurrenceRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT occurrence_id, file_path, start_byte, end_byte, start_line, start_col,
+                end_line, end_col, content_hash
+           FROM occurrence
+          WHERE entity_id = ?1
+          ORDER BY file_path, start_byte, end_byte, occurrence_id",
+    )?;
+    let rows = stmt.query_map(params![entity_id], |row| {
+        Ok(OccurrenceRow {
+            occurrence_id: row.get(0)?,
+            file_path: row.get(1)?,
+            start_byte: row.get(2)?,
+            end_byte: row.get(3)?,
+            start_line: row.get(4)?,
+            start_col: row.get(5)?,
+            end_line: row.get(6)?,
+            end_col: row.get(7)?,
+            content_hash: row.get(8)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// How many assertions of each relation touch one entity, per side.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EntityRelationCounts {
+    /// Relations where the entity is the assertion's source.
+    pub outgoing: BTreeMap<String, i64>,
+    /// Relations where the entity is the assertion's target.
+    pub incoming: BTreeMap<String, i64>,
+}
+
+/// Assertion counts around one entity, keyed by relation.
+///
+/// This is what lets a surface say "12 outgoing `CALLS`" without loading twelve edges.
+pub fn entity_relation_counts(conn: &Connection, entity_id: &str) -> Result<EntityRelationCounts> {
+    let mut counts = EntityRelationCounts::default();
+    for (side, column) in [
+        ("outgoing", "source_entity_id"),
+        ("incoming", "target_entity_id"),
+    ] {
+        // `column` is one of two literals chosen here, never caller text.
+        let sql = format!(
+            "SELECT relation, count(*) FROM assertion
+              WHERE {column} = ?1 GROUP BY relation ORDER BY relation"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![entity_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let target = if side == "outgoing" {
+            &mut counts.outgoing
+        } else {
+            &mut counts.incoming
+        };
+        for row in rows {
+            let (relation, count) = row?;
+            target.insert(relation, count);
+        }
+    }
+    Ok(counts)
+}
+
+/// One reference target Nerve could not resolve.
+///
+/// Invariant 4: unresolved is a value, not an omission. This is the list that makes it visible.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnresolvedEntity {
+    /// Entity identifier.
+    pub entity_id: String,
+    /// Display name — the specifier or binding that did not resolve.
+    pub name: String,
+    /// Where the failed reference was written.
+    pub scope_path: String,
+    /// Entity `meta` as stored, if any.
+    pub meta: Option<String>,
+    /// How many assertions point at this unresolved target.
+    pub referencing_assertions: i64,
+}
+
+/// Entities of kind `unresolved`, most-referenced first, then by name.
+pub fn unresolved_entities(
+    conn: &Connection,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<UnresolvedEntity>> {
+    let mut stmt = conn.prepare(
+        "SELECT e.entity_id, e.name, e.scope_path, e.meta,
+                (SELECT count(*) FROM assertion a WHERE a.target_entity_id = e.entity_id)
+                    AS referencing
+           FROM entity e
+          WHERE e.kind = 'unresolved'
+          ORDER BY referencing DESC, e.scope_path, e.name, e.entity_id
+          LIMIT ?1 OFFSET ?2",
+    )?;
+    let rows = stmt.query_map(params![limit as i64, offset as i64], |row| {
+        Ok(UnresolvedEntity {
+            entity_id: row.get(0)?,
+            name: row.get(1)?,
+            scope_path: row.get(2)?,
+            meta: row.get(3)?,
+            referencing_assertions: row.get(4)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Whether any occurrence was recorded at `file_path`.
+///
+/// The source endpoint serves by **indexed path only** (THREAT-MODEL T6). This is that check;
+/// it is a necessary condition, never a sufficient one — the path is still resolved through the
+/// repository path guard afterwards, because the database is a file on disk and not a trusted
+/// channel.
+pub fn path_is_indexed(conn: &Connection, file_path: &str) -> Result<bool> {
+    let found: i64 = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM occurrence WHERE file_path = ?1)",
+        params![file_path],
+        |row| row.get(0),
+    )?;
+    Ok(found != 0)
+}
+
 /// One search result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchHit {

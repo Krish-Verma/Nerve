@@ -954,3 +954,110 @@ fn the_cli_contains_no_traversal_or_query_logic() {
         );
     }
 }
+
+// ---- serve ---------------------------------------------------------------------------------
+
+#[test]
+fn serve_refuses_a_directory_with_no_index() {
+    let (_dir, root) = named_fixture_copy("ts-resolution");
+    let serve = run(&["serve", root.to_str().unwrap()]);
+    assert_eq!(
+        code(&serve),
+        2,
+        "{}",
+        String::from_utf8_lossy(&serve.stderr)
+    );
+    assert!(String::from_utf8_lossy(&serve.stderr).contains("no Nerve index"));
+}
+
+#[test]
+fn serve_refuses_a_path_that_does_not_exist() {
+    let serve = run(&["serve", "/nerve/definitely/not/here"]);
+    assert_eq!(code(&serve), 10);
+}
+
+/// The whole `nerve serve` lifecycle from the command line: it binds loopback, prints a URL
+/// carrying the session token, answers only with that token, and stops on SIGTERM leaving the
+/// index writable.
+#[cfg(unix)]
+#[test]
+fn serve_prints_a_usable_url_and_stops_on_a_signal() {
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+
+    let (_dir, root) = indexed_fixture("ts-resolution");
+    let mut child = Command::new(binary())
+        .args(["serve", root.to_str().unwrap(), "--json", "--port", "0"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("nerve serve must start");
+
+    // `serve` prints its banner and then blocks, so read until what has arrived parses.
+    let mut out = child.stdout.take().unwrap();
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 512];
+    let announcement = loop {
+        let read = out.read(&mut chunk).expect("reading serve output");
+        assert!(read > 0, "serve exited without announcing itself");
+        buffer.extend_from_slice(&chunk[..read]);
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&buffer) {
+            break value;
+        }
+    };
+
+    require_keys(
+        &announcement,
+        &[
+            "command",
+            "ok",
+            "address",
+            "port",
+            "base_url",
+            "url",
+            "token",
+            "token_header",
+            "routes",
+        ],
+    );
+    let address = announcement["address"].as_str().unwrap().to_string();
+    let token = announcement["token"].as_str().unwrap().to_string();
+    assert!(address.starts_with("127.0.0.1:"), "{address}");
+    assert_eq!(token.len(), 64);
+    assert!(announcement["url"].as_str().unwrap().contains(&token));
+    assert_eq!(announcement["token_header"], "X-Nerve-Token");
+
+    let get = |headers: String| -> String {
+        let mut socket = std::net::TcpStream::connect(&address).expect("connect");
+        socket
+            .write_all(
+                format!("GET /api/overview HTTP/1.1\r\nHost: {address}\r\n{headers}Connection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .unwrap();
+        let mut response = String::new();
+        socket.read_to_string(&mut response).unwrap();
+        response
+    };
+
+    assert!(
+        get(format!("X-Nerve-Token: {token}\r\n")).starts_with("HTTP/1.1 200"),
+        "the printed token must work"
+    );
+    assert!(
+        get(String::new()).starts_with("HTTP/1.1 401"),
+        "no token must be refused"
+    );
+
+    // SIGTERM, not SIGKILL: the point is that the graceful path works.
+    let terminated = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .expect("kill must run");
+    assert!(terminated.success());
+    let status = child.wait().expect("serve must exit");
+    assert_eq!(status.code(), Some(0), "serve must exit cleanly");
+
+    // Nothing is left holding the index.
+    assert!(std::net::TcpStream::connect(&address).is_err());
+    assert_eq!(code(&run(&["index", root.to_str().unwrap()])), 0);
+}

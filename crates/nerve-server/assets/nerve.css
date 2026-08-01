@@ -1,0 +1,90 @@
+/* Placeholder styling for the embedded page.
+ *
+ * Served from the binary, referenced by <link> rather than inlined, because the Content-Security-
+ * Policy this server sends has no `unsafe-inline`: an inline <style> block would be blocked. That
+ * is deliberate — the same policy is what stops an injected attribute from ever executing.
+ */
+
+:root {
+  color-scheme: light dark;
+  --ink: #14161a;
+  --muted: #5c6470;
+  --rule: #d9dee6;
+  --paper: #fbfcfd;
+  --accent: #1f5f8b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e7eaef;
+    --muted: #97a1af;
+    --rule: #2b313a;
+    --paper: #14161a;
+    --accent: #6fb3dd;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
+main {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 3rem 1.25rem 4rem;
+}
+
+h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.75rem;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  margin: 2.25rem 0 0.5rem;
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 0.4rem;
+}
+
+p {
+  margin: 0.5rem 0;
+}
+
+.lede {
+  color: var(--muted);
+}
+
+ul {
+  margin: 0.5rem 0;
+  padding-left: 1.1rem;
+}
+
+li {
+  margin: 0.3rem 0;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.875em;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+.footnote {
+  margin-top: 2.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+  color: var(--muted);
+  font-size: 0.875rem;
+}

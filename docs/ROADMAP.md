@@ -10,7 +10,8 @@ Authoritative slice list. Update the status column at the end of every slice.
 | 2b | Graph query surface — `nerve path`, `nerve why`, evidence packets | ✅ Complete (2026-07-31) — 261 tests pass, query-time path safety verified by attack |
 | 3 | Incremental indexing — changed-file detection, import-closure invalidation, **deletion**, `IdentityLink`, full-vs-incremental equivalence | ✅ Complete (2026-07-31) — 295 tests, equivalence holds over 24 seeded edits; **speed target missed (24.9% vs 20%)** |
 | 3b | Normalize repository state out of `occurrence`/`observation` and out of `occurrence_id` — removes the O(repository) restatement pass | ✅ Complete (2026-07-31) — 306 tests; **24.9% → 2.0%**; counted-writes gate; found and fixed a silent data-destruction bug |
-| 4 | Initial visual explorer — `nerve serve`, overview, search, graph canvas, evidence inspector | 🟡 In progress — threat model gate satisfied (`docs/THREAT-MODEL.md`) |
+| 4a | `nerve serve` — loopback HTTP, read-only JSON API, T4/T5/T6 security controls | ✅ Complete (2026-07-31) — 427 tests; token/origin/host/traversal/symlink/XSS all attack-verified |
+| 4b | `apps/nerve-web` — the visual explorer SPA, asset embedding, screenshot QA | ⬜ Not started — **recommended next** |
 | 5 | Markdown + ADR evidence — sections, citations, document↔code identity links | ⬜ Not started |
 | 6 | Test evidence (**coverage only**) — `TEST_COVERS_SYMBOL`, freshness, affected-test experiment | ⬜ Not started |
 | 7 | CLI + query expansion — `impact`, `gaps`, `check`, evidence packets | ⬜ Not started |
@@ -115,3 +116,20 @@ surfaces. It is split into **2a** (resolution + relations + measured precision) 
 threat model. It specifies the blocking controls for the local HTTP surface (T4 CSRF/token +
 DNS-rebinding, T5 XSS, T6 source serving), documents (T7), test evidence (T9) and MCP (T8).
 It also raised one corrective item: there is no test asserting Nerve spawns no subprocess.
+
+## Slice 4a — delivered
+
+- New crate `nerve-server`: blocking loopback HTTP, worker pool, one `PRAGMA query_only`
+  connection per worker. Nine read-only endpoints calling the same `nerve-store` functions the
+  CLI uses — no business logic in the surface.
+- **Tokio + axum rejected on measured evidence.** `tiny_http` costs **3** transitive crates
+  against roughly 80–100 for the async stack, for a loopback-only single-user read-only server.
+  93 → 100 crates total, all permissive, all recorded.
+- **T4/T5/T6 implemented and attack-verified by the orchestrator**, not only by shipped tests:
+  no token → 401, wrong token → 403, `Origin: evil.test` → 403, `Host: evil.test` → 403
+  (DNS-rebinding), `POST` → 405, traversal and `/etc/passwd` → 403, a `.env` secret absent from
+  every response, and an orchestrator-authored XSS payload escaped with **0 raw angle brackets**
+  while still round-tripping losslessly.
+- Read-only proven by sha256 before/after; clean SIGTERM shutdown leaving no database lock.
+- One accepted risk recorded as threat-model **T11**: `tiny_http` reads header lines unbounded,
+  a local availability issue with no disclosure path. Report: `docs/reports/slice-04a-report.md`.

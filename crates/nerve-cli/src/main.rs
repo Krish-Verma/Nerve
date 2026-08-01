@@ -111,6 +111,22 @@ enum Command {
         #[arg(long, default_value = ".")]
         path: PathBuf,
     },
+    /// Serve the evidence graph over a local, read-only HTTP API.
+    ///
+    /// Binds 127.0.0.1 only, mints a per-session token, and never writes to the index.
+    Serve {
+        /// Repository root. Defaults to the current directory.
+        path: Option<PathBuf>,
+        /// Repository root. Equivalent to the positional form.
+        #[arg(long = "path", value_name = "PATH")]
+        path_flag: Option<PathBuf>,
+        /// TCP port on 127.0.0.1. The default asks the operating system for a free one.
+        #[arg(long, default_value_t = 0)]
+        port: u16,
+        /// Request-handling threads.
+        #[arg(long, default_value_t = nerve_server::DEFAULT_WORKERS)]
+        workers: usize,
+    },
     /// Show the evidence behind a relationship.
     Why {
         /// Subject selector: entity id, rel/path.ts, rel/path.ts#Name, or a unique name.
@@ -269,6 +285,17 @@ fn main() {
             };
             run_path(&output, &path, arguments)
         }
+        Command::Serve {
+            path,
+            path_flag,
+            port,
+            workers,
+        } => run_serve(
+            &output,
+            path.or(path_flag).unwrap_or_else(|| PathBuf::from(".")),
+            port,
+            workers,
+        ),
         Command::Why {
             from,
             to,
@@ -1174,6 +1201,89 @@ fn run_why(output: &Output, path: &Path, arguments: WhyArguments) -> i32 {
 /// Render a stored `details` blob as JSON when it parses, as a string when it does not.
 fn details_json(details: &str) -> serde_json::Value {
     serde_json::from_str(details).unwrap_or_else(|_| json!(details))
+}
+
+// ---- serve ---------------------------------------------------------------------------------
+
+fn serve_exit_code(err: &nerve_server::ServerError) -> i32 {
+    match err {
+        nerve_server::ServerError::NoSuchRoot(_) => exit::USAGE,
+        nerve_server::ServerError::NotIndexed(_) => exit::NO_INDEX,
+        _ => exit::INTERNAL,
+    }
+}
+
+/// Start the local server, print how to reach it, and block until it is asked to stop.
+///
+/// The URL carries the session token because the terminal's only channel to a browser is a URL,
+/// and without the token nothing — not even the page — is served. The token is minted per run
+/// and never written to disk.
+fn run_serve(output: &Output, root: PathBuf, port: u16, workers: usize) -> i32 {
+    let config = nerve_server::ServeConfig {
+        root,
+        port,
+        workers,
+    };
+    let server = match nerve_server::serve(config) {
+        Ok(server) => server,
+        Err(err) => return output.failure("serve", serve_exit_code(&err), &err.to_string()),
+    };
+
+    output.line(format!("Nerve is serving on {}", server.base_url()));
+    output.line(String::new());
+    output.line(format!("  open  {}", server.url()));
+    output.line(String::new());
+    output.line("  The session token is required on every request, as the X-Nerve-Token");
+    output.line("  header or a token query parameter. It is not written to disk and it dies");
+    output.line("  with this process. Requests from another origin, or naming another host,");
+    output.line("  are refused. The API is read-only.");
+    output.line(String::new());
+    output.line("  Press Ctrl-C to stop.");
+
+    output.object(json!({
+        "command": "serve",
+        "ok": true,
+        "exit_code": exit::SUCCESS,
+        "address": server.address().to_string(),
+        "port": server.address().port(),
+        "base_url": server.base_url(),
+        "url": server.url(),
+        "token": server.token().as_str(),
+        "token_header": nerve_server::token::TOKEN_HEADER,
+        "workers": workers,
+        "routes": nerve_server::router::ROUTES,
+    }));
+
+    install_shutdown(server.shutdown_handle());
+    server.join();
+    output.line("Stopped.");
+    exit::SUCCESS
+}
+
+/// Turn SIGINT and SIGTERM into a graceful stop.
+///
+/// The alternative is the default disposition, which kills the process mid-response. That is
+/// survivable here — the server never writes and holds only `query_only` connections — but
+/// "survivable" is not the same as "clean", and a tool that has to be killed teaches its user
+/// that being killed is normal.
+///
+/// If the handler cannot be installed the server still runs; the default disposition applies,
+/// which is exactly the behaviour we would have had anyway.
+fn install_shutdown(handle: nerve_server::ShutdownHandle) {
+    use signal_hook::consts::{SIGINT, SIGTERM};
+    use signal_hook::iterator::Signals;
+
+    let Ok(mut signals) = Signals::new([SIGINT, SIGTERM]) else {
+        return;
+    };
+    std::thread::Builder::new()
+        .name("nerve-serve-signals".to_string())
+        .spawn(move || {
+            if signals.forever().next().is_some() {
+                handle.shutdown();
+            }
+        })
+        .ok();
 }
 
 #[cfg(test)]

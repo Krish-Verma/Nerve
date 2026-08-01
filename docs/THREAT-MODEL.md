@@ -151,6 +151,31 @@ no analytics, no external LLM. `no_network` runs in CI.
 importance, that assertion should exist rather than resting on code review.
 → tracked as a corrective item below.
 
+### T11 — Unbounded request-header read in the HTTP server (A3) — **accepted risk**
+
+`tiny_http 0.12.0` reads request header lines without an upper bound (`client.rs::read_next_line`
+grows a buffer until CRLF). A local process — including one owned by *another* local user, since
+loopback is reachable by any local UID — can exhaust memory by sending a header line that never
+terminates.
+
+**Why this is accepted rather than fixed now:**
+- The impact is **availability of the user's own development tool**, not confidentiality or
+  integrity. No data is disclosed: the header is consumed before `recv()` returns, so the request
+  never reaches routing, and the token gate is not the thing being bypassed.
+- It cannot be intercepted at Nerve's layer. Fixing it means replacing the server crate or
+  hand-rolling the reader, which trades a known, bounded availability issue for a new, unreviewed
+  parser — a bad exchange for a local dev tool.
+- Everything Nerve *does* control is bounded: 8 KiB request target, 32 query parameters, bodies
+  refused unread, responses `Content-Length`-framed with chunking disabled.
+
+**Revisit if** Nerve ever binds anything other than loopback, ships a shared or multi-user mode,
+or the server surface grows beyond read-only queries. Any of those changes the calculus.
+
+**Related, also accepted:** there is no connection read timeout, so a half-open connection holds a
+server pool thread and connection count is unbounded. A test
+(`a_truncated_or_garbage_request_does_not_take_the_server_down`) pins that the server stays
+responsive, because the accept/read pool is separate from the query workers.
+
 ## 5. Explicit non-goals
 
 - Nerve does not defend against a **local attacker who already has the user's UID** — such an
@@ -167,7 +192,8 @@ importance, that assertion should exist rather than resting on code review.
 |---|---|---|
 | Indexing | T1, T2, T3 | ✅ implemented and attack-verified |
 | Query CLI | T2 (query-time reads) | ✅ implemented and attack-verified |
-| Local HTTP + UI (Slice 4) | T4, T5, T6 | ⬜ **required before Slice 4 ships** |
+| Local HTTP API (Slice 4a) | T4, T5, T6 | ✅ implemented and attack-verified |
+| Visual UI (Slice 4b) | T5 rendering rules | ⬜ required before Slice 4b ships |
 | Documents (Slice 5) | T7 | ⬜ required before Slice 5 ships |
 | Test evidence (Slice 6/11) | T9 | ⬜ required before Slice 6 ships |
 | MCP (Slice 8) | T7, T8 | ⬜ required before Slice 8 ships |

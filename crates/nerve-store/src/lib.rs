@@ -35,15 +35,18 @@ pub use error::{Result, StoreError};
 pub use facts::{delete_module_facts, load_module_facts, upsert_module_facts, ModuleFactsRow};
 pub use freshness::{FileProbe, FileProber, Freshness, FreshnessCache};
 pub use graph::{
-    explain, find_paths, AssertionEvidence, Direction, EdgeDirection, GraphPath,
-    ObservationEvidence, PathHop, PathQuery, PathReport, WhyDirection, WhyQuery, WhyReport,
+    explain, find_paths, neighbourhood, AssertionEvidence, Direction, EdgeDirection, GraphPath,
+    NeighbourEdge, NeighbourNode, NeighbourhoodQuery, NeighbourhoodReport, ObservationEvidence,
+    PathHop, PathQuery, PathReport, WhyDirection, WhyQuery, WhyReport,
 };
 pub use prune::{
     delete_directory_containment, delete_file_rows, prune_orphans, prune_orphans_scoped,
     RemovalCounts, TouchedRows,
 };
 pub use query::{
-    importers_of, search_entities, status, ExtractorRunSummary, SearchHit, StatusReport,
+    entity_relation_counts, importers_of, occurrences_of, path_is_indexed, repository,
+    search_entities, status, unresolved_entities, EntityRelationCounts, ExtractorRunSummary,
+    OccurrenceRow, RepositoryInfo, SearchHit, StatusReport, UnresolvedEntity,
 };
 pub use schema::{migrate, schema_version, SCHEMA_VERSION};
 pub use select::{

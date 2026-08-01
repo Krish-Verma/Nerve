@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Nerve</title>
+    <link rel="stylesheet" href="/assets/nerve.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Nerve</h1>
+      <p class="lede">
+        The read-only evidence API is running on this loopback address. The explorer interface
+        is not part of this build yet.
+      </p>
+
+      <h2>What is here</h2>
+      <ul>
+        <li><code>GET /api/overview</code> — counts, unresolved totals, last run, schema, freshness</li>
+        <li><code>GET /api/search?q=&amp;kind=&amp;limit=</code> — full-text symbol search</li>
+        <li><code>GET /api/entity?selector=</code> — one entity, its occurrences, its defining edges</li>
+        <li><code>GET /api/neighbourhood?selector=&amp;depth=&amp;max_nodes=</code> — a bounded graph</li>
+        <li><code>GET /api/path?from=&amp;to=</code> — how two entities are connected</li>
+        <li><code>GET /api/why?subject=&amp;object=</code> — the evidence packet, with freshness</li>
+        <li><code>GET /api/source?path=&amp;start_line=&amp;end_line=</code> — a bounded source snippet</li>
+        <li><code>GET /api/unresolved</code> — what Nerve could not resolve</li>
+        <li><code>GET /api/partial-parses</code> — which files parsed with errors</li>
+      </ul>
+
+      <h2>Every request needs the session token</h2>
+      <p>
+        Send it as the <code>X-Nerve-Token</code> header, or as a <code>token</code> query
+        parameter. It is printed once by <code>nerve serve</code> and is never written to disk.
+        Requests from another origin are refused, and so is any <code>Host</code> that is not
+        this loopback address.
+      </p>
+
+      <h2>Nothing here can change anything</h2>
+      <p>
+        The API is read-only. It performs no network access, sends no telemetry, and serves file
+        contents only for paths that are already in the index, resolved through the same path
+        guard the indexer uses.
+      </p>
+
+      <p class="footnote">
+        This page is a placeholder with no scripts and no repository content in it. The explorer
+        replaces it by dropping built assets into this same embedded table.
+      </p>
+    </main>
+  </body>
+</html>

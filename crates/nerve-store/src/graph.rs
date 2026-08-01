@@ -13,7 +13,7 @@
 //!   walk carries an explicit budget. When the budget stops the search the report says so:
 //!   "no path" and "I gave up" are different answers and must not be rendered as the same one.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use rusqlite::{params, Connection};
 
@@ -421,6 +421,265 @@ fn load_entity(
     let entity = conn.query_row(&sql, params![entity_id], EntityRef::read)?;
     cache.insert(entity_id.to_string(), entity.clone());
     Ok(entity)
+}
+
+// ---- neighbourhood -------------------------------------------------------------------------
+//
+// A graph view that renders "the repository" answers no question and cannot be drawn: a 200k
+// entity repository is not a picture. Every graph this crate produces is therefore a **bounded
+// neighbourhood of one focused entity**, and when the bound bites, the report says by how much.
+// "Nothing else is connected" and "I stopped looking" are different answers.
+
+/// Bounds and filters for a neighbourhood expansion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NeighbourhoodQuery {
+    /// How many hops from the focus to expand.
+    pub max_depth: usize,
+    /// Largest number of nodes to admit, including the focus.
+    pub max_nodes: usize,
+    /// Edge direction policy. `Any` is the useful default for a picture.
+    pub direction: Direction,
+    /// Relations to follow. Empty means every relation.
+    pub relations: Vec<Relation>,
+    /// Exclude edges whose `assertion_state.is_unresolved` is set.
+    pub resolved_only: bool,
+}
+
+impl Default for NeighbourhoodQuery {
+    fn default() -> Self {
+        NeighbourhoodQuery {
+            max_depth: 1,
+            max_nodes: 60,
+            direction: Direction::Any,
+            relations: Vec::new(),
+            resolved_only: false,
+        }
+    }
+}
+
+/// One admitted node, with the hop distance at which it was first reached.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NeighbourNode {
+    /// The entity.
+    pub entity: EntityRef,
+    /// Hops from the focus. The focus itself is 0.
+    pub depth: usize,
+}
+
+/// One edge between two admitted nodes, in its recorded direction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NeighbourEdge {
+    /// Assertion backing the edge.
+    pub assertion_id: String,
+    /// Relation name.
+    pub relation: String,
+    /// Assertion source entity id.
+    pub source_entity_id: String,
+    /// Assertion target entity id.
+    pub target_entity_id: String,
+    /// Derived `assertion_state.is_unresolved`.
+    pub is_unresolved: bool,
+    /// Derived `assertion_state.status`.
+    pub status: Option<String>,
+    /// Derived `assertion_state.strongest_source_type`.
+    pub strongest_source_type: Option<String>,
+    /// Derived `assertion_state.observation_count`.
+    pub observation_count: i64,
+    /// Representative observation path.
+    pub file_path: Option<String>,
+    /// Representative observation line.
+    pub start_line: Option<i64>,
+}
+
+/// A bounded neighbourhood, and an honest account of what was left out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NeighbourhoodReport {
+    /// Entity the neighbourhood is centred on.
+    pub focus: EntityRef,
+    /// Admitted nodes: the focus first, then by depth and identifier.
+    pub nodes: Vec<NeighbourNode>,
+    /// Edges whose both endpoints were admitted, in a stable order.
+    pub edges: Vec<NeighbourEdge>,
+    /// Depth bound used.
+    pub max_depth: usize,
+    /// Node budget used.
+    pub max_nodes: usize,
+    /// True when the **node budget** refused at least one neighbour.
+    ///
+    /// Deliberately not set merely because the depth bound was reached: a caller who asked for
+    /// depth 1 and got all of depth 1 got a complete answer to the question they asked. What
+    /// lies past the boundary is [`NeighbourhoodReport::frontier_nodes`], which is an invitation
+    /// to expand, not a warning that something was dropped.
+    pub truncated: bool,
+    /// Distinct adjacent entities that were reached but refused a slot.
+    ///
+    /// This is the "N more not shown" number. It counts entities, not edges.
+    pub omitted_nodes: usize,
+    /// Nodes admitted at the depth bound whose own neighbours were never looked at.
+    pub frontier_nodes: usize,
+}
+
+/// One adjacency row, in its recorded direction.
+struct AdjacentRow {
+    assertion_id: String,
+    relation: String,
+    source_entity_id: String,
+    target_entity_id: String,
+    status: Option<String>,
+    strongest_source_type: Option<String>,
+    observation_count: Option<i64>,
+    is_unresolved: Option<i64>,
+}
+
+fn neighbourhood_sql(query: &NeighbourhoodQuery) -> String {
+    let endpoint = match query.direction {
+        Direction::Forward => "a.source_entity_id = ?1",
+        Direction::Any => "a.source_entity_id = ?1 OR a.target_entity_id = ?1",
+    };
+    let relations = relation_clause(&query.relations);
+    let resolved = if query.resolved_only {
+        " AND COALESCE(s.is_unresolved, 0) = 0"
+    } else {
+        ""
+    };
+    format!(
+        "SELECT a.assertion_id, a.relation, a.source_entity_id, a.target_entity_id,
+                s.status, s.strongest_source_type, s.observation_count, s.is_unresolved
+           FROM assertion a
+           LEFT JOIN assertion_state s ON s.assertion_id = a.assertion_id
+          WHERE ({endpoint}){relations}{resolved}
+          ORDER BY a.relation, a.source_entity_id, a.target_entity_id, a.assertion_id"
+    )
+}
+
+/// Expand a bounded neighbourhood around `focus_id`.
+///
+/// Breadth-first, admitting nodes in a deterministic order until the budget is spent. An edge is
+/// reported only when **both** of its endpoints were admitted, so the returned graph is closed:
+/// a renderer never has to invent a node to draw an edge it was handed.
+pub fn neighbourhood(
+    conn: &Connection,
+    focus_id: &str,
+    query: &NeighbourhoodQuery,
+) -> Result<NeighbourhoodReport> {
+    let mut entities: BTreeMap<String, EntityRef> = BTreeMap::new();
+    let focus = load_entity(conn, &mut entities, focus_id)?;
+
+    let mut depths: BTreeMap<String, usize> = BTreeMap::new();
+    depths.insert(focus_id.to_string(), 0);
+    let mut admitted_order: Vec<String> = vec![focus_id.to_string()];
+    let mut omitted: BTreeSet<String> = BTreeSet::new();
+    let mut rows: BTreeMap<String, AdjacentRow> = BTreeMap::new();
+    let mut truncated = false;
+
+    let mut stmt = conn.prepare(&neighbourhood_sql(query))?;
+    let mut frontier: Vec<String> = vec![focus_id.to_string()];
+
+    for depth in 1..=query.max_depth {
+        if frontier.is_empty() {
+            break;
+        }
+        let mut next: Vec<String> = Vec::new();
+        for anchor in &frontier {
+            let found = stmt.query_map(params![anchor], |row| {
+                Ok(AdjacentRow {
+                    assertion_id: row.get(0)?,
+                    relation: row.get(1)?,
+                    source_entity_id: row.get(2)?,
+                    target_entity_id: row.get(3)?,
+                    status: row.get(4)?,
+                    strongest_source_type: row.get(5)?,
+                    observation_count: row.get(6)?,
+                    is_unresolved: row.get(7)?,
+                })
+            })?;
+            for row in found {
+                let row = row?;
+                let neighbour = if row.source_entity_id == *anchor {
+                    row.target_entity_id.clone()
+                } else {
+                    row.source_entity_id.clone()
+                };
+                if !depths.contains_key(&neighbour) {
+                    if depths.len() >= query.max_nodes {
+                        omitted.insert(neighbour);
+                        truncated = true;
+                        continue;
+                    }
+                    depths.insert(neighbour.clone(), depth);
+                    admitted_order.push(neighbour.clone());
+                    next.push(neighbour.clone());
+                }
+                rows.entry(row.assertion_id.clone()).or_insert(row);
+            }
+        }
+        frontier = next;
+    }
+    // Whatever is left in the frontier was admitted but never expanded: the depth bound stopped
+    // there. That is the "expand" affordance, reported separately from the budget having bitten.
+    let frontier_nodes = frontier.len();
+
+    let mut nodes = Vec::with_capacity(admitted_order.len());
+    for entity_id in &admitted_order {
+        nodes.push(NeighbourNode {
+            entity: load_entity(conn, &mut entities, entity_id)?,
+            depth: depths[entity_id],
+        });
+    }
+    // Deterministic regardless of the order the walk happened to discover things.
+    nodes.sort_by(|a, b| {
+        a.depth
+            .cmp(&b.depth)
+            .then_with(|| a.entity.kind.cmp(&b.entity.kind))
+            .then_with(|| a.entity.name.cmp(&b.entity.name))
+            .then_with(|| a.entity.entity_id.cmp(&b.entity.entity_id))
+    });
+
+    let mut edges = Vec::new();
+    for row in rows.into_values() {
+        if !depths.contains_key(&row.source_entity_id)
+            || !depths.contains_key(&row.target_entity_id)
+        {
+            continue;
+        }
+        let (file_path, start_line) = representative_observation(conn, &row.assertion_id)?;
+        edges.push(NeighbourEdge {
+            is_unresolved: row.is_unresolved.unwrap_or(0) != 0,
+            status: row.status,
+            strongest_source_type: row.strongest_source_type,
+            observation_count: row.observation_count.unwrap_or(0),
+            assertion_id: row.assertion_id,
+            relation: row.relation,
+            source_entity_id: row.source_entity_id,
+            target_entity_id: row.target_entity_id,
+            file_path,
+            start_line,
+        });
+    }
+    edges.sort_by(|a, b| {
+        a.relation
+            .cmp(&b.relation)
+            .then_with(|| a.source_entity_id.cmp(&b.source_entity_id))
+            .then_with(|| a.target_entity_id.cmp(&b.target_entity_id))
+            .then_with(|| a.assertion_id.cmp(&b.assertion_id))
+    });
+
+    // An entity can be reached, refused a slot, and then admitted from another anchor.
+    let omitted_nodes = omitted
+        .iter()
+        .filter(|entity_id| !depths.contains_key(*entity_id))
+        .count();
+
+    Ok(NeighbourhoodReport {
+        focus,
+        nodes,
+        edges,
+        max_depth: query.max_depth,
+        max_nodes: query.max_nodes,
+        truncated,
+        omitted_nodes,
+        frontier_nodes,
+    })
 }
 
 // ---- why ---------------------------------------------------------------------------------
