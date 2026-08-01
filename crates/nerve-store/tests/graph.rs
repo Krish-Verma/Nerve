@@ -46,10 +46,10 @@ fn entity(conn: &Connection, id: &str, kind: &str, name: &str, file: &str, line:
     )
     .unwrap();
     conn.execute(
-        "INSERT INTO occurrence (occurrence_id, entity_id, state_id, file_path, start_byte,
+        "INSERT INTO occurrence (occurrence_id, entity_id, file_path, start_byte,
                                  end_byte, start_line, start_col, end_line, end_col, content_hash)
-         VALUES (?1, ?2, ?3, ?4, 0, 1, ?5, 0, ?5, 1, 'hash-of-file')",
-        rusqlite::params![format!("occ-{id}"), id, STATE, file, line],
+         VALUES (?1, ?2, ?3, 0, 1, ?4, 0, ?4, 1, 'hash-of-file')",
+        rusqlite::params![format!("occ-{id}"), id, file, line],
     )
     .unwrap();
 }
@@ -63,14 +63,15 @@ fn edge(conn: &Connection, source: &str, relation: Relation, target: &str, file:
         rusqlite::params![assertion_id, source, relation.as_str(), target],
     )
     .unwrap();
+    // The observation names no state: it names the run, and the run names the state (ADR-0006).
     conn.execute(
         "INSERT INTO observation (assertion_id, extractor_run_id, evidence_source_type,
-                                  directness, extractor_id, extractor_version, state_id,
+                                  directness, extractor_id, extractor_version,
                                   file_path, start_line, end_line, content_hash, details,
                                   created_at)
-         VALUES (?1, 1, 'AST_RESOLVED', 'RESOLVED', 'test-extractor', '9.9.9', ?2, ?3, ?4, ?4,
+         VALUES (?1, 1, 'AST_RESOLVED', 'RESOLVED', 'test-extractor', '9.9.9', ?2, ?3, ?3,
                  'hash-of-file', '{\"why\":\"because\"}', '2026-07-31T00:00:00Z')",
-        rusqlite::params![assertion_id, STATE, file, line],
+        rusqlite::params![assertion_id, file, line],
     )
     .unwrap();
 }

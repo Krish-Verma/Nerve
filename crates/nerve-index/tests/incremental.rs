@@ -399,33 +399,130 @@ fn deleting_everything_leaves_what_a_fresh_index_of_an_empty_tree_would() {
     assert_eq!(dump_json(&root), reference);
 }
 
-/// Every surviving row must name the state this run observed. A row left at a superseded state
-/// is how a database silently starts describing two trees at once.
+/// No surviving row may describe a superseded version of its file.
+///
+/// This replaces the Slice 3 test that asserted every row carried the current `state_id`. Since
+/// ADR-0006 no graph row carries a state at all, so that property is not expressible — but the
+/// thing it was protecting against, a database quietly describing two trees at once, is. The
+/// check here is on `content_hash`, which is the freshness anchor the product actually uses, and
+/// it is **stronger**: a restamped row could be at the current state and still describe bytes
+/// that no longer exist, and this would catch that where the state check could not.
 #[test]
-fn no_row_is_left_at_a_superseded_repository_state() {
+fn no_row_is_left_describing_a_superseded_version_of_its_file() {
     let (_dir, root) = indexed_incremental_fixture();
     write(
         &root,
         "src/assist.ts",
         "export function assist(): number {\n  return 8;\n}\n",
     );
-    let outcome = index(&root);
-    assert!(outcome.incremental.occurrences_restated > 0);
-    assert!(outcome.incremental.observations_restated > 0);
+    index(&root);
 
     let conn = open_db(&root);
+    let mut checked = 0usize;
     for table in ["occurrence", "observation"] {
-        let states: Vec<String> = {
+        let rows: Vec<(String, String)> = {
             let mut stmt = conn
-                .prepare(&format!("SELECT DISTINCT state_id FROM {table}"))
+                .prepare(&format!(
+                    "SELECT DISTINCT file_path, content_hash FROM {table} ORDER BY 1, 2"
+                ))
                 .unwrap();
-            stmt.query_map([], |row| row.get::<_, String>(0))
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
                 .unwrap()
                 .map(|row| row.unwrap())
                 .collect()
         };
-        assert_eq!(states, vec![outcome.state_id.clone()], "{table}");
+        for (file_path, content_hash) in rows {
+            let absolute = root.join(&file_path);
+            // Directory containment rows quote a directory, whose "content" is its own path.
+            if !absolute.is_file() {
+                continue;
+            }
+            let current = nerve_core::ids::content_hash(&std::fs::read(&absolute).unwrap());
+            assert_eq!(
+                content_hash, current,
+                "{table} row for {file_path} describes bytes that are no longer there"
+            );
+            checked += 1;
+        }
     }
+    assert!(checked > 0, "the check inspected nothing");
+
+    // And the state the database says it describes is the one this run observed.
+    let dump = nerve_store::canonical_dump(&conn).unwrap();
+    assert_eq!(dump.state_ids.len(), 1, "{:?}", dump.state_ids);
+}
+
+/// **Slice 3b, ADR-0003 purity.** The scoped derivation and the scoped pruner are lazy
+/// evaluations of the whole-table statements, and lazy evaluation is only legitimate while the
+/// answer is identical. This runs a mixed edit sequence and, after every step, re-runs both
+/// whole-table versions and asserts they change nothing.
+///
+/// A regression in the scope — an assertion whose evidence moved but which was left out — shows
+/// up here as a derived row that the rebuild disagrees with, or as an orphan the scoped pruner
+/// failed to reach.
+#[test]
+fn scoped_derivation_and_pruning_equal_the_whole_table_versions() {
+    const SEED: u64 = 0x5C09_ED03_B1DE_A115;
+    const STEPS: usize = 16;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("repo");
+    std::fs::create_dir_all(&root).unwrap();
+
+    let mut rng = Rng(SEED);
+    let mut modules = starting_modules();
+    materialize(&root, &modules);
+    nerve_index::init_with_project_id(&root, Some(TEST_PROJECT_ID)).unwrap();
+    index(&root);
+
+    let mut scoped_runs = 0usize;
+    for step in 0..STEPS {
+        let Some(edit) = plan_edit(&mut rng, &modules, step) else {
+            continue;
+        };
+        let description = apply(edit, &mut modules, &mut rng);
+        materialize(&root, &modules);
+        let outcome = index(&root);
+        if outcome.incremental.files_re_extracted < outcome.files_processed {
+            scoped_runs += 1;
+        }
+
+        let conn = open_db(&root);
+        let derived = assertion_states(&conn);
+        nerve_store::rebuild_assertion_state(&conn).unwrap();
+        assert_eq!(
+            derived,
+            assertion_states(&conn),
+            "step {step} ({description}): scoped derivation != whole-table rebuild"
+        );
+
+        let leftovers = nerve_store::prune_orphans(&conn).unwrap();
+        assert_eq!(
+            leftovers,
+            nerve_store::RemovalCounts::default(),
+            "step {step} ({description}): the scoped pruner left orphans behind"
+        );
+    }
+
+    assert!(
+        scoped_runs >= 5,
+        "the sequence never exercised the scoped path, so it proved nothing ({scoped_runs} runs)"
+    );
+}
+
+/// Every derived row, rendered so two derivations can be compared as text.
+fn assertion_states(conn: &nerve_store::Connection) -> Vec<String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT assertion_id || '|' || status || '|' || strongest_source_type || '|' ||
+                    source_type_mask || '|' || observation_count || '|' || is_unresolved
+               FROM assertion_state ORDER BY assertion_id",
+        )
+        .unwrap();
+    stmt.query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect()
 }
 
 // ---- --full --------------------------------------------------------------------------------
@@ -1041,11 +1138,185 @@ fn a_forced_full_run_over_an_existing_database_equals_a_from_scratch_index() {
     assert_eq!(dump_json(&root), reference);
 }
 
-// ---- speed ---------------------------------------------------------------------------------
+// ---- schema upgrade on the write path ------------------------------------------------------
+
+/// `nerve index` must bring the schema up to date before it writes anything.
+///
+/// Only `nerve init` used to migrate, so a database written by an older build and then indexed
+/// by a newer one kept its old shape. Until schema v3 that failed loudly, on a missing table.
+/// With v3 it failed **silently and destructively**: `persist_batch` inserts `OR IGNORE`, which
+/// swallows a `NOT NULL` violation exactly as readily as a duplicate key, so writing the v3
+/// column list into a v2 `occurrence` discarded every insert *after* the re-extracted files' rows
+/// had been deleted — a smaller graph and a zero exit code.
+///
+/// The database here is emptied rather than downgraded, because a v2 schema cannot be
+/// reconstructed from a v3 build. It exercises the same line: a database that is not at the
+/// current version when `index_repository` opens it.
+#[test]
+fn indexing_migrates_a_database_that_is_not_at_the_current_schema_version() {
+    let (_dir, root) = indexed_incremental_fixture();
+    let expected = dump_json(&root);
+
+    // An unmigrated database: the file exists, so the repository is still "initialized", but it
+    // has no schema at all.
+    let db_path = nerve_index::config::db_path(&root);
+    std::fs::remove_file(&db_path).unwrap();
+    for suffix in ["-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", db_path.display()));
+    }
+    {
+        let conn = nerve_store::open(&db_path).unwrap();
+        assert_eq!(nerve_store::schema_version(&conn).unwrap(), None);
+    }
+
+    index_full(&root);
+
+    let conn = open_db(&root);
+    assert_eq!(
+        nerve_store::schema_version(&conn).unwrap(),
+        Some(nerve_store::SCHEMA_VERSION),
+        "indexing left the database at an older schema version"
+    );
+    assert!(
+        nerve_store::status(&conn).unwrap().is_healthy(),
+        "indexing left the database unhealthy"
+    );
+    drop(conn);
+    assert_eq!(
+        dump_json(&root),
+        expected,
+        "indexing an unmigrated database produced a different graph"
+    );
+}
+
+// ---- work proportional to the change -------------------------------------------------------
 
 const CLUSTERS: usize = 52;
 const PER_CLUSTER: usize = 10;
 const REPEATS: usize = 3;
+
+/// `clusters` short import chains of [`PER_CLUSTER`] modules each.
+///
+/// Realistic locality: editing the deepest module of one cluster invalidates that cluster and
+/// nothing else, so the invalidation set is bounded by chain depth rather than repository size.
+fn cluster_modules(clusters: usize, bulk: usize) -> Vec<SyntheticModule> {
+    let mut modules = Vec::new();
+    for cluster in 0..clusters {
+        for depth in 0..PER_CLUSTER {
+            let rel_path = format!("src/c{cluster}/m{depth}.ts");
+            let imports = if depth == 0 {
+                vec![]
+            } else {
+                let previous = format!("src/c{cluster}/m{}.ts", depth - 1);
+                vec![SyntheticImport {
+                    via: previous.clone(),
+                    symbol_from: previous,
+                }]
+            };
+            modules.push(SyntheticModule {
+                rel_path,
+                imports,
+                re_exports: vec![],
+                salt: (cluster * PER_CLUSTER + depth) as u64,
+                renamed: false,
+                bulk,
+            });
+        }
+    }
+    modules
+}
+
+/// What one leaf edit cost a repository of `clusters * PER_CLUSTER` files.
+struct EditCost {
+    files: usize,
+    rows_written: usize,
+    re_extracted: usize,
+    full_rows_written: usize,
+}
+
+/// Build a clustered repository, index it, edit one leaf, and re-index.
+fn cost_of_one_leaf_edit(clusters: usize) -> EditCost {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("repo");
+    std::fs::create_dir_all(&root).unwrap();
+
+    let mut modules = cluster_modules(clusters, 0);
+    materialize(&root, &modules);
+    nerve_index::init_with_project_id(&root, Some(TEST_PROJECT_ID)).unwrap();
+    let full = index(&root);
+
+    let victim = modules
+        .iter_mut()
+        .find(|m| m.rel_path == format!("src/c0/m{}.ts", PER_CLUSTER - 1))
+        .unwrap();
+    victim.salt = 999_999;
+    let rendered = victim.render();
+    let victim_path = victim.rel_path.clone();
+    write(&root, &victim_path, &rendered);
+
+    let incremental = index(&root);
+    EditCost {
+        files: full.files_processed,
+        rows_written: incremental.incremental.rows_written,
+        re_extracted: incremental.incremental.files_re_extracted,
+        full_rows_written: full.incremental.rows_written,
+    }
+}
+
+/// **The durable Slice 3b gate.** A one-file leaf edit must write a number of database rows
+/// that does not depend on how large the repository is.
+///
+/// Asserted by counting rows written, not by timing: a ratio is machine- and load-dependent and
+/// can be flattered by a fast machine, whereas this is a structural property of the write path.
+/// If a whole-repository pass ever returns — a state restamp, an unconditional
+/// `DELETE FROM assertion_state`, an unscoped re-derivation of directory containment — the two
+/// numbers separate and this test says so immediately.
+///
+/// The comparison is between a 100-file and a 520-file repository with **identical local
+/// structure** around the edited file, so the expected answer is not "similar", it is *equal*.
+#[test]
+fn a_one_file_leaf_edit_writes_the_same_rows_whatever_the_repository_size() {
+    let small = cost_of_one_leaf_edit(10);
+    let large = cost_of_one_leaf_edit(CLUSTERS);
+
+    println!(
+        "one-file leaf edit: {} files wrote {} rows (full index wrote {}); \
+         {} files wrote {} rows (full index wrote {})",
+        small.files,
+        small.rows_written,
+        small.full_rows_written,
+        large.files,
+        large.rows_written,
+        large.full_rows_written
+    );
+
+    assert_eq!(small.files, 10 * PER_CLUSTER);
+    assert_eq!(large.files, CLUSTERS * PER_CLUSTER);
+    assert_eq!(
+        small.re_extracted, 1,
+        "a leaf edit must re-extract the leaf"
+    );
+    assert_eq!(large.re_extracted, 1);
+
+    assert_eq!(
+        small.rows_written, large.rows_written,
+        "a one-file edit wrote {} rows in a {}-file repository and {} rows in a {}-file one; \
+         the write path is proportional to repository size, not to the change",
+        small.rows_written, small.files, large.rows_written, large.files
+    );
+
+    // And the edit is genuinely cheap in absolute terms, not merely size-independent: a full
+    // index of the same repository writes orders of magnitude more.
+    assert!(
+        large.full_rows_written > large.rows_written * 50,
+        "a full index wrote {} rows and a one-file edit wrote {}; the gate is not measuring \
+         anything",
+        large.full_rows_written,
+        large.rows_written
+    );
+}
+
+// ---- speed ---------------------------------------------------------------------------------
 
 /// Outcome of one speed measurement.
 struct SpeedResult {
@@ -1136,31 +1407,7 @@ fn measure_single_file_edit(bulk: usize) -> SpeedResult {
     let root = dir.path().join("repo");
     std::fs::create_dir_all(&root).unwrap();
 
-    // Clusters of a short import chain: realistic locality, and it keeps the invalidation set
-    // bounded by cluster depth rather than by repository size.
-    let mut modules = Vec::new();
-    for cluster in 0..CLUSTERS {
-        for depth in 0..PER_CLUSTER {
-            let rel_path = format!("src/c{cluster}/m{depth}.ts");
-            let imports = if depth == 0 {
-                vec![]
-            } else {
-                let previous = format!("src/c{cluster}/m{}.ts", depth - 1);
-                vec![SyntheticImport {
-                    via: previous.clone(),
-                    symbol_from: previous,
-                }]
-            };
-            modules.push(SyntheticModule {
-                rel_path,
-                imports,
-                re_exports: vec![],
-                salt: (cluster * PER_CLUSTER + depth) as u64,
-                renamed: false,
-                bulk,
-            });
-        }
-    }
+    let mut modules = cluster_modules(CLUSTERS, bulk);
     materialize(&root, &modules);
     nerve_index::init_with_project_id(&root, Some(TEST_PROJECT_ID)).unwrap();
 
@@ -1205,7 +1452,7 @@ fn measure_single_file_edit(bulk: usize) -> SpeedResult {
     result
 }
 
-/// Acceptance criterion 5, opt-in. **The 20% budget is not met, and this test records that.**
+/// Acceptance criterion 5, opt-in.
 ///
 /// Ignored by default because it builds and indexes a 520-module repository six times. Run it
 /// with:
@@ -1218,40 +1465,35 @@ fn measure_single_file_edit(bulk: usize) -> SpeedResult {
 /// contention is an upper bound on the true cost, so the minimum across runs is the tightest
 /// honest figure; a single number from a busy machine is not evidence.
 ///
-/// # What the measurement actually says
+/// # This test is the weaker of the two gates, deliberately
 ///
-/// The invalidation rule works: a one-file edit re-extracts exactly one file, and extraction is
-/// **8 ms of a 2.9 s incremental run** on the realistic corpus. The remaining 99% is database
-/// maintenance proportional to repository size, and one item dominates:
+/// A ratio is machine-, load- and corpus-dependent. The durable requirement is
+/// [`a_one_file_leaf_edit_writes_the_same_rows_whatever_the_repository_size`], which counts rows
+/// and cannot be flattered by fast hardware. This one exists because a ratio is what a user
+/// feels, and because it catches costs that write no rows at all.
 ///
-/// | phase | realistic corpus | paid by a full run too? |
+/// # What the measurement said before and after Slice 3b
+///
+/// Slice 3 measured 24.9% on the realistic corpus, against a < 20% target. Extraction was 8 ms
+/// of a 2900 ms incremental run; the rest was database maintenance proportional to repository
+/// size:
+///
+/// | phase | Slice 3 | Slice 3b |
 /// |---|---|---|
-/// | read + hash every file | 66 ms | yes — the state is a Merkle over contents |
-/// | extract the invalidation set | 8 ms | no — this is what incremental saves |
-/// | **restate every surviving row to the new state** | **1330 ms** | **no** |
-/// | rebuild `assertion_state` | 960 ms | yes — ADR-0003 mandates a pure rebuild |
-/// | prune orphans, commit, status | 470 ms | yes |
+/// | read + hash every file | 66 ms | unchanged — the state is a Merkle over contents |
+/// | extract the invalidation set | 8 ms | unchanged — this is what incremental saves |
+/// | restate every surviving row to the new state | 1330 ms | **gone** (ADR-0006) |
+/// | rebuild `assertion_state` whole-table | 960 ms | scoped to the assertions that moved |
+/// | prune orphans whole-table | 196 ms | scoped to the rows that could have been orphaned |
 ///
-/// The restatement pass is the whole gap. It exists because ADR-0002 puts the repository state
-/// inside `occurrence_id` and the schema denormalizes `state_id` onto every occurrence and
-/// observation, so advancing the state rewrites every row and every index entry over them. A
-/// full run never pays it, because it deletes those rows instead. Removing that single pass
-/// would put the ratio near 22%; nothing else on the list is reducible without weakening an ADR.
-///
-/// Normalizing the repository state out of the row is a schema change with an identity change
-/// attached, which is its own slice. Until then the ratio is asserted at what is measured, and
-/// the target it misses is named here rather than quietly restated.
-///
-/// Both corpora are reported: with stub modules parsing is only half a full index, so the ratio
-/// cannot approach the target however good invalidation is; with realistic modules the ratio is
-/// barely different, which is the evidence that the bottleneck is not parsing at all.
+/// Both corpora are reported. With stub modules, parsing is only a small part of a full index,
+/// so the ratio is bounded below by the read-and-hash pass however good invalidation is; with
+/// realistic modules parsing dominates a full index, which is where incremental indexing pays.
 #[test]
 #[ignore = "builds and indexes a 520-module repository six times; opt in with --ignored"]
 fn a_single_file_edit_costs_a_fraction_of_a_full_index() {
-    /// What acceptance criterion 5 asks for. Recorded so the gap is visible in the output.
+    /// Acceptance criterion 5.
     const TARGET_RATIO: f64 = 0.20;
-    /// What the current schema permits, measured. Tightening this needs the ADR-0002 change.
-    const MEASURED_CEILING: f64 = 0.60;
 
     let stubs = measure_single_file_edit(0);
     stubs.report("stub modules (~12 lines each)");
@@ -1265,16 +1507,9 @@ fn a_single_file_edit_costs_a_fraction_of_a_full_index() {
         stubs.ratio() * 100.0,
         realistic.ratio() * 100.0
     );
-    if realistic.ratio() >= TARGET_RATIO {
-        println!(
-            "NOT MET: acceptance criterion 5 wants < {:.0}%. The cost is the state-restatement \
-             pass, not extraction — see this test's documentation.",
-            TARGET_RATIO * 100.0
-        );
-    }
 
-    // The invalidation rule is what this slice controls, and it is gated strictly: a one-file
-    // edit must not reach outside the changed module's import cluster.
+    // The invalidation rule is gated strictly: a one-file edit must not reach outside the
+    // changed module's import cluster.
     for result in [&stubs, &realistic] {
         assert!(
             result.re_extracted <= PER_CLUSTER,
@@ -1289,10 +1524,9 @@ fn a_single_file_edit_costs_a_fraction_of_a_full_index() {
     );
 
     assert!(
-        realistic.ratio() < MEASURED_CEILING,
-        "a single-file edit cost {:.1}% of a full index; even the measured ceiling is {:.0}%, so \
-         something regressed beyond the known state-restatement cost",
+        realistic.ratio() < TARGET_RATIO,
+        "a single-file edit cost {:.1}% of a full index; acceptance criterion 5 wants < {:.0}%",
         realistic.ratio() * 100.0,
-        MEASURED_CEILING * 100.0
+        TARGET_RATIO * 100.0
     );
 }

@@ -8,6 +8,7 @@ use rusqlite::{params, Connection};
 use nerve_core::model::GraphBatch;
 
 use crate::error::Result;
+use crate::prune::TouchedRows;
 
 /// Identity and location of the repository being indexed.
 #[derive(Debug, Clone)]
@@ -135,19 +136,34 @@ pub fn insert_identity_link(
 /// Occurrence, assertion and observation inserts are `OR IGNORE` against a content-derived key,
 /// which is what makes re-indexing an unchanged tree add no rows.
 ///
+/// No row is stamped with the repository state (ADR-0006). An occurrence is a location fact; an
+/// observation's state is a property of the run that produced it and is reached through
+/// `extractor_run_id`. `run_id` is therefore the only run-scoped value written here.
+///
+/// `touched` collects the assertions whose observation set this call actually **changed**. An
+/// `OR IGNORE` that inserted nothing changed nothing, so it contributes nothing. The distinction
+/// is not cosmetic: every run re-emits the whole directory skeleton, and recording those as
+/// touched would make the scoped derivation and pruning proportional to the number of
+/// directories in the repository rather than to the size of the change.
+///
 /// The entity insert is an **upsert**, not `OR IGNORE`. An entity id excludes body content by
 /// design (ADR-0002), so editing a file can leave the id fixed while changing the row it names —
 /// a file's recorded size, a symbol's metadata. Ignoring the conflict would silently keep the
 /// superseded description and make an incrementally maintained database disagree with a
 /// from-scratch index. The `WHERE` clause suppresses no-op writes so that the FTS triggers do
 /// not fire on unchanged rows.
+///
+/// Returns the number of rows actually inserted or updated across the four tables. Statements
+/// whose conflict clause suppressed the write contribute nothing, which is what makes the count
+/// a measure of the change rather than of the batch.
 pub fn persist_batch(
     conn: &Connection,
     repo_id: &str,
-    state_id: &str,
     run_id: i64,
     batch: &GraphBatch,
-) -> Result<()> {
+    touched: &mut TouchedRows,
+) -> Result<usize> {
+    let mut rows = 0usize;
     {
         let mut stmt = conn.prepare(
             "INSERT INTO entity
@@ -166,7 +182,7 @@ pub fn persist_batch(
                 OR entity.meta       IS NOT excluded.meta",
         )?;
         for entity in &batch.entities {
-            stmt.execute(params![
+            rows += stmt.execute(params![
                 entity.entity_id,
                 repo_id,
                 entity.kind.as_str(),
@@ -181,15 +197,14 @@ pub fn persist_batch(
     {
         let mut stmt = conn.prepare(
             "INSERT OR IGNORE INTO occurrence
-                 (occurrence_id, entity_id, state_id, file_path, start_byte, end_byte,
+                 (occurrence_id, entity_id, file_path, start_byte, end_byte,
                   start_line, start_col, end_line, end_col, content_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         )?;
         for occurrence in &batch.occurrences {
-            stmt.execute(params![
+            rows += stmt.execute(params![
                 occurrence.occurrence_id,
                 occurrence.entity_id,
-                state_id,
                 occurrence.file_path,
                 occurrence.span.start_byte as i64,
                 occurrence.span.end_byte as i64,
@@ -209,7 +224,7 @@ pub fn persist_batch(
              VALUES (?1, ?2, ?3, ?4, ?5)",
         )?;
         for assertion in &batch.assertions {
-            stmt.execute(params![
+            rows += stmt.execute(params![
                 assertion.assertion_id,
                 repo_id,
                 assertion.source_entity_id,
@@ -223,13 +238,13 @@ pub fn persist_batch(
         let mut stmt = conn.prepare(
             "INSERT OR IGNORE INTO observation
                  (assertion_id, extractor_run_id, evidence_source_type, directness,
-                  extractor_id, extractor_version, match_quality, state_id, file_path,
+                  extractor_id, extractor_version, match_quality, file_path,
                   start_line, end_line, content_hash, environment, details, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
                      strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
         )?;
         for observation in &batch.observations {
-            stmt.execute(params![
+            let written = stmt.execute(params![
                 observation.assertion_id,
                 run_id,
                 observation.evidence_source_type.as_str(),
@@ -237,7 +252,6 @@ pub fn persist_batch(
                 observation.extractor_id,
                 observation.extractor_version,
                 observation.match_quality,
-                state_id,
                 observation.file_path,
                 observation.start_line as i64,
                 observation.end_line as i64,
@@ -245,8 +259,12 @@ pub fn persist_batch(
                 observation.environment,
                 observation.details,
             ])?;
+            rows += written;
+            if written > 0 {
+                touched.touch_assertion(&observation.assertion_id);
+            }
         }
     }
 
-    Ok(())
+    Ok(rows)
 }

@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "project_id": "00000000000000000000000000000001",
   "state_ids": [
     "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
@@ -537,7 +537,6 @@
   "occurrences": [
     {
       "entity_id": "class_b36d5b25a509533027d0b28f4aa5ba78",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_byte": 192,
       "end_byte": 432,
@@ -549,7 +548,6 @@
     },
     {
       "entity_id": "class_e6a17966045f2904b10d88a024130444",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_byte": 441,
       "end_byte": 648,
@@ -561,7 +559,6 @@
     },
     {
       "entity_id": "file_08fd8a0c2a672361f4efbc25fbdb4be3",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_byte": 0,
       "end_byte": 387,
@@ -573,7 +570,6 @@
     },
     {
       "entity_id": "file_093a0ef1927376b553a8cb9444a5605c",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_byte": 0,
       "end_byte": 466,
@@ -585,7 +581,6 @@
     },
     {
       "entity_id": "file_31d9cbb7875c8060bcce2f74d0e28e3f",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_byte": 0,
       "end_byte": 380,
@@ -597,7 +592,6 @@
     },
     {
       "entity_id": "file_8f57922bdf7ac1696f9ba0e9d05b4690",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/unresolved.ts",
       "start_byte": 0,
       "end_byte": 236,
@@ -609,7 +603,6 @@
     },
     {
       "entity_id": "file_b563498c461b9be5abb75c9fa3160237",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/index.ts",
       "start_byte": 0,
       "end_byte": 215,
@@ -621,7 +614,6 @@
     },
     {
       "entity_id": "file_c831703cf2cd93c2f850df796fe5bc43",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/legacy.cjs",
       "start_byte": 0,
       "end_byte": 180,
@@ -633,7 +625,6 @@
     },
     {
       "entity_id": "file_d128deded61d0b96f5c8057d9cee1ec1",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_byte": 0,
       "end_byte": 537,
@@ -645,7 +636,6 @@
     },
     {
       "entity_id": "file_f4aeb94e89c0bd88068c7f2c46326a88",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_byte": 0,
       "end_byte": 649,
@@ -657,7 +647,6 @@
     },
     {
       "entity_id": "fn_0b2a2184c63f5e9d6b5a094b5cf7d260",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_byte": 323,
       "end_byte": 385,
@@ -669,7 +658,6 @@
     },
     {
       "entity_id": "fn_20adac1f9e26875061d4cc9fda858529",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_byte": 257,
       "end_byte": 304,
@@ -681,7 +669,6 @@
     },
     {
       "entity_id": "fn_389cc1cd57b48cc3be17397545ed7875",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_byte": 334,
       "end_byte": 432,
@@ -693,7 +680,6 @@
     },
     {
       "entity_id": "fn_47c496811eec5ab4226c6c3c4dfdfae7",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_byte": 364,
       "end_byte": 411,
@@ -705,7 +691,6 @@
     },
     {
       "entity_id": "fn_58962e68008f88e68f8f3eb6595b4620",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_byte": 378,
       "end_byte": 443,
@@ -717,7 +702,6 @@
     },
     {
       "entity_id": "fn_7f3775539da31f2e3b22e4f24427e0dd",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_byte": 441,
       "end_byte": 536,
@@ -729,7 +713,6 @@
     },
     {
       "entity_id": "fn_85333468a781d0a247edd8b97eb1a81c",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/unresolved.ts",
       "start_byte": 191,
       "end_byte": 234,
@@ -741,7 +724,6 @@
     },
     {
       "entity_id": "fn_9ec9f6f7c019d625d7a693a32ad174e1",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_byte": 101,
       "end_byte": 282,
@@ -753,7 +735,6 @@
     },
     {
       "entity_id": "fn_a253d3637b01fea45e3d396c8a5071e9",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_byte": 148,
       "end_byte": 242,
@@ -765,7 +746,6 @@
     },
     {
       "entity_id": "fn_b050a5fddfa23c8c7d0076dea4fff3ed",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/legacy.cjs",
       "start_byte": 93,
       "end_byte": 146,
@@ -777,7 +757,6 @@
     },
     {
       "entity_id": "fn_bf6afcee6a437be0849dfe8bd010185c",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_byte": 172,
       "end_byte": 308,
@@ -789,7 +768,6 @@
     },
     {
       "entity_id": "fn_c943de2f6352af22ab0299a41078ff59",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_byte": 227,
       "end_byte": 325,
@@ -801,7 +779,6 @@
     },
     {
       "entity_id": "fn_f0b1d3743c1a2120253dc366692bd370",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_byte": 291,
       "end_byte": 363,
@@ -813,7 +790,6 @@
     },
     {
       "entity_id": "fn_f99df30a291443b5b821293bfa15d1a3",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_byte": 202,
       "end_byte": 379,
@@ -825,7 +801,6 @@
     },
     {
       "entity_id": "iface_acc9b2253ef76dd50dd0c194fbc5d885",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_byte": 105,
       "end_byte": 163,
@@ -837,7 +812,6 @@
     },
     {
       "entity_id": "iface_cb09ace77fb8c70e18f02bd8680eceec",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_byte": 146,
       "end_byte": 183,
@@ -849,7 +823,6 @@
     },
     {
       "entity_id": "meth_14736beebe0b2f7bbb511aff36c49b39",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_byte": 475,
       "end_byte": 514,
@@ -861,7 +834,6 @@
     },
     {
       "entity_id": "meth_55a07d83cb2f89a1eb4383422ea428f6",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_byte": 229,
       "end_byte": 303,
@@ -873,7 +845,6 @@
     },
     {
       "entity_id": "meth_73d3b7e1ffd74bb0ed5450b15daa50e9",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_byte": 368,
       "end_byte": 430,
@@ -885,7 +856,6 @@
     },
     {
       "entity_id": "meth_8fecc1c93a40303cc76559dbb1707cca",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_byte": 590,
       "end_byte": 646,
@@ -897,7 +867,6 @@
     },
     {
       "entity_id": "meth_ed3110c8617b46490aaa5109553083dd",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_byte": 518,
       "end_byte": 586,
@@ -909,7 +878,6 @@
     },
     {
       "entity_id": "meth_f3478550712739850e546a409cf93006",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_byte": 307,
       "end_byte": 364,
@@ -921,7 +889,6 @@
     },
     {
       "entity_id": "mod_249b60f7e35bf5c10195993743279755",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_byte": 0,
       "end_byte": 649,
@@ -933,7 +900,6 @@
     },
     {
       "entity_id": "mod_465b915e095cd370e398e63489ebe224",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/legacy.cjs",
       "start_byte": 0,
       "end_byte": 180,
@@ -945,7 +911,6 @@
     },
     {
       "entity_id": "mod_4acce59af08bd58a6d0687ec9e1e5dcd",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_byte": 0,
       "end_byte": 537,
@@ -957,7 +922,6 @@
     },
     {
       "entity_id": "mod_4bafedf0d918805b26d034cfbfe6baf3",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_byte": 0,
       "end_byte": 466,
@@ -969,7 +933,6 @@
     },
     {
       "entity_id": "mod_8cab9cd9ce41e98fd4200c247d9f3de6",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/index.ts",
       "start_byte": 0,
       "end_byte": 215,
@@ -981,7 +944,6 @@
     },
     {
       "entity_id": "mod_c3e1cd844def58e0c48c4d9f931ba95c",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_byte": 0,
       "end_byte": 380,
@@ -993,7 +955,6 @@
     },
     {
       "entity_id": "mod_f537453124856723aba1a8ba1cd91e0e",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/unresolved.ts",
       "start_byte": 0,
       "end_byte": 236,
@@ -1005,7 +966,6 @@
     },
     {
       "entity_id": "mod_f932b9147299e74fa13c2cccf06e1ac5",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_byte": 0,
       "end_byte": 387,
@@ -1017,7 +977,6 @@
     },
     {
       "entity_id": "unres_37c0242a3b70027d4ae17a81bed99531",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_byte": 289,
       "end_byte": 300,
@@ -1029,7 +988,6 @@
     },
     {
       "entity_id": "unres_8e9f2af3b95fd2f087fb5c5d0614cb38",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_byte": 277,
       "end_byte": 287,
@@ -1041,7 +999,6 @@
     },
     {
       "entity_id": "unres_c79408442b8ae5bf9b3fa0c8b636794f",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/unresolved.ts",
       "start_byte": 149,
       "end_byte": 176,
@@ -1053,7 +1010,6 @@
     },
     {
       "entity_id": "unres_d08b69c92fe091382b337f6e39b20557",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_byte": 203,
       "end_byte": 218,
@@ -1065,7 +1021,6 @@
     },
     {
       "entity_id": "unres_d302b93c83426625277236c40d18245c",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/unresolved.ts",
       "start_byte": 122,
       "end_byte": 148,
@@ -1077,7 +1032,6 @@
     },
     {
       "entity_id": "unres_ee133e7a5447b0d978708d841541c1cb",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_byte": 259,
       "end_byte": 269,
@@ -1620,7 +1574,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_line": 13,
       "end_line": 15,
@@ -1639,7 +1592,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_line": 5,
       "end_line": 8,
@@ -1657,7 +1609,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_line": 5,
       "end_line": 5,
@@ -1679,7 +1630,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_line": 5,
       "end_line": 10,
@@ -1697,7 +1647,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_line": 10,
       "end_line": 16,
@@ -1715,7 +1664,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_line": 9,
       "end_line": 9,
@@ -1736,7 +1684,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/index.ts",
       "start_line": 5,
       "end_line": 5,
@@ -1756,7 +1703,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_line": 5,
       "end_line": 8,
@@ -1775,7 +1721,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_line": 14,
       "end_line": 14,
@@ -1794,7 +1739,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 9,
       "end_line": 12,
@@ -1813,7 +1757,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_line": 0,
       "end_line": 0,
@@ -1830,7 +1773,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/index.ts",
       "start_line": 4,
       "end_line": 4,
@@ -1850,7 +1792,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 19,
       "end_line": 19,
@@ -1872,7 +1813,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_line": 3,
       "end_line": 8,
@@ -1891,7 +1831,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 18,
       "end_line": 20,
@@ -1910,7 +1849,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 1,
       "end_line": 34,
@@ -1927,7 +1865,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/legacy.cjs",
       "start_line": 0,
       "end_line": 0,
@@ -1944,7 +1881,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_line": 4,
       "end_line": 4,
@@ -1971,7 +1907,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_line": 5,
       "end_line": 5,
@@ -1998,7 +1933,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/index.ts",
       "start_line": 5,
       "end_line": 5,
@@ -2025,7 +1959,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_line": 10,
       "end_line": 10,
@@ -2046,7 +1979,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_line": 10,
       "end_line": 12,
@@ -2065,7 +1997,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 30,
       "end_line": 32,
@@ -2084,7 +2015,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_line": 18,
       "end_line": 18,
@@ -2103,7 +2033,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/unresolved.ts",
       "start_line": 1,
       "end_line": 8,
@@ -2120,7 +2049,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 23,
       "end_line": 33,
@@ -2139,7 +2067,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_line": 9,
       "end_line": 9,
@@ -2161,7 +2088,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 18,
       "end_line": 18,
@@ -2182,7 +2108,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 23,
       "end_line": 33,
@@ -2200,7 +2125,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_line": 0,
       "end_line": 0,
@@ -2217,7 +2141,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/index.ts",
       "start_line": 5,
       "end_line": 5,
@@ -2237,7 +2160,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_line": 7,
       "end_line": 11,
@@ -2256,7 +2178,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_line": 19,
       "end_line": 21,
@@ -2274,7 +2195,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/index.ts",
       "start_line": 5,
       "end_line": 5,
@@ -2294,7 +2214,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_line": 10,
       "end_line": 10,
@@ -2316,7 +2235,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 26,
       "end_line": 28,
@@ -2335,7 +2253,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_line": 16,
       "end_line": 16,
@@ -2357,7 +2274,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_line": 4,
       "end_line": 6,
@@ -2376,7 +2292,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_line": 1,
       "end_line": 17,
@@ -2393,7 +2308,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_line": 3,
       "end_line": 3,
@@ -2420,7 +2334,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/unresolved.ts",
       "start_line": 5,
       "end_line": 5,
@@ -2447,7 +2360,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 8,
       "end_line": 8,
@@ -2469,7 +2381,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_line": 18,
       "end_line": 18,
@@ -2487,7 +2398,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_line": 1,
       "end_line": 19,
@@ -2504,7 +2414,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_line": 12,
       "end_line": 17,
@@ -2522,7 +2431,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/legacy.cjs",
       "start_line": 1,
       "end_line": 10,
@@ -2539,7 +2447,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/unresolved.ts",
       "start_line": 7,
       "end_line": 7,
@@ -2558,7 +2465,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/unresolved.ts",
       "start_line": 4,
       "end_line": 4,
@@ -2585,7 +2491,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_line": 0,
       "end_line": 0,
@@ -2602,7 +2507,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 4,
       "end_line": 6,
@@ -2620,7 +2524,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 23,
       "end_line": 23,
@@ -2642,7 +2545,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_line": 12,
       "end_line": 17,
@@ -2661,7 +2563,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 14,
       "end_line": 16,
@@ -2680,7 +2581,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_line": 7,
       "end_line": 11,
@@ -2698,7 +2598,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_line": 0,
       "end_line": 0,
@@ -2715,7 +2614,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/legacy.cjs",
       "start_line": 5,
       "end_line": 7,
@@ -2734,7 +2632,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_line": 7,
       "end_line": 7,
@@ -2755,7 +2652,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_line": 3,
       "end_line": 8,
@@ -2773,7 +2669,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_line": 16,
       "end_line": 16,
@@ -2791,7 +2686,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_line": 10,
       "end_line": 12,
@@ -2809,7 +2703,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_line": 7,
       "end_line": 7,
@@ -2831,7 +2724,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 0,
       "end_line": 0,
@@ -2848,7 +2740,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/legacy.cjs",
       "start_line": 6,
       "end_line": 6,
@@ -2870,7 +2761,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 24,
       "end_line": 24,
@@ -2889,7 +2779,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 4,
       "end_line": 6,
@@ -2908,7 +2797,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_line": 8,
       "end_line": 8,
@@ -2930,7 +2818,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/legacy.cjs",
       "start_line": 3,
       "end_line": 3,
@@ -2957,7 +2844,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_line": 13,
       "end_line": 13,
@@ -2979,7 +2865,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/index.ts",
       "start_line": 4,
       "end_line": 4,
@@ -2999,7 +2884,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_line": 14,
       "end_line": 14,
@@ -3017,7 +2901,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/index.ts",
       "start_line": 4,
       "end_line": 4,
@@ -3049,7 +2932,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_line": 9,
       "end_line": 9,
@@ -3071,7 +2953,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/unresolved.ts",
       "start_line": 0,
       "end_line": 0,
@@ -3088,7 +2969,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/unresolved.ts",
       "start_line": 7,
       "end_line": 7,
@@ -3106,7 +2986,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_line": 6,
       "end_line": 8,
@@ -3125,7 +3004,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_line": 7,
       "end_line": 7,
@@ -3146,7 +3024,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/index.ts",
       "start_line": 1,
       "end_line": 6,
@@ -3163,7 +3040,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src",
       "start_line": 0,
       "end_line": 0,
@@ -3180,7 +3056,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 8,
       "end_line": 21,
@@ -3199,7 +3074,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_line": 1,
       "end_line": 12,
@@ -3216,7 +3090,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_line": 19,
       "end_line": 21,
@@ -3235,7 +3108,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/math.ts",
       "start_line": 11,
       "end_line": 11,
@@ -3257,7 +3129,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_line": 5,
       "end_line": 10,
@@ -3276,7 +3147,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/index.ts",
       "start_line": 0,
       "end_line": 0,
@@ -3293,7 +3163,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/ambiguous.ts",
       "start_line": 1,
       "end_line": 22,
@@ -3310,7 +3179,6 @@
       "extractor_id": "ts-js-reference",
       "extractor_version": "1.0.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_line": 10,
       "end_line": 10,
@@ -3332,7 +3200,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/alias.ts",
       "start_line": 3,
       "end_line": 3,
@@ -3364,7 +3231,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/shapes.ts",
       "start_line": 8,
       "end_line": 21,
@@ -3382,7 +3248,6 @@
       "extractor_id": "ts-js-structural",
       "extractor_version": "1.1.0",
       "match_quality": null,
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "file_path": "src/widget.tsx",
       "start_line": 10,
       "end_line": 16,
@@ -3398,873 +3263,699 @@
   "assertion_states": [
     {
       "assertion_id": "0084af45c07bfefd762a68e0441bbd42c9932a675660c0983af30464c3d67e89",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "01275f5f36ead6dde845fa52ace66830b0681cd0aed52b0a0c57e0d4d3859cf3",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "03b7ebd970d76380cfca939342585819a9dac7d1493f11f8ad2726007ee2e5db",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "UNRESOLVED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 1,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 1
     },
     {
       "assertion_id": "092402b2c0b3585157d0214c9ba39be89c9b53bab17782f5846227758708c5f4",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "0d6136980dceb3a299e23f1625379ff628f6619599bb34ecfeb1230d8895642d",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "0d9a2f9266c9d861acdd3cb0947609ded6bd12c64971d59d7d9d1e3cdd6ef7ea",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "0e00959b3e295d7df58af0dd4b3cfe7dd609d3087bdcb29487060d6a2db7ba3c",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "1115e6323a5d8aa551413b54a075445745e79a70e9dad5752343e2ee8aad55ed",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "153c9dbb200838a820688a57781e1e4dbcb2326d9437efbfb09ffd8b03fa3618",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "16e7387c3a106a5948e732e6b2784931e8bb037238991a05b19befedc433bd81",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "184c183738e370fe97ff15e49284ff3ca2c8aa86b0b4b2dc162a0ddadec0584b",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "1a166cbd73a1ebd698c94dd8e1d85c38eecdeeed27e62753f6ced21f3d83fa4d",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "1b8eb08e15e0c2fa5bdce6f164b4b4f4c6d1aa5055a9ce8a521499171095d1ef",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "1e44843c66bfd77e7e8dad4b54a67afc52e65c069c74cd9ed5b6140b595f5251",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "2302b60ff9aebe4e93acec81b4474aed751d9d02c3cc1fd96fe6f362db3436bc",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "25f11435aea437a6634a39d36742b2700deb10a24060acf12d5742c8d8d61c9f",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "28dbfdc581b1a28220875f987ca3275e7e1e4421a7293f48e6403f8f17c1ae40",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "2a3275ca351208cdef982e64a800c2aa0e7af1c0b1988110e8f89bcad3bc11e3",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 2,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "2ba47b3de56cd4bbeb72588a537e70b2d7487604d962c493d159ba061689c086",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "2d2d438c5cb638a9ccc8f1a820f4c7b1c8f696c1a783b99125b182b7ef69136d",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "3118d05020e0bda368b96ed0838496c796462bfcb520d7ac173d5a0f8b9f7802",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "331d923929b610a1e0c03b53dab9944bc1cbf565b2b41ab63ea281fbd9c55fb9",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "33227e362631eef22a556f446b9cca7df6a2931bb79ad853104ed265f78bd391",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "355816a6777a0d7c426b091c5783159e71eac195b180cb77945fbbd99fd56d27",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "36f3f885c116c4f8fa74c6946393382e44777a29704cd337d2b04f2c053c6f10",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "37a02f5ceaf722342d455f19ecf81abab4df18ad67b6b102b4e47313b1dd4c7f",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "447677001b2a1e880658bb5ee4ea828f4943bc65b35196503d5e21950bf303b3",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "450da7885466505dbab5450c45f0ee7ddd9ecb1a9bd2e31ddd27436ba9bdc9a5",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "4839ae8a36f4438252c480c57efdfdf8842a37759ebae7dd61f1143f511073d8",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "4d1a7cefe6d76ae4d19d29aad98f829fdff886b904c943eb16234a8c2e4bde74",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "4f259f252b93d74ed8ab5c6f2c5ec6d606886f309f4b8db0f58800e8e62ad686",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "50b7838d5774366904ae6b760a9d1701c81c9f91d270d7ab9cb919d9122b34ba",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "55ae14191303a069ae1806bdc9d4e915808c0cf5c71af1d3fd92112e2e6a08eb",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "573833037962c694d6d62cb3183df31ac71fc89b5e314329dafcb612f8c8fb07",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "5fdac41507a64df6670408d446fc253bef30acf65e2f4007e0d7629359574e6b",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "61e5c68f64d131019f0fbddd80cb87d67964eca29990e88f73fc59c45221d75a",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "6284f78bd589654c4e09915b1884f7260478b3c8f8201d934ff57518ecd3f43d",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "62e94461cdf17289f432b1410da56ae7a3061f4392d3af3620d2a702d4139955",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "6817df4314a4384172f9f388f05a14178d3789a596c4235c36f10e6dadfd1f83",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "6c80522fc9453fcf53f3bb03cf708f3a4d7fe71b841fd0cc875bec34a4c948c6",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "UNRESOLVED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 1,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 1
     },
     {
       "assertion_id": "7149d3c065416e60e9d42a13cbc6a1fa6f8d9e0676bef29873bbede28b40a2a7",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "743af55d53e503ceade217403470a238f07d03d8edcec337a4dcc8c135684c49",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "75e8718f0a33c822947fb2269d8718eefbd8c9185dd01c3ec41b3608b89e50c4",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "7981e786fc5290a9ed6165f9849593527e3378de1b087000e15989ce502d6959",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "7bfe0d05df55c96a2f25be72097204d3542db86d4e5e6052abe24fff64263000",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "85f789cf81dffeb53d25c71c1ce28137d4f0d951d56633167dfd556aea1c7c8a",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "86bd7765d464dc1e00252b6e6fa9a7c8819f1ac4eded6fb15426e061e7b6a345",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "UNRESOLVED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 1,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 1
     },
     {
       "assertion_id": "86bd849a56fb01a254de599b3b41501528dc7518c5fdac06c8c014e5c53d279a",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "88dc879da1f9d7992dcb9366b92b9725c18565d54b946ca05a9165973c72d8cb",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "88e1beed99386dbd05252fb85f380f540a9cc3fac1e5fd43502703dfc9385ba0",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "8ab11034ec799588c234c6d5da11eabfed6b613e5f34ef30f32c68fd1ffb03ac",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "8ac814b0e8f279b2050ada5acf62310977534321c68bb46c5467aaa2865c013b",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "8ebbd2d94fc6c675affb907c75a4ce90bed10abb8718525ec7d359c7abd91434",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "935a440a96fc3e97f8d2d5ddf9954652d63981ba7fa862c5f77adf3910503669",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "947f6cd9529f3893782a38d0f03de0ef11433ada49982ee485882de1115f28aa",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "94e8487fe167214db2b97b0a9965a29c9221e80688ff203838ba58c024990c70",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "994e8201fafa5f5bf5b6237ff8f9f9a664ed4a5392d6776d9e4fc39b38c84418",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 2,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "998e7b39807a7a34e4a737485c083227deec533e09d32831ae92e03d79ef67fe",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "a541797cbaa091653fe5b3bf6333735f3d124628a34ebab46d53a48d6f901228",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "b31eec01e78cba00ad0170f5a90d77984fe4f26554e1347b06f90e39d04118cb",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "b38fccfac2370910e580931000936b1d2a97283bc125aaa97880b9c7a29e7945",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "b63592db5939a3536e7a3d7eefc8149f6fdf7cfdd105603cd502d778e8502615",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "b695c9924698e67b555dec069edc8460dcaab6a416aead6f9a8e10faa8e21437",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "b98eb15430e189daa1b8975ed21aa5f7d65769549cf73d555ea927c21a694565",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "UNRESOLVED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 1,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 1
     },
     {
       "assertion_id": "bd8dbeb1ebf6039da9222ae64df3fb4b278133ab66122ff6e284b2c8bb06b655",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "bfa2f49e3873deccb9e5b1622e93d2413a8fd2dc63edefbbf5ba3813d27b394a",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "UNRESOLVED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 1,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 1
     },
     {
       "assertion_id": "c0271f7ef77aa83ed3e1fe83b65caacd53ccfe956ac2d9b57dde1c5fce071bac",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "c10c44fe73adae0f403cde04d8db90d124f0fcbe8cb5edc6d0c44e58daae4971",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "c2070f73991f511fc18e2d15e61c84953eb1031ef2e44d9228a15912e878272a",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "c3cae7220e9355b336c1371d36cbb16902fb809092284c97654b575b158d777b",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "UNRESOLVED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 1,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 1
     },
     {
       "assertion_id": "cd4c9cb72e696d062d92ca17630b02366647d9d4254bd062d1c1f8094f75ac6d",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "d1a8eeb796cd9846630c78246b75975a5fda688bcf4cbf3430e41b39798feacf",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "d2a41d193c95caaf367868c88bd4b72dff086ea347622f0a1bf309e86431655b",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "d3b5691507111004690c06b75ddb01164a73518ac5be251f1a4b411271d4407e",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "d67e6fd9446c1366cb4146faf9312d22082c75e51a3c2c1bd5f560078e38eda2",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "e2ceaf4c6ab97c26d5eafe0493c8be7406bd4c3c07e3f4be487b74476c3bae8c",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "e7f6e40abe5f6504b98ae2d6b160afda8b265f6d26ac2f4151d70aa33337f66d",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "ec61c4132a51e12496dcfd51fd887413148d1ef0d9a7e860ded1bbb2e92a3c4c",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "ed6250a67c215f070e89b0e5d4e0fd9122f07b89f7300af8f9b8477f5e027918",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "ee28b7afd1492f7e93ea84d8d23a5afb84bf6fa0a1ae7eacf6f5fb1a9b069448",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "ef22c4cc2c628997bce1413858c4c7d5c10aad9d5812eb4b4078fdc64ed462f1",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "f0d306a3fd0d392a03f11615f7843a16b61633898c2428fd4b4cbc3b9ab5ccf6",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "f369d756a36b44f3aaa90cd6078ab5aee9c44187959809dda310895bf09032a1",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "f61f445176c0b17a3fd108df11fab77124d77ac9ae3736ffd2b0c152fdadd7a7",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "f721362f185991b3d68363190cd382563d146865121f31a15c46ff96901764d6",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_RESOLVED",
       "source_type_mask": 2,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "f9e51746f3d6a8cd16f57fc24ee41d3aa22693e8e5de6bd7f515d75b18bd7507",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     },
     {
       "assertion_id": "ff464805e670934f721208103b8cdd29636488363ab85da3e4fc65e58ad2da3a",
-      "state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933",
       "status": "SUPPORTED",
       "strongest_source_type": "AST_DIRECT",
       "source_type_mask": 1,
       "observation_count": 1,
-      "is_unresolved": 0,
-      "last_seen_state_id": "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
+      "is_unresolved": 0
     }
   ]
 }

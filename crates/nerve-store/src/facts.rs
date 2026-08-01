@@ -57,9 +57,13 @@ pub fn load_module_facts(
     Ok(out)
 }
 
-/// Insert or replace one cached module.
-pub fn upsert_module_facts(conn: &Connection, repo_id: &str, row: &ModuleFactsRow) -> Result<()> {
-    conn.execute(
+/// Insert or replace one cached module. Returns the number of rows written.
+pub fn upsert_module_facts(
+    conn: &Connection,
+    repo_id: &str,
+    row: &ModuleFactsRow,
+) -> Result<usize> {
+    Ok(conn.execute(
         "INSERT INTO module_facts
              (repo_id, rel_path, content_hash, language, structural_version,
               reference_version, facts)
@@ -79,8 +83,7 @@ pub fn upsert_module_facts(conn: &Connection, repo_id: &str, row: &ModuleFactsRo
             row.reference_version,
             row.facts,
         ],
-    )?;
-    Ok(())
+    )?)
 }
 
 /// Delete one cached module. Returns whether a row was removed.

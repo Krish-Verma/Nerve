@@ -499,7 +499,10 @@ pub struct ObservationEvidence {
     pub extractor_version: String,
     /// Match quality, only for extractors that perform matching.
     pub match_quality: Option<f64>,
-    /// Repository state the observation was made in.
+    /// Repository state the run that produced this observation was made in.
+    ///
+    /// Read through `extractor_run`, not off the observation row: since ADR-0006 the state is a
+    /// property of the run, not of the evidence.
     pub state_id: String,
     /// File the evidence points at.
     pub file_path: String,
@@ -684,12 +687,13 @@ fn observations_for(
     cache: &mut FreshnessCache<'_>,
 ) -> Result<Vec<ObservationEvidence>> {
     let mut stmt = conn.prepare(
-        "SELECT observation_id, evidence_source_type, directness, extractor_id,
-                extractor_version, match_quality, state_id, file_path, start_line, end_line,
-                content_hash, environment, details, created_at
-           FROM observation
-          WHERE assertion_id = ?1
-          ORDER BY file_path, start_line, end_line, observation_id",
+        "SELECT o.observation_id, o.evidence_source_type, o.directness, o.extractor_id,
+                o.extractor_version, o.match_quality, r.state_id, o.file_path, o.start_line,
+                o.end_line, o.content_hash, o.environment, o.details, o.created_at
+           FROM observation o
+           JOIN extractor_run r ON r.run_id = o.extractor_run_id
+          WHERE o.assertion_id = ?1
+          ORDER BY o.file_path, o.start_line, o.end_line, o.observation_id",
     )?;
     let rows = stmt.query_map(params![assertion_id], |row| {
         Ok(ObservationEvidence {

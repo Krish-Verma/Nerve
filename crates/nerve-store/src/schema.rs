@@ -1,15 +1,17 @@
-//! Schema v1 (ADR-0003), schema v2 (Slice 3), and migrations.
+//! Schema v1 (ADR-0003), v2 (Slice 3), v3 (Slice 3b), and migrations.
 //!
 //! Migrations are append-only. `V1` is immutable: a database written by an older build must be
 //! upgradable by replaying the later steps, so editing an already-shipped step in place would
 //! make old and new databases disagree about what "version 1" means.
 
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
+
+use nerve_core::ids;
 
 use crate::error::{Result, StoreError};
 
 /// The schema version this build writes and understands.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Human-readable description recorded in `schema_version`.
 pub const SCHEMA_V1_DESCRIPTION: &str =
@@ -18,6 +20,11 @@ pub const SCHEMA_V1_DESCRIPTION: &str =
 /// Human-readable description recorded in `schema_version` for the Slice 3 upgrade.
 pub const SCHEMA_V2_DESCRIPTION: &str =
     "Slice 3: module_facts extraction cache for incremental indexing; identity_link uniqueness";
+
+/// Human-readable description recorded in `schema_version` for the Slice 3b upgrade.
+pub const SCHEMA_V3_DESCRIPTION: &str =
+    "Slice 3b (ADR-0006): repository state normalized out of occurrence, observation \
+     and assertion_state; occurrence_id no longer digests the state";
 
 const V1: &str = r#"
 CREATE TABLE repository (
@@ -203,13 +210,129 @@ CREATE UNIQUE INDEX idx_identity_link_identity
     ON identity_link(repo_id, left_entity_id, right_entity_id, link_kind);
 "#;
 
-/// Migration steps, in application order: `(version, description, sql)`.
+/// Schema v3 — Slice 3b, ADR-0006. The part that is expressible in SQL.
+///
+/// Deduplication comes first and is load-bearing. A Slice 1/2 (v1) database was insert-only:
+/// re-indexing appended another `occurrence` row for the same entity at the same span under a
+/// new `state_id`, and another `observation` row for the same claim. Under the new identity
+/// those are the *same* row, so the superseded copies must go before the state column does —
+/// otherwise the primary key and the uniqueness index would both be violated by rows that were
+/// legal a moment earlier. The surviving copy is the most recently written one (highest rowid).
+/// On a v2 database this deletes nothing: the Slice 3 restatement pass had already collapsed
+/// every row onto a single state.
+const V3: &str = r#"
+DELETE FROM occurrence
+ WHERE rowid NOT IN (
+       SELECT MAX(rowid) FROM occurrence
+        GROUP BY entity_id, file_path, start_byte, end_byte);
+
+DELETE FROM observation
+ WHERE observation_id NOT IN (
+       SELECT MAX(observation_id) FROM observation
+        GROUP BY assertion_id, extractor_id, extractor_version,
+                 evidence_source_type, file_path, start_line, end_line);
+
+DROP INDEX IF EXISTS idx_occurrence_state;
+DROP INDEX IF EXISTS idx_observation_state;
+DROP INDEX IF EXISTS idx_observation_identity;
+
+ALTER TABLE occurrence      DROP COLUMN state_id;
+ALTER TABLE observation     DROP COLUMN state_id;
+ALTER TABLE assertion_state DROP COLUMN state_id;
+ALTER TABLE assertion_state DROP COLUMN last_seen_state_id;
+
+-- The same tuple as v1 minus the state. A tightening, not a loosening: the same evidence at the
+-- same place from the same extractor is now one row across states rather than one row per state.
+CREATE UNIQUE INDEX idx_observation_identity ON observation(
+    assertion_id, extractor_id, extractor_version,
+    evidence_source_type, file_path, start_line, end_line
+);
+"#;
+
+/// One migration step. Almost all of them are SQL; v3 is not, because it must recompute a
+/// BLAKE3 digest and SQLite has no such function.
+enum Step {
+    /// A batch of statements.
+    Sql(&'static str),
+    /// Rust that owns its own statements. Runs inside the step's transaction.
+    Rust(fn(&Connection) -> Result<()>),
+}
+
+/// Migration steps, in application order: `(version, description, step)`.
 ///
 /// Appending to this list is how the schema evolves. Editing an existing entry is prohibited.
-const MIGRATIONS: [(i64, &str, &str); 2] = [
-    (1, SCHEMA_V1_DESCRIPTION, V1),
-    (2, SCHEMA_V2_DESCRIPTION, V2),
+const MIGRATIONS: [(i64, &str, Step); 3] = [
+    (1, SCHEMA_V1_DESCRIPTION, Step::Sql(V1)),
+    (2, SCHEMA_V2_DESCRIPTION, Step::Sql(V2)),
+    (3, SCHEMA_V3_DESCRIPTION, Step::Rust(migrate_v3)),
 ];
+
+/// Apply [`V3`], then restate every `occurrence_id` under the ADR-0006 tuple.
+///
+/// The new id is `blake3(entity_id, rel_path, start_byte, end_byte)`, which SQLite cannot
+/// compute, so the pairs are staged in a temporary table and applied by one statement rather
+/// than by a loop of keyed updates — rewriting a primary key rewrites every index entry over the
+/// row, and the per-statement overhead of the loop is measurable.
+///
+/// The deduplication in [`V3`] runs first and guarantees the new ids are unique, so this update
+/// cannot collide.
+fn migrate_v3(conn: &Connection) -> Result<()> {
+    conn.execute_batch(V3)?;
+
+    let restated: Vec<(String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT occurrence_id, entity_id, file_path, start_byte, end_byte
+               FROM occurrence ORDER BY occurrence_id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let was: String = row.get(0)?;
+            let entity_id: String = row.get(1)?;
+            let file_path: String = row.get(2)?;
+            let start_byte: i64 = row.get(3)?;
+            let end_byte: i64 = row.get(4)?;
+            let now = ids::occurrence_id(
+                &entity_id,
+                &file_path,
+                start_byte as usize,
+                end_byte as usize,
+            );
+            Ok((was, now))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        out
+    };
+
+    if restated.is_empty() {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS occurrence_v3_ids (
+             was TEXT PRIMARY KEY,
+             now TEXT NOT NULL
+         );
+         DELETE FROM occurrence_v3_ids;",
+    )?;
+    {
+        let mut insert =
+            conn.prepare("INSERT INTO occurrence_v3_ids (was, now) VALUES (?1, ?2)")?;
+        for (was, now) in &restated {
+            insert.execute(params![was, now])?;
+        }
+    }
+    conn.execute(
+        "UPDATE occurrence
+            SET occurrence_id = (SELECT r.now FROM occurrence_v3_ids r
+                                  WHERE r.was = occurrence.occurrence_id)
+          WHERE occurrence_id IN (SELECT was FROM occurrence_v3_ids)",
+        [],
+    )?;
+    conn.execute_batch("DROP TABLE occurrence_v3_ids;")?;
+    Ok(())
+}
 
 /// Bring a connection up to [`SCHEMA_VERSION`].
 ///
@@ -241,12 +364,15 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     }
 
     let applied = current.unwrap_or(0);
-    for (version, description, sql) in MIGRATIONS {
+    for (version, description, step) in MIGRATIONS {
         if version <= applied {
             continue;
         }
         let tx = conn.unchecked_transaction()?;
-        tx.execute_batch(sql)?;
+        match step {
+            Step::Sql(sql) => tx.execute_batch(sql)?,
+            Step::Rust(run) => run(&tx)?,
+        }
         tx.execute(
             "INSERT INTO schema_version (version, applied_at, description)
              VALUES (?1, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?2)",

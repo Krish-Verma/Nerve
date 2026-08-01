@@ -9,8 +9,9 @@
 //! - absolute paths (`repository.root_path`) — machine-specific
 //! - `occurrence_id` — a pure function of fields already present
 //! - the `extractor_run` table — an audit log of runs, which grows by design on re-index
-//! - the `repository_state` log — likewise; [`CanonicalDump::state_ids`] carries the states the
-//!   graph rows actually refer to, which is a property of the claims rather than of the runs
+//! - the `repository_state` log — likewise; [`CanonicalDump::state_ids`] carries the state the
+//!   database currently describes, which is a Merkle over the file contents and therefore a
+//!   property of the tree rather than of the run history
 //! - the `identity_link` table — proposals about how identity moved *between* trees, not a claim
 //!   about the tree being dumped
 //! - the `module_facts` cache — extractor inputs, not evidence
@@ -28,7 +29,12 @@ pub struct CanonicalDump {
     pub schema_version: i64,
     /// Project identifier the entity ids were derived from.
     pub project_id: String,
-    /// Every repository state the dumped rows refer to, sorted. Normally exactly one.
+    /// The repository state this database currently describes, sorted. Normally exactly one.
+    ///
+    /// Since ADR-0006 the graph rows carry no state of their own, so this is read from the most
+    /// recent `extractor_run` — an empty vector when the database has never been indexed. The
+    /// value is the content Merkle, so an incremental re-index and a from-scratch index of the
+    /// same tree must still agree on it.
     pub state_ids: Vec<String>,
     /// Entities, sorted by `entity_id`.
     pub entities: Vec<DumpEntity>,
@@ -63,12 +69,13 @@ pub struct DumpEntity {
 }
 
 /// Canonical occurrence row. `occurrence_id` is omitted: it is derived from these fields.
+///
+/// Carries no repository state: an occurrence is a location fact (ADR-0006). What the file said
+/// when the location was recorded is `content_hash`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct DumpOccurrence {
     /// Entity that appears.
     pub entity_id: String,
-    /// Repository state.
-    pub state_id: String,
     /// Repository-relative path.
     pub file_path: String,
     /// Inclusive start byte.
@@ -101,6 +108,9 @@ pub struct DumpAssertion {
 }
 
 /// Canonical observation row. Surrogate keys and `created_at` are omitted.
+///
+/// The repository state is omitted too: it is a property of the run that produced the evidence,
+/// reachable through `extractor_run_id`, not of the evidence itself (ADR-0006).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DumpObservation {
     /// Claim supported.
@@ -115,8 +125,6 @@ pub struct DumpObservation {
     pub extractor_version: String,
     /// Match quality, where meaningful.
     pub match_quality: Option<f64>,
-    /// Repository state.
-    pub state_id: String,
     /// Repository-relative path.
     pub file_path: String,
     /// 1-based first line, or 0 for structural facts.
@@ -134,12 +142,14 @@ pub struct DumpObservation {
 impl Eq for DumpObservation {}
 
 /// Canonical derived-state row.
+///
+/// Names no state since ADR-0006: the state a claim was last observed in is a property of the
+/// runs that observed it, reachable through `observation.extractor_run_id`. Keeping it here
+/// would have forced every re-index to rewrite every derived row.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct DumpAssertionState {
     /// Claim.
     pub assertion_id: String,
-    /// Repository state the claim was last observed in.
-    pub state_id: String,
     /// Derived status.
     pub status: String,
     /// Structurally strongest source type present.
@@ -150,8 +160,6 @@ pub struct DumpAssertionState {
     pub observation_count: i64,
     /// 1 when the target is an `Unresolved` entity.
     pub is_unresolved: i64,
-    /// Last state the claim was seen in.
-    pub last_seen_state_id: String,
 }
 
 fn entity_sort_key(e: &DumpEntity) -> (String, String, String, String) {

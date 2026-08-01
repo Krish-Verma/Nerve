@@ -353,8 +353,8 @@ fn incremental_json(step: &nerve_index::IncrementalReport) -> serde_json::Value 
         "occurrences_removed": step.occurrences_removed,
         "assertions_removed": step.assertions_removed,
         "entities_removed": step.entities_removed,
-        "occurrences_restated": step.occurrences_restated,
-        "observations_restated": step.observations_restated,
+        "assertions_derived": step.assertions_derived,
+        "rows_written": step.rows_written,
         "identity_links_proposed": step.identity_links_proposed,
         "identity_links_recorded": step.identity_links_recorded,
     })
@@ -423,6 +423,12 @@ fn run_index(output: &Output, path: Option<PathBuf>, full: bool) -> i32 {
             for path in &step.removed_paths {
                 output.line(format!("    gone         {path}"));
             }
+            // What the run cost the database. Work proportional to the change is the property
+            // incremental indexing exists to have, so it is reported rather than assumed.
+            output.line(format!(
+                "  wrote          {} database rows ({} assertion states derived)",
+                step.rows_written, step.assertions_derived
+            ));
             if step.identity_links_proposed > 0 {
                 output.line(format!(
                     "  identity       {} link(s) proposed, {} recorded",

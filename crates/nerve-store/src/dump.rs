@@ -32,20 +32,17 @@ pub fn canonical_dump(conn: &Connection) -> Result<CanonicalDump> {
         )
         .unwrap_or_default();
 
-    // The states the graph actually refers to, not every state ever recorded.
+    // The repository state this database currently describes.
     //
-    // `repository_state` is an append-only log of index runs; the dump is a statement about the
-    // code, and a claim's state is a property of the claim. Reading the states off the rows
-    // themselves also means the dump cannot hide a row left behind at a superseded state: if one
-    // exists, it shows up here as a second entry rather than being papered over.
+    // Since ADR-0006 no graph row carries a state, so there is nothing to read it off the rows.
+    // It comes from the most recent extractor run instead. That value is the content Merkle — a
+    // pure function of the file set and file contents — so it is still a determinism guard: an
+    // incremental re-index and a from-scratch index of the same tree must agree on it, and a run
+    // that recorded the wrong tree shows up here rather than being papered over.
     let mut state_ids = Vec::new();
     {
-        let mut stmt = conn.prepare(
-            "SELECT state_id FROM occurrence
-             UNION
-             SELECT state_id FROM observation
-             ORDER BY 1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT state_id FROM extractor_run ORDER BY run_id DESC LIMIT 1")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         for row in rows {
             state_ids.push(row?);
@@ -84,22 +81,21 @@ pub fn canonical_dump(conn: &Connection) -> Result<CanonicalDump> {
     let mut occurrences = Vec::new();
     {
         let mut stmt = conn.prepare(
-            "SELECT entity_id, state_id, file_path, start_byte, end_byte,
+            "SELECT entity_id, file_path, start_byte, end_byte,
                     start_line, start_col, end_line, end_col, content_hash
                FROM occurrence ORDER BY entity_id, file_path, start_byte, end_byte",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(DumpOccurrence {
                 entity_id: row.get(0)?,
-                state_id: row.get(1)?,
-                file_path: row.get(2)?,
-                start_byte: row.get(3)?,
-                end_byte: row.get(4)?,
-                start_line: row.get(5)?,
-                start_col: row.get(6)?,
-                end_line: row.get(7)?,
-                end_col: row.get(8)?,
-                content_hash: row.get(9)?,
+                file_path: row.get(1)?,
+                start_byte: row.get(2)?,
+                end_byte: row.get(3)?,
+                start_line: row.get(4)?,
+                start_col: row.get(5)?,
+                end_line: row.get(6)?,
+                end_col: row.get(7)?,
+                content_hash: row.get(8)?,
             })
         })?;
         for row in rows {
@@ -130,7 +126,7 @@ pub fn canonical_dump(conn: &Connection) -> Result<CanonicalDump> {
     {
         let mut stmt = conn.prepare(
             "SELECT assertion_id, evidence_source_type, directness, extractor_id,
-                    extractor_version, match_quality, state_id, file_path, start_line,
+                    extractor_version, match_quality, file_path, start_line,
                     end_line, content_hash, environment, details
                FROM observation ORDER BY observation_id",
         )?;
@@ -143,15 +139,14 @@ pub fn canonical_dump(conn: &Connection) -> Result<CanonicalDump> {
                     extractor_id: row.get(3)?,
                     extractor_version: row.get(4)?,
                     match_quality: row.get(5)?,
-                    state_id: row.get(6)?,
-                    file_path: row.get(7)?,
-                    start_line: row.get(8)?,
-                    end_line: row.get(9)?,
-                    content_hash: row.get(10)?,
-                    environment: row.get(11)?,
+                    file_path: row.get(6)?,
+                    start_line: row.get(7)?,
+                    end_line: row.get(8)?,
+                    content_hash: row.get(9)?,
+                    environment: row.get(10)?,
                     details: None,
                 },
-                row.get::<_, Option<String>>(12)?,
+                row.get::<_, Option<String>>(11)?,
             ))
         })?;
         for row in rows {
@@ -164,20 +159,18 @@ pub fn canonical_dump(conn: &Connection) -> Result<CanonicalDump> {
     let mut assertion_states = Vec::new();
     {
         let mut stmt = conn.prepare(
-            "SELECT assertion_id, state_id, status, strongest_source_type, source_type_mask,
-                    observation_count, is_unresolved, last_seen_state_id
+            "SELECT assertion_id, status, strongest_source_type, source_type_mask,
+                    observation_count, is_unresolved
                FROM assertion_state ORDER BY assertion_id",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(DumpAssertionState {
                 assertion_id: row.get(0)?,
-                state_id: row.get(1)?,
-                status: row.get(2)?,
-                strongest_source_type: row.get(3)?,
-                source_type_mask: row.get(4)?,
-                observation_count: row.get(5)?,
-                is_unresolved: row.get(6)?,
-                last_seen_state_id: row.get(7)?,
+                status: row.get(1)?,
+                strongest_source_type: row.get(2)?,
+                source_type_mask: row.get(3)?,
+                observation_count: row.get(4)?,
+                is_unresolved: row.get(5)?,
             })
         })?;
         for row in rows {

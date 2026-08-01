@@ -25,16 +25,31 @@
 //! 1. **Rows for vanished and re-extracted files are deleted**, and assertions and entities left
 //!    without support are pruned. Insert-only indexing leaves a deleted file's graph behind
 //!    forever, which is not merely stale — it is wrong.
-//! 2. **Surviving rows are advanced to the new repository state.** An observation records the
-//!    state it was made in; carrying one forward without restating it would leave the database
-//!    describing two states at once. Restating is sound precisely because the file's bytes are
-//!    unchanged and the extractors are deterministic, so re-running them would have produced the
-//!    identical row.
+//! 2. **No row carries a repository state** (ADR-0006). An occurrence is a location fact and an
+//!    observation is evidence about a file at a content hash; neither depends on which run
+//!    noticed it. A surviving row is therefore already correct and needs no rewriting. Slice 3
+//!    had to restate every surviving row instead, at 1330 ms of a 2900 ms run on 520 modules.
 //! 3. **Entities are upserted, not ignored.** An entity id excludes body content by design, so
 //!    an edit can change a row without changing its id.
 //!
 //! `--full` is the same code path with every file seeded, so the full and incremental paths
 //! cannot drift apart by being two implementations.
+//!
+//! # Work proportional to the change (Slice 3b)
+//!
+//! Everything the transaction writes is scoped to what moved:
+//!
+//! - `assertion_state` is recomputed only for the assertions whose evidence this run wrote or
+//!   withdrew, and orphan pruning only considers rows this run could have orphaned. Both are
+//!   lazy evaluations of the whole-table statements, which stay in the codebase as the reference
+//!   implementations and are what run when a run re-extracts the entire repository.
+//! - Directory containment is re-derived only when a file was **removed**, the only way a
+//!   directory can stop holding indexed files. Clearing it unconditionally made an unrelated
+//!   one-file edit rewrite one row per directory in the repository.
+//!
+//! [`IncrementalReport::rows_written`] counts the rows the transaction actually changed, and
+//! `nerve-index/tests/incremental.rs` gates it: the same one-file leaf edit in a small repository
+//! and in a 520-module one must write the same number of rows.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -124,10 +139,28 @@ pub struct IncrementalReport {
     pub assertions_removed: usize,
     /// Entities deleted for want of any occurrence or incident assertion.
     pub entities_removed: usize,
-    /// Occurrences advanced to the new repository state.
-    pub occurrences_restated: usize,
-    /// Observations advanced to the new repository state.
-    pub observations_restated: usize,
+    /// Assertions whose derived state this run recomputed.
+    ///
+    /// The scope of the lazy `assertion_state` evaluation. Equal to the whole table when the run
+    /// re-extracted the entire repository.
+    pub assertions_derived: usize,
+    /// Rows of Nerve's own model this run inserted, updated or deleted.
+    ///
+    /// The structural gate on incremental indexing, and the one that cannot be gamed by a fast
+    /// machine: a one-file leaf edit must write a number of rows proportional to the change, not
+    /// to the size of the repository.
+    ///
+    /// Counts `entity`, `occurrence`, `assertion`, `observation`, `assertion_state`,
+    /// `module_facts` and `identity_link`. Two things are deliberately outside it:
+    ///
+    /// - `repository`, `repository_state` and `extractor_run`, which are six statements per run
+    ///   whatever the repository and whatever the change;
+    /// - SQLite's own index maintenance, above all the FTS5 shadow tables. Updating one entity
+    ///   row provokes a segment flush whose size depends on how much is already indexed, so
+    ///   counting it would make the metric report a repository-proportional cost for a
+    ///   single-row write. That work is real, but it is SQLite's bookkeeping over its own index,
+    ///   not a row of Nerve's model, and it is amortized rather than paid per run.
+    pub rows_written: usize,
     /// Identity links proposed by this run.
     pub identity_links_proposed: usize,
     /// Identity links this run wrote; a link already proposed is not written twice.
@@ -212,7 +245,6 @@ struct LoadedFile {
 
 /// Accumulates the graph for one run, deduplicating by content-derived key as it goes.
 struct GraphBuilder {
-    state_id: String,
     extractor_id: &'static str,
     extractor_version: &'static str,
     batch: GraphBatch,
@@ -221,9 +253,8 @@ struct GraphBuilder {
 }
 
 impl GraphBuilder {
-    fn new(state_id: &str, extractor_id: &'static str, extractor_version: &'static str) -> Self {
+    fn new(extractor_id: &'static str, extractor_version: &'static str) -> Self {
         GraphBuilder {
-            state_id: state_id.to_string(),
             extractor_id,
             extractor_version,
             batch: GraphBatch::default(),
@@ -240,13 +271,7 @@ impl GraphBuilder {
 
     fn add_occurrence(&mut self, entity_id: &str, file_path: &str, span: Span, content_hash: &str) {
         self.batch.occurrences.push(OccurrenceRecord {
-            occurrence_id: ids::occurrence_id(
-                entity_id,
-                &self.state_id,
-                file_path,
-                span.start_byte,
-                span.end_byte,
-            ),
+            occurrence_id: ids::occurrence_id(entity_id, file_path, span.start_byte, span.end_byte),
             entity_id: entity_id.to_string(),
             file_path: file_path.to_string(),
             span,
@@ -430,6 +455,21 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     let repo_id = ids::repository_id(&config.project_id);
     let mut conn = nerve_store::open(&db_path)?;
 
+    // Bring the schema up to date before writing a single row.
+    //
+    // `nerve init` migrates, but a database written by an older build and then indexed by a
+    // newer one never passed through `init` again. Until Slice 3b that was merely a loud failure
+    // (a missing table); with schema v3 it became a silent one. `persist_batch` inserts
+    // `OR IGNORE` — which is what makes re-indexing an unchanged tree free — and `OR IGNORE`
+    // swallows `NOT NULL` violations as readily as duplicate keys. Writing v3's column list into
+    // a v2 `occurrence` therefore dropped every insert on the floor **after** the re-extracted
+    // files' rows had already been deleted, leaving a smaller graph and a zero exit code.
+    //
+    // Migration is idempotent and costs one `SELECT MAX(version)` on an up-to-date database, so
+    // it runs unconditionally rather than behind a version check that could itself drift. A
+    // database written by a *newer* build is refused here rather than guessed at.
+    nerve_store::migrate(&conn)?;
+
     // ---- what changed --------------------------------------------------------------------
     let previous = load_previous_modules(&conn, &repo_id)?;
     let current_hashes: BTreeMap<String, String> = loaded
@@ -559,7 +599,6 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
 
     let batch = build_graph(
         &config.project_id,
-        &state_id,
         &loaded,
         &targets,
         &module_exports,
@@ -575,7 +614,7 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
                 .map(|extraction| (file, extraction))
         })
         .collect();
-    let reference_batch = build_reference_graph(&config.project_id, &state_id, &reference_targets);
+    let reference_batch = build_reference_graph(&config.project_id, &reference_targets);
     reference_batch
         .verify_declared_source_types(refs::EXTRACTOR_ID, &refs::DECLARED_SOURCE_TYPES)?;
 
@@ -634,8 +673,18 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         ..IncrementalReport::default()
     };
 
+    // A run that re-extracts every file has the whole repository in scope, so the scoped
+    // derivation and pruning would be doing the whole-table work with staging overhead on top.
+    // The whole-table statements are used instead. They are the same function evaluated eagerly;
+    // `scoped == whole-table` is gated by test, so choosing between them cannot change the
+    // answer — only the cost.
+    let whole_repository_in_scope = target_paths.len() == loaded.len();
+
     {
         let tx = conn.transaction().map_err(nerve_store::StoreError::from)?;
+        // Rows of Nerve's own model written, updated or deleted by this transaction. See
+        // `IncrementalReport::rows_written` for what is deliberately outside the count.
+        let mut rows_written = 0usize;
         nerve_store::upsert_repository(
             &tx,
             &nerve_store::RepositoryRow {
@@ -657,20 +706,30 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
 
         // 1. Withdraw the evidence this run is about to replace or has lost. Entities and
         //    assertions are left standing until it is known what the new rows support.
+        //
+        //    `touched` accumulates what this transaction disturbs, which is what bounds the
+        //    derivation and pruning below. Deletions must record it as they go: afterwards the
+        //    rows that would say so are gone.
+        let mut touched = nerve_store::TouchedRows::default();
         let mut superseded: BTreeSet<String> = target_paths.clone();
         superseded.extend(changes.removed.iter().cloned());
-        let mut removals = nerve_store::delete_file_rows(&tx, &superseded)?;
-        // Directory containment is re-derived from the current file set every run, so clearing
-        // it is not a removal and is deliberately not counted as one. A directory that really
-        // did go away shows up in the reported counts as a pruned assertion and entity.
-        nerve_store::delete_directory_containment(&tx)?;
+        let mut removals = nerve_store::delete_file_rows(&tx, &superseded, &mut touched)?;
+        rows_written += removals.observations + removals.occurrences;
 
-        // 2. Advance everything that survived to the state this run observed.
-        let (occurrences_restated, observations_restated) =
-            nerve_store::restamp_state(&tx, &state_id)?;
+        // Directory containment is the one part of the graph no file path owns, and it is
+        // re-derived from the current file set rather than parsed. Clearing it first is only
+        // necessary when a file was removed, because that is the only way a directory can stop
+        // holding indexed files; doing it unconditionally would make a one-file edit rewrite one
+        // row per directory in the repository. Clearing it is not a removal and is deliberately
+        // not counted as one — a directory that really did go away shows up in the reported
+        // counts as a pruned assertion and entity.
+        if !changes.removed.is_empty() {
+            rows_written += nerve_store::delete_directory_containment(&tx, &mut touched)?;
+        }
 
-        // 3. Write the new evidence. One `extractor_run` row per extractor: the rows are what
+        // 2. Write the new evidence. One `extractor_run` row per extractor: the rows are what
         //    make a contribution attributable, and therefore revocable, per extractor version.
+        //    The run carries the repository state; no graph row does (ADR-0006).
         let structural_run = nerve_store::begin_extractor_run(
             &tx,
             &repo_id,
@@ -678,7 +737,8 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
             EXTRACTOR_ID,
             EXTRACTOR_VERSION,
         )?;
-        nerve_store::persist_batch(&tx, &repo_id, &state_id, structural_run, &batch)?;
+        rows_written +=
+            nerve_store::persist_batch(&tx, &repo_id, structural_run, &batch, &mut touched)?;
         nerve_store::finish_extractor_run(
             &tx,
             structural_run,
@@ -694,7 +754,13 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
             refs::EXTRACTOR_ID,
             refs::EXTRACTOR_VERSION,
         )?;
-        nerve_store::persist_batch(&tx, &repo_id, &state_id, reference_run, &reference_batch)?;
+        rows_written += nerve_store::persist_batch(
+            &tx,
+            &repo_id,
+            reference_run,
+            &reference_batch,
+            &mut touched,
+        )?;
         nerve_store::finish_extractor_run(
             &tx,
             reference_run,
@@ -703,18 +769,31 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
             status.as_str(),
         )?;
 
-        // 4. Derivation runs inside the same transaction: the graph and the state derived from
+        // 3. Derivation runs inside the same transaction: the graph and the state derived from
         //    it become visible together or not at all. It runs *before* orphan pruning, which is
-        //    what makes the pruning safe — a rebuild leaves no derived row behind for an
+        //    what makes the pruning safe — derivation leaves no derived row behind for an
         //    assertion nothing observes, so deleting that assertion breaks no foreign key.
-        nerve_store::rebuild_assertion_state(&tx)?;
+        let derived = if whole_repository_in_scope {
+            nerve_store::rebuild_assertion_state(&tx)?
+        } else {
+            nerve_store::derive_assertion_state_for(&tx, &touched.assertions)?
+        };
+        rows_written += derived.total();
 
-        // 5. Remove what nothing supports any more.
-        removals.add(nerve_store::prune_orphans(&tx)?);
+        // 4. Remove what nothing supports any more.
+        let pruned = if whole_repository_in_scope {
+            nerve_store::prune_orphans(&tx)?
+        } else {
+            nerve_store::prune_orphans_scoped(&tx, &touched)?
+        };
+        rows_written += pruned.assertions + pruned.entities;
+        removals.add(pruned);
 
-        // 6. Refresh the extraction cache.
+        // 5. Refresh the extraction cache.
         for path in &changes.removed {
-            nerve_store::delete_module_facts(&tx, &repo_id, path)?;
+            if nerve_store::delete_module_facts(&tx, &repo_id, path)? {
+                rows_written += 1;
+            }
         }
         for file in &loaded {
             if !target_paths.contains(&file.rel_path) {
@@ -724,7 +803,7 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
                 .get(&file.rel_path)
                 .cloned()
                 .unwrap_or_default();
-            nerve_store::upsert_module_facts(
+            rows_written += nerve_store::upsert_module_facts(
                 &tx,
                 &repo_id,
                 &nerve_store::ModuleFactsRow {
@@ -738,7 +817,7 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
             )?;
         }
 
-        // 7. Propose identity links. Proposals only — nothing merges the two identities.
+        // 6. Propose identity links. Proposals only — nothing merges the two identities.
         for proposal in &proposals {
             let file_evidence = serde_json::json!({
                 "rule": "body-digest symbol correspondence between a removed and an added file",
@@ -795,8 +874,9 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         incremental_report.occurrences_removed = removals.occurrences;
         incremental_report.assertions_removed = removals.assertions;
         incremental_report.entities_removed = removals.entities;
-        incremental_report.occurrences_restated = occurrences_restated;
-        incremental_report.observations_restated = observations_restated;
+        rows_written += incremental_report.identity_links_recorded;
+        incremental_report.assertions_derived = derived.written;
+        incremental_report.rows_written = rows_written;
 
         tx.commit().map_err(nerve_store::StoreError::from)?;
     }
@@ -881,13 +961,12 @@ fn cached_facts(previous: &BTreeMap<String, PreviousModule>, rel_path: &str) -> 
 /// target file requires the export map of the module it names, which may not have been parsed.
 fn build_graph(
     project_id: &str,
-    state_id: &str,
     loaded: &[LoadedFile],
     targets: &[(&LoadedFile, &ModuleExtraction)],
     module_exports: &BTreeMap<String, BTreeMap<String, String>>,
     indexed: &BTreeSet<String>,
 ) -> Result<GraphBatch> {
-    let mut builder = GraphBuilder::new(state_id, EXTRACTOR_ID, EXTRACTOR_VERSION);
+    let mut builder = GraphBuilder::new(EXTRACTOR_ID, EXTRACTOR_VERSION);
 
     let repo_id = ids::repository_id(project_id);
     // The repository's display name is its own relative path. The directory basename is
@@ -1193,10 +1272,9 @@ fn build_graph(
 /// `Unresolved` entities it names itself.
 fn build_reference_graph(
     project_id: &str,
-    state_id: &str,
     targets: &[(&LoadedFile, &ReferenceExtraction)],
 ) -> GraphBatch {
-    let mut builder = GraphBuilder::new(state_id, refs::EXTRACTOR_ID, refs::EXTRACTOR_VERSION);
+    let mut builder = GraphBuilder::new(refs::EXTRACTOR_ID, refs::EXTRACTOR_VERSION);
 
     for (file, extraction) in targets.iter().copied() {
         let rel_path = file.rel_path.as_str();

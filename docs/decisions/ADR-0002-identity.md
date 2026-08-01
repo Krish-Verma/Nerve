@@ -1,6 +1,8 @@
 # ADR-0002 — Entity and occurrence identity
 
 **Status:** Accepted, with documented known defects · **Date:** 2026-07-31 · **Slice:** 1
+**Amended by:** [ADR-0006](ADR-0006-state-independent-occurrences.md) (Slice 3b) — §2
+`OccurrenceId` no longer digests the repository state. Everything else here stands.
 
 ## Context
 
@@ -35,8 +37,14 @@ Three distinct identifiers.
 
 ### 2. `OccurrenceId` — physical identity
 
-`blake3(entity_id, state_id, rel_path, start_byte, end_byte)`. One row per appearance of an
-entity in a specific repository state.
+~~`blake3(entity_id, state_id, rel_path, start_byte, end_byte)`. One row per appearance of an
+entity in a specific repository state.~~
+
+**Amended by ADR-0006 (Slice 3b):** `blake3(entity_id, rel_path, start_byte, end_byte)`. One row
+per appearance of an entity at a byte span in a file. An occurrence is a location fact and does
+not depend on which run observed it; `occurrence.content_hash` records what the file said.
+Including the state made every re-index rewrite every surviving row — an O(repository) write for
+an O(change) edit.
 
 ### 3. `AssertionId` — claim identity
 

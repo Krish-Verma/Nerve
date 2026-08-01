@@ -9,8 +9,8 @@ Authoritative slice list. Update the status column at the end of every slice.
 | 2a | Static relationship resolution — `CALLS`, `REFERENCES`, `EXTENDS`, `IMPLEMENTS`, lexical binding + import resolution, negative fixtures + measured precision | ✅ Complete (2026-07-31) — 203 tests pass, FP=0 FN=0 on 24 resolved edges |
 | 2b | Graph query surface — `nerve path`, `nerve why`, evidence packets | ✅ Complete (2026-07-31) — 261 tests pass, query-time path safety verified by attack |
 | 3 | Incremental indexing — changed-file detection, import-closure invalidation, **deletion**, `IdentityLink`, full-vs-incremental equivalence | ✅ Complete (2026-07-31) — 295 tests, equivalence holds over 24 seeded edits; **speed target missed (24.9% vs 20%)** |
-| 3b | Normalize repository state out of `occurrence`/`observation` and out of `occurrence_id` — removes the O(repository) restatement pass | ⬜ Not started — **corrective, recommended next**; unblocks Slice 3 §5 |
-| 4 | Initial visual explorer — `nerve serve`, overview, search, graph canvas, evidence inspector | ⬜ Not started |
+| 3b | Normalize repository state out of `occurrence`/`observation` and out of `occurrence_id` — removes the O(repository) restatement pass | ✅ Complete (2026-07-31) — 306 tests; **24.9% → 2.0%**; counted-writes gate; found and fixed a silent data-destruction bug |
+| 4 | Initial visual explorer — `nerve serve`, overview, search, graph canvas, evidence inspector | 🟡 In progress — threat model gate satisfied (`docs/THREAT-MODEL.md`) |
 | 5 | Markdown + ADR evidence — sections, citations, document↔code identity links | ⬜ Not started |
 | 6 | Test evidence (**coverage only**) — `TEST_COVERS_SYMBOL`, freshness, affected-test experiment | ⬜ Not started |
 | 7 | CLI + query expansion — `impact`, `gaps`, `check`, evidence packets | ⬜ Not started |
@@ -90,3 +90,28 @@ surfaces. It is split into **2a** (resolution + relations + measured precision) 
   being inside `occurrence_id` (ADR-0002) — hence Slice 3b.
 - Two plan deviations accepted after review: P4's tombstone half is superseded by the equivalence
   invariant, and `STALE` falls to the same argument. Report: `docs/reports/slice-03-report.md`.
+
+## Slice 3b — delivered
+
+- **ADR-0006**: occurrence and observation identity is state-independent. An occurrence is a
+  physical location fact; an observation is evidence about a file at a content hash. Neither
+  depends on which run observed it. `content_hash` is the freshness anchor — already how
+  `nerve why` worked, so product semantics are unchanged.
+- The O(repository) state-restatement pass is **deleted**; `assertion_state` derivation and
+  orphan pruning are scoped to what moved, with the whole-table versions kept as the oracle.
+- **Slice 3's missed target is met: 24.9% → 2.0%** on the realistic corpus (orchestrator
+  measured 2.0 / 2.0 / 2.5% at loads 5.3–9.2).
+- **Counted-writes gate**: a one-file leaf edit writes the same 52 rows in a 100-file and a
+  520-file repository. Deterministic, not timing-based, and cannot be gamed by a fast machine.
+- Schema **v3**, with v1→v3 and v2→v3 migration tests plus an end-to-end check against a real
+  v2 database produced by the Slice 3 binary.
+- **Found and fixed a silent data-destruction bug**: only `nerve init` migrated, so a v3 binary
+  indexing an un-migrated v2 database dropped every insert after deleting rows — 49 entities to
+  33, exit code 0. Report: `docs/reports/slice-03b-report.md`.
+
+## Security gate
+
+`docs/THREAT-MODEL.md` (2026-07-31) satisfies the `docs/SECURITY.md` requirement for a written
+threat model. It specifies the blocking controls for the local HTTP surface (T4 CSRF/token +
+DNS-rebinding, T5 XSS, T6 source serving), documents (T7), test evidence (T9) and MCP (T8).
+It also raised one corrective item: there is no test asserting Nerve spawns no subprocess.

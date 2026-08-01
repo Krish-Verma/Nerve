@@ -1,6 +1,11 @@
 # ADR-0003 — Evidence model and schema v1
 
 **Status:** Accepted · **Date:** 2026-07-31 · **Slice:** 1
+**Amended by:** [ADR-0006](ADR-0006-state-independent-occurrences.md) (Slice 3b, schema v3) —
+`state_id` is removed from `occurrence`, `observation` and `assertion_state`; state linkage is
+`observation.extractor_run_id → extractor_run.state_id`. The evidence model, the closed
+vocabulary, the refusal of scalar confidence, and the rule that extractors emit observations only
+are all unchanged. See "Schema v1" below for the amended column lists.
 
 ## Context
 
@@ -23,7 +28,7 @@ Instead, an observation carries a **structured evidence profile**:
 | `directness` | `DIRECT` (the artifact literally states it) / `RESOLVED` (derived through a resolution step) / `INFERRED` (a rule concluded it) |
 | `extractor_id`, `extractor_version` | Who produced it; enables surgical invalidation |
 | `match_quality` | **Only** for extractors that perform matching; `NULL` otherwise. Semantics documented per extractor |
-| `state_id` | Which repository state it was observed in — freshness is derived, not stored |
+| ~~`state_id`~~ | ~~Which repository state it was observed in~~ — **ADR-0006:** reached through `extractor_run_id`, not stored on the row. Freshness was always derived from `content_hash`, never from this |
 | `environment` | For execution evidence: `test` / `dev` / `prod` |
 | `file_path`, `start_line`, `end_line`, `content_hash` | Where to look, and what the source said at the time |
 | `details` | JSON, extractor-specific, human-readable evidence steps |
@@ -71,6 +76,11 @@ assertion pointing at it, with `assertion_state.is_unresolved = 1`. Unresolved r
 are therefore queryable and countable rather than silently dropped.
 
 ## Schema v1
+
+Shown as v1 shipped it. **Schema v3 (ADR-0006)** removes `occurrence.state_id`,
+`observation.state_id`, `assertion_state.state_id` and `assertion_state.last_seen_state_id`, and
+drops `state_id` from the observation uniqueness index. Nothing else in this listing changed;
+`repository_state` and `extractor_run` are untouched and are where the state now lives.
 
 ```sql
 schema_version(version PK, applied_at, description)

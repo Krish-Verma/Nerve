@@ -3,9 +3,10 @@
 //! Owns the SQLite schema, migrations, every SQL statement in the product, FTS5 symbol
 //! search, and the derivation of `assertion_state`.
 //!
-//! The load-bearing boundary in this crate is that [`derive::rebuild_assertion_state`] is the
-//! only writer of `assertion_state`, and it rebuilds the table from scratch. [`write`]
-//! contains no statement that touches it.
+//! The load-bearing boundary in this crate is that [`derive`] is the only writer of
+//! `assertion_state`, and that what it writes is a pure function of `observation`. [`write`]
+//! contains no statement that touches it. The whole-table rebuild is the reference evaluation of
+//! that function; the scoped one is checked against it (ADR-0006, Slice 3b).
 //!
 //! Graph reads — selector resolution, bounded path traversal, evidence assembly — live in
 //! [`select`] and [`graph`] rather than in a surface crate, so the CLI, the Slice 4 server and
@@ -28,7 +29,7 @@ pub mod select;
 pub mod write;
 
 pub use db::{database_bytes, open, open_in_memory};
-pub use derive::rebuild_assertion_state;
+pub use derive::{derive_assertion_state_for, rebuild_assertion_state};
 pub use dump::canonical_dump;
 pub use error::{Result, StoreError};
 pub use facts::{delete_module_facts, load_module_facts, upsert_module_facts, ModuleFactsRow};
@@ -38,7 +39,8 @@ pub use graph::{
     ObservationEvidence, PathHop, PathQuery, PathReport, WhyDirection, WhyQuery, WhyReport,
 };
 pub use prune::{
-    delete_directory_containment, delete_file_rows, prune_orphans, restamp_state, RemovalCounts,
+    delete_directory_containment, delete_file_rows, prune_orphans, prune_orphans_scoped,
+    RemovalCounts, TouchedRows,
 };
 pub use query::{
     importers_of, search_entities, status, ExtractorRunSummary, SearchHit, StatusReport,

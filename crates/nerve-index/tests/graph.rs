@@ -442,9 +442,9 @@ fn assertion_state_is_a_pure_rebuild() {
     let snapshot = |conn: &nerve_store::Connection| -> Vec<String> {
         let mut stmt = conn
             .prepare(
-                "SELECT assertion_id || '|' || state_id || '|' || status || '|' ||
+                "SELECT assertion_id || '|' || status || '|' ||
                         strongest_source_type || '|' || source_type_mask || '|' ||
-                        observation_count || '|' || is_unresolved || '|' || last_seen_state_id
+                        observation_count || '|' || is_unresolved
                    FROM assertion_state ORDER BY assertion_id",
             )
             .unwrap();

@@ -128,19 +128,24 @@ pub fn unresolved_id(
     )
 }
 
-/// `blake3(entity_id, state_id, rel_path, start_byte, end_byte)`, full hex.
+/// `blake3(entity_id, rel_path, start_byte, end_byte)`, full hex.
 ///
-/// Physical identity: one row per appearance of an entity in a specific repository state.
+/// Physical identity: one row per appearance of an entity at a byte span in a file.
+///
+/// **The repository state is deliberately absent** (ADR-0006). An occurrence is a location
+/// fact, and a location does not depend on which index run happened to notice it. Including the
+/// state made every re-index rewrite every surviving row and every index entry over it — an
+/// O(repository) write for an O(change) edit. What the file said at the time is recorded by
+/// `occurrence.content_hash`, which is what freshness is computed from.
 pub fn occurrence_id(
     entity_id: &str,
-    state_id: &str,
     rel_path: &str,
     start_byte: usize,
     end_byte: usize,
 ) -> String {
     let start = start_byte.to_string();
     let end = end_byte.to_string();
-    canonical_digest(&[entity_id, state_id, rel_path, &start, &end])
+    canonical_digest(&[entity_id, rel_path, &start, &end])
 }
 
 /// `blake3(source_entity_id, relation, target_entity_id)`, full hex.
@@ -264,13 +269,29 @@ mod tests {
             symbol_id(EntityKind::Class, PID, "a.ts", "", "C", 3).unwrap()
         );
         assert_eq!(
-            occurrence_id("e", "s", "a.ts", 1, 2),
-            occurrence_id("e", "s", "a.ts", 1, 2)
+            occurrence_id("e", "a.ts", 1, 2),
+            occurrence_id("e", "a.ts", 1, 2)
         );
         assert_eq!(
             assertion_id("a", Relation::Defines, "b"),
             assertion_id("a", Relation::Defines, "b")
         );
+    }
+
+    /// ADR-0006. The repository state is not an input, and every remaining field is.
+    #[test]
+    fn occurrence_id_is_state_independent_and_varies_with_every_field() {
+        let base = occurrence_id("e", "a.ts", 1, 2);
+        for other in [
+            occurrence_id("other", "a.ts", 1, 2),
+            occurrence_id("e", "b.ts", 1, 2),
+            occurrence_id("e", "a.ts", 0, 2),
+            occurrence_id("e", "a.ts", 1, 3),
+        ] {
+            assert_ne!(base, other);
+        }
+        // The tuple is four fields, so it cannot be forged by moving text across a separator.
+        assert_ne!(occurrence_id("e", "a.ts", 1, 2), canonical_digest(&["e"]));
     }
 
     #[test]
