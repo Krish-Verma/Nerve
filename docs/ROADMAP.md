@@ -13,8 +13,9 @@ Authoritative slice list. Update the status column at the end of every slice.
 | 4a | `nerve serve` — loopback HTTP, read-only JSON API, T4/T5/T6 security controls | ✅ Complete (2026-07-31) — 427 tests; token/origin/host/traversal/symlink/XSS all attack-verified |
 | 4b | `apps/nerve-web` — the visual explorer SPA, asset embedding, screenshot QA | ✅ Complete (2026-07-31) — 435 tests, 31 screenshots reviewed, 0 CSP violations; **fixed a 4a bug that made the UI unloadable** |
 | 5a | Markdown + ADR ingestion — `Document`/`Section` entities, `CONTAINS` structure, ADR status, T7 controls | ✅ Complete (2026-08-01) — 506 tests; T7 exhaustive and mutation-verified; **closed two identity-forgery vectors**, one of them pre-existing in every id constructor |
-| 5b | Document↔code links — `REFERENCES` by explicit path, `SUPERSEDES`, unresolved reasons, measured precision | ⬜ Not started |
-| 5c | **Corrective** — filesystem containment is not AST evidence | ⬜ Not started |
+| 5b | Markdown **link scanning** — destinations, forms, spans; code-span mentions counted not emitted | ✅ Complete (2026-08-01) — 541 tests; the tests found 6 real scanner defects, two of them turning hostile HTML into link destinations |
+| 5c | Document↔code **link resolution** — `REFERENCES` by explicit path and `#L<n>` anchor, `SUPERSEDES`, unresolved reasons, measured precision, invalidation | ⬜ Not started |
+| 5d | **Corrective** — filesystem containment is not AST evidence; UI vocabulary catch-up | ⬜ Not started |
 | 6 | Test evidence (**coverage only**) — `TEST_COVERS_SYMBOL`, freshness, affected-test experiment | ⬜ Not started |
 | 7 | CLI + query expansion — `impact`, `gaps`, `check`, evidence packets | ⬜ Not started |
 | 8 | MCP — one default investigation tool | ⬜ Not started |
@@ -142,7 +143,24 @@ against this workspace's 0.25.
   single path choke point, closing the class for every constructor, and counts the refusal.
 - No dependency added. No schema migration. Report: `docs/reports/slice-05a-report.md`.
 
-## Slice 5c — why it exists
+## Slice 5b — delivered, and an orchestrator decomposition error
+
+Slice 5b was first dispatched as scanner **plus** resolver **plus** precision harness **plus**
+invalidation. **The implementation agent stalled at the 600 s watchdog** — the second time this
+project has hit that failure on an oversized slice, after `docs/CONTINUATION.md` had explicitly
+warned about it. That is an orchestrator error and is recorded as one.
+
+The partial work was inspected rather than discarded — it built, clippy was clean, the suite was
+green, and the scanner was already wired in. The agent was resumed with a narrowed instruction
+("test what you built, then stop"), which completed. Resolution became Slice 5c.
+
+Delivered: link destinations recorded exactly as written, with syntax form and a span pointing at
+the link; nothing normalized, resolved, stat-ed, opened or fetched. Bare inline-code identifiers are
+counted, never emitted. Writing the tests found **six real defects**, including `</div>` and
+`<script>alert(1)</script>` being recorded as link destinations — both from accepting a leading `/`
+as "root-relative". Ambiguity is now a refusal. Report: `docs/reports/slice-05b-report.md`.
+
+## Slice 5d — why it exists
 
 Indexing a documentation-only tree revealed 4 observations labelled `AST_DIRECT` in a repository
 with **no TypeScript**: directory containment, attributed to `ts-js-structural`. `AST_DIRECT` means

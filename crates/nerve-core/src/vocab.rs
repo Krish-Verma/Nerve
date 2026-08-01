@@ -205,18 +205,28 @@ pub enum UnresolvedCategory {
     Module,
     /// A value or type name that no binding in scope could resolve.
     Value,
+    /// A document link destination — or its `#L<n>` anchor — that named nothing indexed.
+    DocumentLink,
+    /// A supersession marker in an ADR that named no single indexed ADR.
+    DocumentSupersedes,
 }
 
 impl UnresolvedCategory {
     /// Every category, in declaration order.
-    pub const ALL: [UnresolvedCategory; 2] =
-        [UnresolvedCategory::Module, UnresolvedCategory::Value];
+    pub const ALL: [UnresolvedCategory; 4] = [
+        UnresolvedCategory::Module,
+        UnresolvedCategory::Value,
+        UnresolvedCategory::DocumentLink,
+        UnresolvedCategory::DocumentSupersedes,
+    ];
 
     /// Canonical name, used in identity tuples and in entity metadata.
     pub fn as_str(self) -> &'static str {
         match self {
             UnresolvedCategory::Module => "module",
             UnresolvedCategory::Value => "value",
+            UnresolvedCategory::DocumentLink => "document_link",
+            UnresolvedCategory::DocumentSupersedes => "document_supersedes",
         }
     }
 }
