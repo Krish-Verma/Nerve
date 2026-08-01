@@ -16,6 +16,7 @@
 pub mod bind;
 pub mod config;
 pub mod discover;
+pub mod docref;
 pub mod docs;
 pub mod error;
 pub mod exports;
