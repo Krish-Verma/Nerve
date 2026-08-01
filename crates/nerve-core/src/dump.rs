@@ -9,8 +9,15 @@
 //! - absolute paths (`repository.root_path`) — machine-specific
 //! - `occurrence_id` — a pure function of fields already present
 //! - the `extractor_run` table — an audit log of runs, which grows by design on re-index
+//! - the `repository_state` log — likewise; [`CanonicalDump::state_ids`] carries the states the
+//!   graph rows actually refer to, which is a property of the claims rather than of the runs
+//! - the `identity_link` table — proposals about how identity moved *between* trees, not a claim
+//!   about the tree being dumped
+//! - the `module_facts` cache — extractor inputs, not evidence
 //!
 //! Everything retained is a deterministic function of (project_id, file set, file contents).
+//! That is the load-bearing property Slice 3 leans on: an incremental re-index must produce a
+//! dump byte-identical to a from-scratch index of the same tree.
 
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +28,7 @@ pub struct CanonicalDump {
     pub schema_version: i64,
     /// Project identifier the entity ids were derived from.
     pub project_id: String,
-    /// Every repository state present, sorted.
+    /// Every repository state the dumped rows refer to, sorted. Normally exactly one.
     pub state_ids: Vec<String>,
     /// Entities, sorted by `entity_id`.
     pub entities: Vec<DumpEntity>,

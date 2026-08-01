@@ -46,6 +46,13 @@ pub enum IndexError {
     #[error("parser error: {0}")]
     Parser(String),
 
+    /// A cached module-facts payload could not be written.
+    ///
+    /// Reading one back is deliberately *not* an error: a payload this build cannot parse means
+    /// the file must be re-extracted, which is a recoverable outcome, not a failed index.
+    #[error("module cache: {0}")]
+    ModuleCache(String),
+
     /// No source of operating-system randomness was available.
     #[error("could not obtain randomness for project_id: {0}")]
     Randomness(String),

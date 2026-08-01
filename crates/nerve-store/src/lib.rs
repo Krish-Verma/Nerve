@@ -18,8 +18,10 @@ pub mod db;
 pub mod derive;
 pub mod dump;
 pub mod error;
+pub mod facts;
 pub mod freshness;
 pub mod graph;
+pub mod prune;
 pub mod query;
 pub mod schema;
 pub mod select;
@@ -29,19 +31,25 @@ pub use db::{database_bytes, open, open_in_memory};
 pub use derive::rebuild_assertion_state;
 pub use dump::canonical_dump;
 pub use error::{Result, StoreError};
+pub use facts::{delete_module_facts, load_module_facts, upsert_module_facts, ModuleFactsRow};
 pub use freshness::{FileProbe, FileProber, Freshness, FreshnessCache};
 pub use graph::{
     explain, find_paths, AssertionEvidence, Direction, EdgeDirection, GraphPath,
     ObservationEvidence, PathHop, PathQuery, PathReport, WhyDirection, WhyQuery, WhyReport,
 };
-pub use query::{search_entities, status, ExtractorRunSummary, SearchHit, StatusReport};
+pub use prune::{
+    delete_directory_containment, delete_file_rows, prune_orphans, restamp_state, RemovalCounts,
+};
+pub use query::{
+    importers_of, search_entities, status, ExtractorRunSummary, SearchHit, StatusReport,
+};
 pub use schema::{migrate, schema_version, SCHEMA_VERSION};
 pub use select::{
     entity_by_id, resolve_selector, EntityRef, Selection, SelectorKind, SUGGESTION_LIMIT,
 };
 pub use write::{
-    begin_extractor_run, finish_extractor_run, persist_batch, upsert_repository,
-    upsert_repository_state, RepositoryRow, RepositoryStateRow,
+    begin_extractor_run, finish_extractor_run, insert_identity_link, persist_batch,
+    upsert_repository, upsert_repository_state, RepositoryRow, RepositoryStateRow,
 };
 
 pub use rusqlite::Connection;

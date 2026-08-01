@@ -100,10 +100,47 @@ pub fn finish_extractor_run(
     Ok(())
 }
 
+/// Propose an evidence-bearing link between two entity identities.
+///
+/// Links are **proposals**, never merges (ARCHITECTURE.md extension point 3): nothing downstream
+/// treats the two ids as the same entity. Proposing the same link twice is the same proposal, so
+/// the insert is `OR IGNORE` against the uniqueness index added in schema v2.
+///
+/// Returns whether a new row was written.
+pub fn insert_identity_link(
+    conn: &Connection,
+    repo_id: &str,
+    left_entity_id: &str,
+    right_entity_id: &str,
+    link_kind: &str,
+    evidence: &str,
+) -> Result<bool> {
+    let written = conn.execute(
+        "INSERT OR IGNORE INTO identity_link
+             (repo_id, left_entity_id, right_entity_id, link_kind, evidence, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+        params![
+            repo_id,
+            left_entity_id,
+            right_entity_id,
+            link_kind,
+            evidence
+        ],
+    )?;
+    Ok(written > 0)
+}
+
 /// Persist one extractor run's entities, occurrences, assertions and observations.
 ///
-/// Every insert is `OR IGNORE` against a content-derived key, which is what makes re-indexing
-/// an unchanged tree add no rows.
+/// Occurrence, assertion and observation inserts are `OR IGNORE` against a content-derived key,
+/// which is what makes re-indexing an unchanged tree add no rows.
+///
+/// The entity insert is an **upsert**, not `OR IGNORE`. An entity id excludes body content by
+/// design (ADR-0002), so editing a file can leave the id fixed while changing the row it names —
+/// a file's recorded size, a symbol's metadata. Ignoring the conflict would silently keep the
+/// superseded description and make an incrementally maintained database disagree with a
+/// from-scratch index. The `WHERE` clause suppresses no-op writes so that the FTS triggers do
+/// not fire on unchanged rows.
 pub fn persist_batch(
     conn: &Connection,
     repo_id: &str,
@@ -113,9 +150,20 @@ pub fn persist_batch(
 ) -> Result<()> {
     {
         let mut stmt = conn.prepare(
-            "INSERT OR IGNORE INTO entity
+            "INSERT INTO entity
                  (entity_id, repo_id, kind, name, scope_path, language, meta)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(entity_id) DO UPDATE SET
+                 kind       = excluded.kind,
+                 name       = excluded.name,
+                 scope_path = excluded.scope_path,
+                 language   = excluded.language,
+                 meta       = excluded.meta
+             WHERE entity.kind       IS NOT excluded.kind
+                OR entity.name       IS NOT excluded.name
+                OR entity.scope_path IS NOT excluded.scope_path
+                OR entity.language   IS NOT excluded.language
+                OR entity.meta       IS NOT excluded.meta",
         )?;
         for entity in &batch.entities {
             stmt.execute(params![

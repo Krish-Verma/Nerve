@@ -126,3 +126,4 @@ derived from a competitor:
 | 1 | 2026-07-31 | Dependency audit; source-tree scan for competitor names; confirmation that no competitor DB/API is read | Pass |
 | 2a | 2026-07-31 | Scan of new resolver sources and fixtures for competitor names; confirmed no new dependency (`Cargo.lock` byte-identical); confirmed no network surface in `bind.rs`/`refs.rs`/`exports.rs`; no competitor skill invoked | Pass |
 | 2b | 2026-07-31 | Scan of new query sources for competitor names; `Cargo.lock` and `third_party/LICENSES.md` byte-identical; no networking crate; query layer independently derived from Nerve's own schema; no competitor skill invoked | Pass |
+| 3 | 2026-07-31 | Scan of new incremental/prune/facts sources and fixtures; `Cargo.lock` and `third_party/LICENSES.md` byte-identical (seeded PRNG hand-rolled, not a dependency); schema v2 derived from Nerve's own caching need; `module_facts` audited to contain digests, not source; no competitor skill invoked | Pass |

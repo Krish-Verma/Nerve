@@ -254,7 +254,7 @@ fn every_json_output_parses_and_carries_its_required_keys() {
     );
     assert_eq!(init["command"], "init");
     assert_eq!(init["ok"], true);
-    assert_eq!(init["schema_version"], 1);
+    assert_eq!(init["schema_version"], nerve_store::SCHEMA_VERSION);
 
     let index = json(&run(&["index", root, "--json"]));
     require_keys(
@@ -433,7 +433,7 @@ fn status_reports_the_schema_version_and_state() {
     run(&["init", root_str]);
     let index = json(&run(&["index", root_str, "--json"]));
     let status = json(&run(&["status", "--path", root_str, "--json"]));
-    assert_eq!(status["schema_version"], 1);
+    assert_eq!(status["schema_version"], nerve_store::SCHEMA_VERSION);
     assert_eq!(status["state_id"], index["state_id"]);
     assert!(status["database_bytes"].as_u64().unwrap() > 0);
 }

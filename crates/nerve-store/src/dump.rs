@@ -32,9 +32,20 @@ pub fn canonical_dump(conn: &Connection) -> Result<CanonicalDump> {
         )
         .unwrap_or_default();
 
+    // The states the graph actually refers to, not every state ever recorded.
+    //
+    // `repository_state` is an append-only log of index runs; the dump is a statement about the
+    // code, and a claim's state is a property of the claim. Reading the states off the rows
+    // themselves also means the dump cannot hide a row left behind at a superseded state: if one
+    // exists, it shows up here as a second entry rather than being papered over.
     let mut state_ids = Vec::new();
     {
-        let mut stmt = conn.prepare("SELECT state_id FROM repository_state ORDER BY state_id")?;
+        let mut stmt = conn.prepare(
+            "SELECT state_id FROM occurrence
+             UNION
+             SELECT state_id FROM observation
+             ORDER BY 1",
+        )?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         for row in rows {
             state_ids.push(row?);

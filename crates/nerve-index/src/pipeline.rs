@@ -1,12 +1,40 @@
 //! `nerve index`: discover, read, parse, extract, persist, derive.
 //!
 //! Parsing is serial. That is a determinism decision, not an oversight: the canonical dump must
-//! be byte-identical across runs, and an ordered parallel merge is Slice 3 work.
+//! be byte-identical across runs, and an ordered parallel merge is a later slice — introducing
+//! it alongside deletion and invalidation would confound two new causes of divergence.
 //!
 //! Two extractors run per index, each with its own `extractor_run` row and its own batch
 //! verified against its own declared source types. Keeping them separate is what makes a
 //! `DELETE FROM observation WHERE extractor_id = 'ts-js-reference'` a complete retraction of
 //! everything resolution claimed, with the structural graph untouched.
+//!
+//! # Incremental indexing (Slice 3)
+//!
+//! Every run costs `discover + read + hash` over the whole tree — that is what the repository
+//! state is a hash of, so it cannot be skipped — and then re-extracts only the **invalidation
+//! set**: the files whose bytes changed, plus everything that imports them transitively (see
+//! [`crate::incremental`]). Unchanged files keep the rows they already have.
+//!
+//! The load-bearing property is stronger than "the graph is stable":
+//!
+//! > After any run, the database is byte-identical to a from-scratch index of the same tree.
+//!
+//! Three things make that true, and each would break it on its own if omitted:
+//!
+//! 1. **Rows for vanished and re-extracted files are deleted**, and assertions and entities left
+//!    without support are pruned. Insert-only indexing leaves a deleted file's graph behind
+//!    forever, which is not merely stale — it is wrong.
+//! 2. **Surviving rows are advanced to the new repository state.** An observation records the
+//!    state it was made in; carrying one forward without restating it would leave the database
+//!    describing two states at once. Restating is sound precisely because the file's bytes are
+//!    unchanged and the extractors are deterministic, so re-running them would have produced the
+//!    identical row.
+//! 3. **Entities are upserted, not ignored.** An entity id excludes body content by design, so
+//!    an edit can change a row without changing its id.
+//!
+//! `--full` is the same code path with every file seeded, so the full and incremental paths
+//! cannot drift apart by being two implementations.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -25,7 +53,9 @@ use crate::exports::ExportIndex;
 use crate::extract::{
     self, ExportTarget, ModuleExtraction, DECLARED_SOURCE_TYPES, EXTRACTOR_ID, EXTRACTOR_VERSION,
 };
+use crate::facts::{self, ModuleFacts};
 use crate::gitinfo;
+use crate::incremental::{self, MoveCandidate, PreviousModule};
 use crate::lang::Language;
 use crate::refs::{self, RefTarget, ReferenceExtraction};
 use crate::resolve;
@@ -46,6 +76,80 @@ impl RunStatus {
             RunStatus::Complete => "complete",
             RunStatus::Partial => "partial",
         }
+    }
+}
+
+/// How much of the repository an index run rebuilds.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IndexOptions {
+    /// Re-extract every file, ignoring the change-detection cache.
+    ///
+    /// Not a different algorithm — the same run with every present file seeded. That is
+    /// deliberate: a `--full` that took its own path could not be used to check the incremental
+    /// one, because a shared bug would cancel out.
+    pub full: bool,
+}
+
+/// What incremental indexing decided, re-extracted and removed.
+///
+/// Deletion is the first destructive operation in the product, so every count here is reported
+/// by `nerve index`. Silent deletion is not acceptable output.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IncrementalReport {
+    /// Whether the run was forced full.
+    pub full: bool,
+    /// Files whose content and extractor versions were unchanged.
+    pub files_unchanged: usize,
+    /// Files whose content or extractor version changed.
+    pub files_modified: usize,
+    /// Files not previously indexed.
+    pub files_added: usize,
+    /// Files no longer present, whose rows were removed.
+    pub files_removed: usize,
+    /// Unchanged files whose specifier resolution moved because the file set changed.
+    pub files_resolution_changed: usize,
+    /// Seed of the invalidation walk: changed files plus resolution-affected files.
+    pub files_seeded: usize,
+    /// Files actually re-extracted — the seed plus its reverse `IMPORTS` closure.
+    pub files_re_extracted: usize,
+    /// Files present but not re-extracted.
+    pub files_skipped_unchanged: usize,
+    /// Paths whose rows were removed, sorted.
+    pub removed_paths: Vec<String>,
+    /// Observations deleted.
+    pub observations_removed: usize,
+    /// Occurrences deleted.
+    pub occurrences_removed: usize,
+    /// Assertions deleted for want of any supporting observation.
+    pub assertions_removed: usize,
+    /// Entities deleted for want of any occurrence or incident assertion.
+    pub entities_removed: usize,
+    /// Occurrences advanced to the new repository state.
+    pub occurrences_restated: usize,
+    /// Observations advanced to the new repository state.
+    pub observations_restated: usize,
+    /// Identity links proposed by this run.
+    pub identity_links_proposed: usize,
+    /// Identity links this run wrote; a link already proposed is not written twice.
+    pub identity_links_recorded: usize,
+}
+
+impl IncrementalReport {
+    /// Files changed on disk: modified, added and removed.
+    pub fn files_changed(&self) -> usize {
+        self.files_modified + self.files_added + self.files_removed
+    }
+
+    /// Files re-extracted per file that changed on disk.
+    ///
+    /// The number the invalidation rule is judged on. `None` when nothing changed, because
+    /// "infinity" and "zero" are both the wrong answer to a division by nothing.
+    pub fn amplification(&self) -> Option<f64> {
+        let changed = self.files_changed();
+        if changed == 0 {
+            return None;
+        }
+        Some(self.files_re_extracted as f64 / changed as f64)
     }
 }
 
@@ -94,6 +198,8 @@ pub struct IndexOutcome {
     pub duration_ms: u128,
     /// Terminal status.
     pub status: RunStatus,
+    /// What was re-extracted, skipped and removed.
+    pub incremental: IncrementalReport,
 }
 
 struct LoadedFile {
@@ -260,8 +366,13 @@ fn file_stem(name: &str) -> &str {
     }
 }
 
-/// Index a repository. One transaction; `assertion_state` rebuilt afterwards.
+/// Index a repository incrementally. One transaction; `assertion_state` rebuilt inside it.
 pub fn index_repository(root: &Path) -> Result<IndexOutcome> {
+    index_repository_with(root, IndexOptions::default())
+}
+
+/// Index a repository. See [`IndexOptions`].
+pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<IndexOutcome> {
     let started = Instant::now();
     let root = discover::canonical_root(root)?;
     let db_path = config::db_path(&root);
@@ -272,6 +383,11 @@ pub fn index_repository(root: &Path) -> Result<IndexOutcome> {
     let discovery = discover::discover(&root, &config)?;
 
     // ---- read and hash -------------------------------------------------------------------
+    //
+    // Every file is read every run. That is not waste that incremental indexing failed to
+    // remove: the repository state *is* a Merkle over the file contents, so change detection
+    // cannot be cheaper than reading and hashing the tree. What incremental indexing removes is
+    // parsing and extraction, which dominate.
     let mut loaded: Vec<LoadedFile> = Vec::new();
     let mut files_failed = 0usize;
     for file in &discovery.files {
@@ -311,74 +427,213 @@ pub fn index_repository(root: &Path) -> Result<IndexOutcome> {
     let state_id = content_merkle.clone();
     let git_commit = gitinfo::head_commit(&root);
 
-    // ---- extract -------------------------------------------------------------------------
-    let mut extractions: Vec<ModuleExtraction> = Vec::with_capacity(loaded.len());
+    let repo_id = ids::repository_id(&config.project_id);
+    let mut conn = nerve_store::open(&db_path)?;
+
+    // ---- what changed --------------------------------------------------------------------
+    let previous = load_previous_modules(&conn, &repo_id)?;
+    let current_hashes: BTreeMap<String, String> = loaded
+        .iter()
+        .map(|file| (file.rel_path.clone(), file.content_hash.clone()))
+        .collect();
+    let changes = incremental::classify(&previous, &current_hashes, options.full);
+
+    let indexed: BTreeSet<String> = current_hashes.keys().cloned().collect();
+    let mut known_paths = indexed.clone();
+    known_paths.extend(previous.keys().cloned());
+    let invalidated =
+        incremental::invalidation_set(&conn, &config.project_id, &changes.seed(), &known_paths)?;
+
+    // Present files to re-extract. A file whose cached facts this build cannot reuse is added
+    // even if the walk did not reach it: extraction is the only way to obtain them.
+    let mut target_paths: BTreeSet<String> = BTreeSet::new();
     for file in &loaded {
-        extractions.push(extract::extract_module(
-            &config.project_id,
-            &file.rel_path,
-            file.language,
-            &file.source,
-        )?);
+        let reusable = previous
+            .get(&file.rel_path)
+            .is_some_and(|module| module.reusable && module.facts.is_some());
+        if invalidated.contains(&file.rel_path) || !reusable {
+            target_paths.insert(file.rel_path.clone());
+        }
     }
 
-    let files_with_syntax_errors = extractions.iter().filter(|e| e.has_syntax_error).count();
-    let dynamic_imports_without_specifier: usize = extractions
+    // ---- extract the invalidation set ----------------------------------------------------
+    let mut extractions: BTreeMap<String, ModuleExtraction> = BTreeMap::new();
+    for file in &loaded {
+        if !target_paths.contains(&file.rel_path) {
+            continue;
+        }
+        extractions.insert(
+            file.rel_path.clone(),
+            extract::extract_module(
+                &config.project_id,
+                &file.rel_path,
+                file.language,
+                &file.source,
+            )?,
+        );
+    }
+
+    // The export closure spans every module, so it is built from the whole corpus: freshly
+    // parsed modules for the invalidation set, and modules reconstructed from the cache for
+    // everything else. A barrel chain in one file can reach a declaration in any other, and
+    // that has to keep working when the other file was not re-parsed.
+    let export_sources: Vec<ModuleExtraction> = loaded
         .iter()
-        .map(|e| e.dynamic_imports_without_specifier)
+        .map(|file| match extractions.get(&file.rel_path) {
+            Some(extraction) => facts::export_source_of(extraction),
+            None => cached_facts(&previous, &file.rel_path).as_export_source(&file.rel_path),
+        })
+        .collect();
+    let export_index = ExportIndex::build(&export_sources, &indexed);
+
+    let mut reference_extractions: BTreeMap<String, ReferenceExtraction> = BTreeMap::new();
+    for file in &loaded {
+        let Some(extraction) = extractions.get(&file.rel_path) else {
+            continue;
+        };
+        reference_extractions.insert(
+            file.rel_path.clone(),
+            refs::extract_references(
+                &config.project_id,
+                &file.rel_path,
+                file.language,
+                &file.source,
+                extraction,
+                &export_index,
+                &indexed,
+            )?,
+        );
+    }
+
+    // ---- whole-repository view, from fresh work plus cache -------------------------------
+    //
+    // Reported totals describe the repository, not the fraction of it this run touched, so the
+    // per-file tallies of skipped files come from the cache.
+    let mut facts_by_path: BTreeMap<String, ModuleFacts> = BTreeMap::new();
+    for file in &loaded {
+        let facts = match (
+            extractions.get(&file.rel_path),
+            reference_extractions.get(&file.rel_path),
+        ) {
+            (Some(extraction), Some(references)) => {
+                ModuleFacts::from_extraction(extraction, references, &file.source)
+            }
+            _ => cached_facts(&previous, &file.rel_path),
+        };
+        facts_by_path.insert(file.rel_path.clone(), facts);
+    }
+
+    let files_with_syntax_errors = facts_by_path
+        .values()
+        .filter(|facts| facts.counters.has_syntax_error)
+        .count();
+    let dynamic_imports_without_specifier: usize = facts_by_path
+        .values()
+        .map(|facts| facts.counters.dynamic_imports_without_specifier)
         .sum();
-
-    // The export closure spans every module, so it is built once from the whole corpus and
-    // then shared: a barrel chain in one file can reach a declaration in any other.
-    let indexed: BTreeSet<String> = loaded.iter().map(|file| file.rel_path.clone()).collect();
-    let export_index = ExportIndex::build(&extractions, &indexed);
-
-    let mut reference_extractions: Vec<ReferenceExtraction> = Vec::with_capacity(loaded.len());
-    for (file, extraction) in loaded.iter().zip(extractions.iter()) {
-        reference_extractions.push(refs::extract_references(
-            &config.project_id,
-            &file.rel_path,
-            file.language,
-            &file.source,
-            extraction,
-            &export_index,
-            &indexed,
-        )?);
-    }
-
-    let unmodelled_call_sites: usize = reference_extractions
-        .iter()
-        .map(|extraction| extraction.unmodelled_call_sites)
+    let unmodelled_call_sites: usize = facts_by_path
+        .values()
+        .map(|facts| facts.counters.unmodelled_call_sites)
         .sum();
     let mut unmodelled_by_form: BTreeMap<String, usize> = BTreeMap::new();
-    for extraction in &reference_extractions {
-        for (form, count) in &extraction.unmodelled_by_form {
+    for facts in facts_by_path.values() {
+        for (form, count) in &facts.counters.unmodelled_by_form {
             *unmodelled_by_form.entry(form.clone()).or_insert(0) += count;
         }
     }
 
-    // ---- build ---------------------------------------------------------------------------
-    let batch = build_graph(&config.project_id, &state_id, &loaded, &extractions)?;
-    batch.verify_declared_source_types(EXTRACTOR_ID, &DECLARED_SOURCE_TYPES)?;
+    let module_exports: BTreeMap<String, BTreeMap<String, String>> = facts_by_path
+        .iter()
+        .map(|(path, facts)| (path.clone(), facts.exports.clone()))
+        .collect();
 
-    let reference_batch = build_reference_graph(
+    // ---- build ---------------------------------------------------------------------------
+    let targets: Vec<(&LoadedFile, &ModuleExtraction)> = loaded
+        .iter()
+        .filter_map(|file| {
+            extractions
+                .get(&file.rel_path)
+                .map(|extraction| (file, extraction))
+        })
+        .collect();
+
+    let batch = build_graph(
         &config.project_id,
         &state_id,
         &loaded,
-        &reference_extractions,
-    );
+        &targets,
+        &module_exports,
+        &indexed,
+    )?;
+    batch.verify_declared_source_types(EXTRACTOR_ID, &DECLARED_SOURCE_TYPES)?;
+
+    let reference_targets: Vec<(&LoadedFile, &ReferenceExtraction)> = loaded
+        .iter()
+        .filter_map(|file| {
+            reference_extractions
+                .get(&file.rel_path)
+                .map(|extraction| (file, extraction))
+        })
+        .collect();
+    let reference_batch = build_reference_graph(&config.project_id, &state_id, &reference_targets);
     reference_batch
         .verify_declared_source_types(refs::EXTRACTOR_ID, &refs::DECLARED_SOURCE_TYPES)?;
 
+    // ---- identity links ------------------------------------------------------------------
+    let removed_candidates: Vec<MoveCandidate> = changes
+        .removed
+        .iter()
+        .filter_map(|path| {
+            let module = previous.get(path)?;
+            let facts = module.facts.as_ref()?;
+            Some(MoveCandidate {
+                rel_path: path.clone(),
+                content_hash: module.content_hash.clone(),
+                symbols: facts.symbols.clone(),
+            })
+        })
+        .collect();
+    let added_candidates: Vec<MoveCandidate> = changes
+        .added
+        .iter()
+        .filter_map(|path| {
+            let facts = facts_by_path.get(path)?;
+            let content_hash = current_hashes.get(path)?.clone();
+            Some(MoveCandidate {
+                rel_path: path.clone(),
+                content_hash,
+                symbols: facts.symbols.clone(),
+            })
+        })
+        .collect();
+    let proposals = incremental::propose_moves(&removed_candidates, &added_candidates);
+
     // ---- persist -------------------------------------------------------------------------
-    let repo_id = ids::repository_id(&config.project_id);
     let status = if files_failed > 0 {
         RunStatus::Partial
     } else {
         RunStatus::Complete
     };
 
-    let mut conn = nerve_store::open(&db_path)?;
+    let mut incremental_report = IncrementalReport {
+        full: options.full,
+        files_unchanged: changes.unchanged.len(),
+        files_modified: changes.modified.len(),
+        files_added: changes.added.len(),
+        files_removed: changes.removed.len(),
+        files_resolution_changed: changes.resolution_changed.len(),
+        files_seeded: changes.seed().len(),
+        files_re_extracted: target_paths.len(),
+        files_skipped_unchanged: loaded.len().saturating_sub(target_paths.len()),
+        removed_paths: changes.removed.iter().cloned().collect(),
+        // One link for the file pair, one for each symbol whose shape survived the move.
+        identity_links_proposed: proposals
+            .iter()
+            .map(|proposal| 1 + proposal.pairs.len())
+            .sum(),
+        ..IncrementalReport::default()
+    };
+
     {
         let tx = conn.transaction().map_err(nerve_store::StoreError::from)?;
         nerve_store::upsert_repository(
@@ -399,8 +654,23 @@ pub fn index_repository(root: &Path) -> Result<IndexOutcome> {
                 content_merkle,
             },
         )?;
-        // One `extractor_run` row per extractor. The rows are what make a contribution
-        // attributable, and therefore revocable, per extractor and version.
+
+        // 1. Withdraw the evidence this run is about to replace or has lost. Entities and
+        //    assertions are left standing until it is known what the new rows support.
+        let mut superseded: BTreeSet<String> = target_paths.clone();
+        superseded.extend(changes.removed.iter().cloned());
+        let mut removals = nerve_store::delete_file_rows(&tx, &superseded)?;
+        // Directory containment is re-derived from the current file set every run, so clearing
+        // it is not a removal and is deliberately not counted as one. A directory that really
+        // did go away shows up in the reported counts as a pruned assertion and entity.
+        nerve_store::delete_directory_containment(&tx)?;
+
+        // 2. Advance everything that survived to the state this run observed.
+        let (occurrences_restated, observations_restated) =
+            nerve_store::restamp_state(&tx, &state_id)?;
+
+        // 3. Write the new evidence. One `extractor_run` row per extractor: the rows are what
+        //    make a contribution attributable, and therefore revocable, per extractor version.
         let structural_run = nerve_store::begin_extractor_run(
             &tx,
             &repo_id,
@@ -433,9 +703,101 @@ pub fn index_repository(root: &Path) -> Result<IndexOutcome> {
             status.as_str(),
         )?;
 
-        // Derivation runs inside the same transaction: the graph and the state derived from it
-        // become visible together or not at all.
+        // 4. Derivation runs inside the same transaction: the graph and the state derived from
+        //    it become visible together or not at all. It runs *before* orphan pruning, which is
+        //    what makes the pruning safe — a rebuild leaves no derived row behind for an
+        //    assertion nothing observes, so deleting that assertion breaks no foreign key.
         nerve_store::rebuild_assertion_state(&tx)?;
+
+        // 5. Remove what nothing supports any more.
+        removals.add(nerve_store::prune_orphans(&tx)?);
+
+        // 6. Refresh the extraction cache.
+        for path in &changes.removed {
+            nerve_store::delete_module_facts(&tx, &repo_id, path)?;
+        }
+        for file in &loaded {
+            if !target_paths.contains(&file.rel_path) {
+                continue;
+            }
+            let facts = facts_by_path
+                .get(&file.rel_path)
+                .cloned()
+                .unwrap_or_default();
+            nerve_store::upsert_module_facts(
+                &tx,
+                &repo_id,
+                &nerve_store::ModuleFactsRow {
+                    rel_path: file.rel_path.clone(),
+                    content_hash: file.content_hash.clone(),
+                    language: file.language.as_str().to_string(),
+                    structural_version: EXTRACTOR_VERSION.to_string(),
+                    reference_version: refs::EXTRACTOR_VERSION.to_string(),
+                    facts: facts.to_json()?,
+                },
+            )?;
+        }
+
+        // 7. Propose identity links. Proposals only — nothing merges the two identities.
+        for proposal in &proposals {
+            let file_evidence = serde_json::json!({
+                "rule": "body-digest symbol correspondence between a removed and an added file",
+                "from_path": proposal.from_path,
+                "to_path": proposal.to_path,
+                "matched_symbols": proposal.matched,
+                "from_symbols": proposal.from_symbols,
+                "to_symbols": proposal.to_symbols,
+                "file_content_hash_equal": proposal.content_hash_equal,
+                "similarity_threshold": format!(
+                    "{}/{}",
+                    incremental::MOVE_SIMILARITY_NUMERATOR,
+                    incremental::MOVE_SIMILARITY_DENOMINATOR
+                ),
+            });
+            if nerve_store::insert_identity_link(
+                &tx,
+                &repo_id,
+                &ids::file_id(&config.project_id, &proposal.from_path),
+                &ids::file_id(&config.project_id, &proposal.to_path),
+                "moved_file",
+                &file_evidence.to_string(),
+            )? {
+                incremental_report.identity_links_recorded += 1;
+            }
+
+            for (before, after) in &proposal.pairs {
+                let evidence = serde_json::json!({
+                    "rule": "identical (kind, name, scope_path, body digest) across a file move",
+                    "from_path": proposal.from_path,
+                    "to_path": proposal.to_path,
+                    "kind": before.kind,
+                    "name": before.name,
+                    "scope_path": before.scope_path,
+                    "body_hash": before.body_hash,
+                    "matched_symbols": proposal.matched,
+                    "from_symbols": proposal.from_symbols,
+                    "to_symbols": proposal.to_symbols,
+                });
+                if nerve_store::insert_identity_link(
+                    &tx,
+                    &repo_id,
+                    &before.entity_id,
+                    &after.entity_id,
+                    "moved_symbol",
+                    &evidence.to_string(),
+                )? {
+                    incremental_report.identity_links_recorded += 1;
+                }
+            }
+        }
+
+        incremental_report.observations_removed = removals.observations;
+        incremental_report.occurrences_removed = removals.occurrences;
+        incremental_report.assertions_removed = removals.assertions;
+        incremental_report.entities_removed = removals.entities;
+        incremental_report.occurrences_restated = occurrences_restated;
+        incremental_report.observations_restated = observations_restated;
+
         tx.commit().map_err(nerve_store::StoreError::from)?;
     }
 
@@ -463,15 +825,67 @@ pub fn index_repository(root: &Path) -> Result<IndexOutcome> {
         unresolved_assertions: report.unresolved_assertions,
         duration_ms: started.elapsed().as_millis(),
         status,
+        incremental: incremental_report,
     })
 }
 
+/// Read the previous run's per-module cache, deciding for each row whether it can be reused.
+///
+/// A row is reusable only when its payload parses **and** both extractor versions match this
+/// build. A version bump means the extractor's output may differ over identical bytes, which is
+/// exactly what the version field exists to say, so every file is re-extracted.
+fn load_previous_modules(
+    conn: &nerve_store::Connection,
+    repo_id: &str,
+) -> Result<BTreeMap<String, PreviousModule>> {
+    let rows = nerve_store::load_module_facts(conn, repo_id)?;
+    let mut previous = BTreeMap::new();
+    for (rel_path, row) in rows {
+        let facts = ModuleFacts::from_json(&row.facts);
+        let reusable = facts.is_some()
+            && row.structural_version == EXTRACTOR_VERSION
+            && row.reference_version == refs::EXTRACTOR_VERSION;
+        previous.insert(
+            rel_path,
+            PreviousModule {
+                content_hash: row.content_hash,
+                reusable,
+                facts,
+            },
+        );
+    }
+    Ok(previous)
+}
+
+/// Cached facts for a path that was not re-extracted.
+///
+/// Empty facts are the safe default: a module that exports nothing and imports nothing
+/// contributes nothing to anyone else's resolution. It cannot occur in practice, because a file
+/// without reusable cached facts is forced into the invalidation set before this is reached.
+fn cached_facts(previous: &BTreeMap<String, PreviousModule>, rel_path: &str) -> ModuleFacts {
+    previous
+        .get(rel_path)
+        .and_then(|module| module.facts.clone())
+        .unwrap_or_default()
+}
+
 /// Turn per-module extractions into entities, occurrences, assertions and observations.
+///
+/// `loaded` is the whole tree and `targets` is the subset being re-extracted. The **skeleton** —
+/// the repository entity, the directory entities, and the `CONTAINS` edges between directories —
+/// is re-derived from `loaded` on every run, because it needs no parsing and because directory
+/// containment is the one part of the graph that no file path owns. Everything file-scoped is
+/// emitted only for `targets`; a file that was not re-extracted keeps the rows it already has.
+///
+/// `module_exports` covers **every** module, not just the targets: resolving a re-export in a
+/// target file requires the export map of the module it names, which may not have been parsed.
 fn build_graph(
     project_id: &str,
     state_id: &str,
     loaded: &[LoadedFile],
-    extractions: &[ModuleExtraction],
+    targets: &[(&LoadedFile, &ModuleExtraction)],
+    module_exports: &BTreeMap<String, BTreeMap<String, String>>,
+    indexed: &BTreeSet<String>,
 ) -> Result<GraphBatch> {
     let mut builder = GraphBuilder::new(state_id, EXTRACTOR_ID, EXTRACTOR_VERSION);
 
@@ -486,8 +900,6 @@ fn build_graph(
         language: None,
         meta: None,
     });
-
-    let indexed: BTreeSet<String> = loaded.iter().map(|f| f.rel_path.clone()).collect();
 
     // Directories that actually contain an indexed file.
     let mut directories: BTreeSet<String> = BTreeSet::new();
@@ -528,26 +940,7 @@ fn build_graph(
         );
     }
 
-    // Exported name -> entity id, per module. Built before the graph so that re-exports can be
-    // resolved without depending on file order.
-    let mut module_exports: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-    for extraction in extractions {
-        let mut exports = BTreeMap::new();
-        for export in &extraction.local_exports {
-            let entity_id = match &export.target {
-                ExportTarget::Symbol(index) => Some(extraction.symbols[*index].entity_id.clone()),
-                ExportTarget::LocalName(name) => extraction
-                    .top_level_symbol(name)
-                    .map(|index| extraction.symbols[index].entity_id.clone()),
-            };
-            if let Some(entity_id) = entity_id {
-                exports.insert(export.exported_name.clone(), entity_id);
-            }
-        }
-        module_exports.insert(extraction.rel_path.clone(), exports);
-    }
-
-    for (file, extraction) in loaded.iter().zip(extractions.iter()) {
+    for (file, extraction) in targets.iter().copied() {
         let rel_path = file.rel_path.as_str();
         let hash = file.content_hash.as_str();
         let file_entity = ids::file_id(project_id, rel_path);
@@ -673,8 +1066,7 @@ fn build_graph(
 
         // Re-exports: the entity keeps its defining module's identity (ADR-0002).
         for re_export in &extraction.re_exports {
-            let Some(target_module) =
-                resolve::resolve(rel_path, &re_export.raw_specifier, &indexed)
+            let Some(target_module) = resolve::resolve(rel_path, &re_export.raw_specifier, indexed)
             else {
                 continue;
             };
@@ -720,7 +1112,7 @@ fn build_graph(
 
         // Imports.
         for import in &extraction.imports {
-            let resolved = resolve::resolve(rel_path, &import.raw_specifier, &indexed);
+            let resolved = resolve::resolve(rel_path, &import.raw_specifier, indexed);
             let specifiers: Vec<serde_json::Value> = import
                 .specifiers
                 .iter()
@@ -802,12 +1194,11 @@ fn build_graph(
 fn build_reference_graph(
     project_id: &str,
     state_id: &str,
-    loaded: &[LoadedFile],
-    extractions: &[ReferenceExtraction],
+    targets: &[(&LoadedFile, &ReferenceExtraction)],
 ) -> GraphBatch {
     let mut builder = GraphBuilder::new(state_id, refs::EXTRACTOR_ID, refs::EXTRACTOR_VERSION);
 
-    for (file, extraction) in loaded.iter().zip(extractions.iter()) {
+    for (file, extraction) in targets.iter().copied() {
         let rel_path = file.rel_path.as_str();
         let hash = file.content_hash.as_str();
 

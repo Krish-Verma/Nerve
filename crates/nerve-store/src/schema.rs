@@ -1,15 +1,23 @@
-//! Schema v1 (ADR-0003) and migrations.
+//! Schema v1 (ADR-0003), schema v2 (Slice 3), and migrations.
+//!
+//! Migrations are append-only. `V1` is immutable: a database written by an older build must be
+//! upgradable by replaying the later steps, so editing an already-shipped step in place would
+//! make old and new databases disagree about what "version 1" means.
 
 use rusqlite::Connection;
 
 use crate::error::{Result, StoreError};
 
 /// The schema version this build writes and understands.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// Human-readable description recorded in `schema_version`.
 pub const SCHEMA_V1_DESCRIPTION: &str =
     "Slice 1: entities, occurrences, assertions, observations, derived assertion_state, FTS5";
+
+/// Human-readable description recorded in `schema_version` for the Slice 3 upgrade.
+pub const SCHEMA_V2_DESCRIPTION: &str =
+    "Slice 3: module_facts extraction cache for incremental indexing; identity_link uniqueness";
 
 const V1: &str = r#"
 CREATE TABLE repository (
@@ -161,9 +169,53 @@ CREATE TRIGGER entity_fts_after_update AFTER UPDATE ON entity BEGIN
 END;
 "#;
 
+/// Schema v2 — Slice 3. Additive only: one new table, two new indexes, nothing altered.
+///
+/// `module_facts` is a **cache of extractor inputs**, not part of the evidence graph. It holds,
+/// per indexed module, the content hash it was extracted at plus the small amount of
+/// cross-module information the extractors need about *other* modules: the export map, the
+/// re-export specifiers, and the import specifiers.
+///
+/// Without it, re-extracting one file would still require parsing every other file, because
+/// `exports::ExportIndex` spans the whole corpus and a module's resolution outcome depends on
+/// the export maps of everything it imports — which is precisely the cost incremental indexing
+/// exists to avoid. It also stores the previous `(rel_path, content_hash)` set, which is what
+/// change detection compares against, and per-file counters so that whole-repository totals stay
+/// reportable when only part of the repository was re-extracted.
+///
+/// It stores no source text: identifiers, specifiers, entity ids, and BLAKE3 digests only.
+const V2: &str = r#"
+CREATE TABLE module_facts (
+    repo_id             TEXT NOT NULL REFERENCES repository(repo_id),
+    rel_path            TEXT NOT NULL,
+    content_hash        TEXT NOT NULL,
+    language            TEXT NOT NULL,
+    structural_version  TEXT NOT NULL,
+    reference_version   TEXT NOT NULL,
+    facts               TEXT NOT NULL,
+    PRIMARY KEY (repo_id, rel_path)
+);
+
+CREATE INDEX idx_module_facts_hash ON module_facts(repo_id, content_hash);
+
+-- An identity link is a proposal about one pair; proposing it twice is the same proposal.
+CREATE UNIQUE INDEX idx_identity_link_identity
+    ON identity_link(repo_id, left_entity_id, right_entity_id, link_kind);
+"#;
+
+/// Migration steps, in application order: `(version, description, sql)`.
+///
+/// Appending to this list is how the schema evolves. Editing an existing entry is prohibited.
+const MIGRATIONS: [(i64, &str, &str); 2] = [
+    (1, SCHEMA_V1_DESCRIPTION, V1),
+    (2, SCHEMA_V2_DESCRIPTION, V2),
+];
+
 /// Bring a connection up to [`SCHEMA_VERSION`].
 ///
-/// Idempotent: running it on an already-current database is a no-op. Running it on a database
+/// Idempotent: running it on an already-current database is a no-op. A database at an older
+/// version has only the missing steps replayed, inside one transaction each, so an interrupted
+/// upgrade leaves a coherent version rather than a half-applied one. Running it on a database
 /// written by a newer build is a hard error rather than a best-effort guess.
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
@@ -179,25 +231,29 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             row.get(0)
         })?;
 
-    match current {
-        Some(found) if found > SCHEMA_VERSION => {
+    if let Some(found) = current {
+        if found > SCHEMA_VERSION {
             return Err(StoreError::SchemaTooNew {
                 found,
                 supported: SCHEMA_VERSION,
             });
         }
-        Some(_) => return Ok(()),
-        None => {}
     }
 
-    let tx = conn.unchecked_transaction()?;
-    tx.execute_batch(V1)?;
-    tx.execute(
-        "INSERT INTO schema_version (version, applied_at, description)
-         VALUES (?1, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?2)",
-        rusqlite::params![SCHEMA_VERSION, SCHEMA_V1_DESCRIPTION],
-    )?;
-    tx.commit()?;
+    let applied = current.unwrap_or(0);
+    for (version, description, sql) in MIGRATIONS {
+        if version <= applied {
+            continue;
+        }
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(sql)?;
+        tx.execute(
+            "INSERT INTO schema_version (version, applied_at, description)
+             VALUES (?1, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?2)",
+            rusqlite::params![version, description],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 

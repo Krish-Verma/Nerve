@@ -18,7 +18,9 @@ pub mod discover;
 pub mod error;
 pub mod exports;
 pub mod extract;
+pub mod facts;
 pub mod gitinfo;
+pub mod incremental;
 pub mod init;
 pub mod lang;
 pub mod pipeline;
@@ -32,9 +34,17 @@ pub use discover::{discover, DiscoveredFile, DiscoveryReport};
 pub use error::{IndexError, Result};
 pub use exports::ExportIndex;
 pub use extract::{extract_module, ModuleExtraction, EXTRACTOR_ID, EXTRACTOR_VERSION};
+pub use facts::{CachedCounters, CachedReExport, CachedSymbol, ModuleFacts};
+pub use incremental::{
+    classify, invalidation_set, propose_moves, ChangeKind, ChangeSet, MoveCandidate, MoveProposal,
+    PreviousModule,
+};
 pub use init::{init, init_with_project_id, InitOutcome};
 pub use lang::Language;
-pub use pipeline::{index_repository, IndexOutcome, RunStatus};
+pub use pipeline::{
+    index_repository, index_repository_with, IncrementalReport, IndexOptions, IndexOutcome,
+    RunStatus,
+};
 pub use probe::RepositoryProber;
 pub use refs::{
     extract_references, RefTarget, ReferenceExtraction, ReferenceSite, UnresolvedReason,

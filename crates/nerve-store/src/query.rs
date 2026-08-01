@@ -197,6 +197,28 @@ pub fn status(conn: &Connection) -> Result<StatusReport> {
     })
 }
 
+/// Source entities of every `IMPORTS` assertion pointing at `target_entity_id`.
+///
+/// This is the reverse edge incremental indexing walks. `IMPORTS` is emitted for `import`,
+/// `require`, a literal dynamic `import()`, **and** `export ... from`, so a barrel file is on
+/// this edge even though it names no imported binding — which is why the re-export closure is
+/// reachable from a changed leaf module without re-parsing anything.
+///
+/// Indexed by `idx_assertion_target`. Sorted, so the walk is deterministic.
+pub fn importers_of(conn: &Connection, target_entity_id: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT source_entity_id FROM assertion
+          WHERE target_entity_id = ?1 AND relation = 'IMPORTS'
+          ORDER BY source_entity_id",
+    )?;
+    let rows = stmt.query_map(params![target_entity_id], |row| row.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
 /// One search result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchHit {

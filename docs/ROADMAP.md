@@ -8,7 +8,8 @@ Authoritative slice list. Update the status column at the end of every slice.
 | 1 | Indexing foundation — `init`/`index`/`status`/`search`, SQLite evidence schema, TS/JS entities, `CONTAINS`/`DEFINES`/`IMPORTS`/`EXPORTS` | ✅ Complete (2026-07-31) — 137 tests pass, ADR-0001 gate passed |
 | 2a | Static relationship resolution — `CALLS`, `REFERENCES`, `EXTENDS`, `IMPLEMENTS`, lexical binding + import resolution, negative fixtures + measured precision | ✅ Complete (2026-07-31) — 203 tests pass, FP=0 FN=0 on 24 resolved edges |
 | 2b | Graph query surface — `nerve path`, `nerve why`, evidence packets | ✅ Complete (2026-07-31) — 261 tests pass, query-time path safety verified by attack |
-| 3 | Incremental indexing — content hashes, changed-file indexing, importer invalidation, moves/deletes, `IdentityLink` | ⬜ Not started |
+| 3 | Incremental indexing — changed-file detection, import-closure invalidation, **deletion**, `IdentityLink`, full-vs-incremental equivalence | ✅ Complete (2026-07-31) — 295 tests, equivalence holds over 24 seeded edits; **speed target missed (24.9% vs 20%)** |
+| 3b | Normalize repository state out of `occurrence`/`observation` and out of `occurrence_id` — removes the O(repository) restatement pass | ⬜ Not started — **corrective, recommended next**; unblocks Slice 3 §5 |
 | 4 | Initial visual explorer — `nerve serve`, overview, search, graph canvas, evidence inspector | ⬜ Not started |
 | 5 | Markdown + ADR evidence — sections, citations, document↔code identity links | ⬜ Not started |
 | 6 | Test evidence (**coverage only**) — `TEST_COVERS_SYMBOL`, freshness, affected-test experiment | ⬜ Not started |
@@ -71,3 +72,21 @@ surfaces. It is split into **2a** (resolution + relations + measured precision) 
 - Traversal p95 ≤ 83.45 ms at depth 4 on 2 M assertions, against ADR-0001's 200 ms budget
   (measured under adverse machine load; see report for the attribution of one spurious failure).
 - No schema change, no new dependencies. Report: `docs/reports/slice-02b-report.md`.
+
+## Slice 3 — delivered
+
+- **Deletion works.** Before this slice the pipeline only `INSERT OR IGNORE`d, so a removed
+  file's entities and edges survived forever and the graph was wrong after any deletion.
+- Change classification + **transitive** invalidation closure over `IMPORTS` (a barrel-file edit
+  reaches importers that never name the edited file).
+- **Equivalence property:** an incremental re-index is byte-identical to a full index of the same
+  tree, verified at every step of a seeded 24-edit sequence across six edit kinds.
+- `IdentityLink` populated for moves, proposed with evidence; a coincidental name match proposes
+  nothing.
+- Schema **v2** (additive: `module_facts` cache), with v1→v2 migration tests.
+- `nerve index --full`; removals reported loudly.
+- **Speed target missed:** 24.9% of a full index on a realistic corpus vs a < 20% target.
+  Amplification 1.00. Cause is the O(repository) state-restatement pass forced by `state_id`
+  being inside `occurrence_id` (ADR-0002) — hence Slice 3b.
+- Two plan deviations accepted after review: P4's tombstone half is superseded by the equivalence
+  invariant, and `STALE` falls to the same argument. Report: `docs/reports/slice-03-report.md`.

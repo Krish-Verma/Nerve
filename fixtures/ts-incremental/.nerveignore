@@ -1,0 +1,4 @@
+# `candidates/` holds files a test copies into `src/` partway through a scenario. They are
+# committed so the negative case is reviewable, and excluded so the base tree is what
+# `nerve index` sees on the first run.
+candidates/

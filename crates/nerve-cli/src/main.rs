@@ -51,9 +51,14 @@ enum Command {
         path: Option<PathBuf>,
     },
     /// Parse the repository and persist the evidence graph.
+    ///
+    /// Only files that changed, and the files that import them transitively, are re-extracted.
     Index {
         /// Repository root. Defaults to the current directory.
         path: Option<PathBuf>,
+        /// Re-extract every file, ignoring the change-detection cache.
+        #[arg(long)]
+        full: bool,
     },
     /// Report index counts, freshness and schema version.
     Status {
@@ -226,7 +231,7 @@ fn main() {
 
     let code = match cli.command {
         Command::Init { path } => run_init(&output, path),
-        Command::Index { path } => run_index(&output, path),
+        Command::Index { path, full } => run_index(&output, path, full),
         Command::Status { path } => run_status(&output, &path),
         Command::Search {
             query,
@@ -320,9 +325,36 @@ fn run_init(output: &Output, path: Option<PathBuf>) -> i32 {
     }
 }
 
-fn run_index(output: &Output, path: Option<PathBuf>) -> i32 {
+/// What incremental indexing decided, re-extracted and removed.
+fn incremental_json(step: &nerve_index::IncrementalReport) -> serde_json::Value {
+    json!({
+        "full": step.full,
+        "files_unchanged": step.files_unchanged,
+        "files_modified": step.files_modified,
+        "files_added": step.files_added,
+        "files_removed": step.files_removed,
+        "files_resolution_changed": step.files_resolution_changed,
+        "files_seeded": step.files_seeded,
+        "files_re_extracted": step.files_re_extracted,
+        "files_skipped_unchanged": step.files_skipped_unchanged,
+        "files_changed": step.files_changed(),
+        "amplification": step.amplification(),
+        "removed_paths": step.removed_paths,
+        "observations_removed": step.observations_removed,
+        "occurrences_removed": step.occurrences_removed,
+        "assertions_removed": step.assertions_removed,
+        "entities_removed": step.entities_removed,
+        "occurrences_restated": step.occurrences_restated,
+        "observations_restated": step.observations_restated,
+        "identity_links_proposed": step.identity_links_proposed,
+        "identity_links_recorded": step.identity_links_recorded,
+    })
+}
+
+fn run_index(output: &Output, path: Option<PathBuf>, full: bool) -> i32 {
     let root = path.unwrap_or_else(|| PathBuf::from("."));
-    match nerve_index::index_repository(&root) {
+    let options = nerve_index::IndexOptions { full };
+    match nerve_index::index_repository_with(&root, options) {
         Ok(outcome) => {
             let partial = outcome.status == nerve_index::RunStatus::Partial;
             let code = if partial {
@@ -344,6 +376,51 @@ fn run_index(output: &Output, path: Option<PathBuf>) -> i32 {
                 outcome.skipped_unsupported,
                 outcome.denied_secrets.len()
             ));
+
+            let step = &outcome.incremental;
+            output.line(format!(
+                "  mode           {}",
+                if step.full { "full" } else { "incremental" }
+            ));
+            output.line(format!(
+                "  changed        {} modified, {} added, {} removed, {} re-resolved",
+                step.files_modified,
+                step.files_added,
+                step.files_removed,
+                step.files_resolution_changed
+            ));
+            output.line(format!(
+                "  re-extracted   {} of {} ({} skipped unchanged)",
+                step.files_re_extracted, outcome.files_processed, step.files_skipped_unchanged
+            ));
+            output.line(format!(
+                "  amplification  {}",
+                match step.amplification() {
+                    Some(factor) => format!(
+                        "{factor:.2} files re-extracted per changed file ({} changed)",
+                        step.files_changed()
+                    ),
+                    None => "n/a (nothing changed)".to_string(),
+                }
+            ));
+            // Deletion is destructive, so it is reported whether or not anyone asked.
+            output.line(format!(
+                "  removed        {} observations, {} occurrences, {} assertions, {} entities",
+                step.observations_removed,
+                step.occurrences_removed,
+                step.assertions_removed,
+                step.entities_removed
+            ));
+            for path in &step.removed_paths {
+                output.line(format!("    gone         {path}"));
+            }
+            if step.identity_links_proposed > 0 {
+                output.line(format!(
+                    "  identity       {} link(s) proposed, {} recorded",
+                    step.identity_links_proposed, step.identity_links_recorded
+                ));
+            }
+
             output.line(format!("  entities       {}", outcome.entities_total));
             for (kind, count) in &outcome.entities_by_kind {
                 output.line(format!("    {kind:<12} {count}"));
@@ -397,6 +474,7 @@ fn run_index(output: &Output, path: Option<PathBuf>) -> i32 {
                 "unresolved_entities": outcome.unresolved_entities,
                 "unresolved_assertions": outcome.unresolved_assertions,
                 "duration_ms": outcome.duration_ms,
+                "incremental": incremental_json(step),
             }));
             code
         }
