@@ -761,6 +761,14 @@ body {
   min-width: 0;
 }
 
+/* The reference named nothing at all. Set apart from a real name so it cannot be read as one. */
+.gap__name--empty {
+  font-size: 13px;
+  min-width: 0;
+  color: var(--bone-4);
+  font-style: italic;
+}
+
 .gap__meta {
   font-size: 11px;
   color: var(--bone-4);
@@ -925,6 +933,23 @@ a.claim__party:hover {
   background: linear-gradient(135deg, var(--bone-2) 0 50%, transparent 50% 100%);
 }
 
+/* Inferred: hollow. A rule concluded it; nothing stated it. */
+.obs--inferred::before {
+  background: transparent;
+  border-color: var(--bone-3);
+}
+
+/*
+  A directness this build does not recognise. Drawn differently from all three real values on
+  purpose: reusing one of their marks would say something about the strength of the evidence
+  that nothing observed.
+*/
+.obs--unrecognised::before {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--unknown);
+}
+
 .obs__line {
   display: flex;
   align-items: center;
@@ -972,6 +997,15 @@ a.claim__party:hover {
 
 .fact__value--strong {
   color: var(--bone);
+}
+
+/* The reading of a closed-vocabulary value, set as prose under the value it explains. */
+.fact__note {
+  font-family: var(--sans);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--bone-3);
+  margin-top: 2px;
 }
 
 .link {
@@ -1513,6 +1547,21 @@ a.claim__party:hover {
   .rail__group {
     flex-direction: row;
     gap: 2px;
+  }
+
+  /*
+    Below this width the two-column gap row cannot hold both a name and a path. The path column
+    never wraps, so it took the whole line and squeezed the name to one character per line —
+    `ADR-0010` set vertically. One column, name first, path under it.
+  */
+  .gap {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .gap__meta {
+    text-align: left;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   .rail__label,

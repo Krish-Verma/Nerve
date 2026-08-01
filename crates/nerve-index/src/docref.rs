@@ -97,6 +97,22 @@ pub mod reason {
     pub const SUPERSEDES_SELF: &str = "document_supersedes_self";
     /// The field was present and its value is empty, too long, or not a target form.
     pub const SUPERSEDES_UNPARSED: &str = "document_supersedes_unparsed";
+
+    /// Every reason in this module, in declaration order.
+    ///
+    /// A closed vocabulary that cannot be enumerated is only closed by convention. This array is
+    /// what lets a consumer — the interface's gloss table, above all — be checked for coverage
+    /// mechanically rather than by someone remembering to look, which is exactly how the two
+    /// drifted apart between Slice 5c and Slice 5d-iii.
+    pub const ALL: [&str; 7] = [
+        TARGET_NOT_INDEXED,
+        REFUSED,
+        ANCHOR_NO_SYMBOL,
+        SUPERSEDES_TARGET_NOT_INDEXED,
+        SUPERSEDES_TARGET_AMBIGUOUS,
+        SUPERSEDES_SELF,
+        SUPERSEDES_UNPARSED,
+    ];
 }
 
 /// Outcome tags counted per document and reported over the whole repository.

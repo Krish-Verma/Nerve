@@ -74,7 +74,7 @@ export function Search({ q, kind }: { q: string; kind: string | null }) {
         <h1 className="head__title">Symbols</h1>
         <p className="head__sub">
           Every entity Nerve named while indexing — files, modules, classes, functions, methods,
-          and the references it could not resolve.
+          the documents and sections it read as prose, and the references it could not resolve.
         </p>
       </div>
 

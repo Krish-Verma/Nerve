@@ -37,6 +37,7 @@ import {
   stamp,
   statusGloss,
 } from '../format';
+import { detailGloss } from '../vocab';
 import { useApi } from '../hooks';
 import { entityHref, href } from '../routing';
 import { Chip, Empty, Failure, Loading, Panel } from '../ui/parts';
@@ -335,13 +336,25 @@ function Observed({ observation, alone }: { observation: Observation; alone: boo
               <div className="micro" style={{ marginBottom: 6 }}>
                 what the extractor recorded
               </div>
+              {/*
+                A few of these keys carry a closed vocabulary — a reason code, an ADR status —
+                and printed bare they are the raw identifiers the rest of the interface exists to
+                translate. Where a reading exists it is shown under the value; where none does,
+                the value stands alone rather than being given an invented sentence.
+              */}
               <div className="obs__facts">
-                {detail.map(([key, value]) => (
-                  <div className="fact" key={key}>
-                    <span className="fact__key">{key.replace(/_/g, ' ')}</span>
-                    <span className="fact__value fact__value--strong wrapany">{value}</span>
-                  </div>
-                ))}
+                {detail.map(([key, value]) => {
+                  const reading = detailGloss(key, value);
+                  return (
+                    <div className="fact" key={key}>
+                      <span className="fact__key">{key.replace(/_/g, ' ')}</span>
+                      <span className="fact__value fact__value--strong wrapany">{value}</span>
+                      {reading === undefined ? null : (
+                        <span className="fact__note">{reading}</span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

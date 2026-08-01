@@ -170,8 +170,16 @@ function Unresolved({
             return (
               <li key={row.entity_id}>
                 <a className="gap" href={entityHref(row.entity_id, 'evidence')}>
-                  <span className="gap__name wrapany" title={row.name}>
-                    {row.name}
+                  {/*
+                    A reference can genuinely have no name: an ADR that writes `**Supersedes:**`
+                    and then nothing named nothing, and that emptiness is the finding. Rendering
+                    it as a blank line loses the row entirely, so the absence is stated.
+                  */}
+                  <span
+                    className={row.name === '' ? 'gap__name gap__name--empty' : 'gap__name wrapany'}
+                    title={row.name === '' ? 'the reference names nothing at all' : row.name}
+                  >
+                    {row.name === '' ? 'nothing was named' : row.name}
                   </span>
                   <span className="gap__meta">
                     {importer ?? row.scope_path} · {count(row.referencing_assertions)}{' '}

@@ -100,6 +100,27 @@ impl UnresolvedReason {
     }
 }
 
+/// Every form tag this extractor can record in `unmodelled_by_form`, in alphabetical order.
+///
+/// These are the call and heritage shapes Nerve declines to model, counted rather than guessed.
+/// They are emitted as bare literals at the site that recognises each shape, so — unlike
+/// [`UnresolvedReason`] — the set is not an enum and cannot be derived from the type system.
+/// Listing it here makes it enumerable for consumers that must cover it, and
+/// `ui_vocabulary.rs` reads this module's own source back to prove the list stayed complete.
+pub const UNMODELLED_FORMS: [&str; 11] = [
+    "call-result",
+    "complex-receiver",
+    "computed-member",
+    "dynamic-import",
+    "heritage-call",
+    "heritage-other",
+    "iife",
+    "other",
+    "require",
+    "super",
+    "tagged-template",
+];
+
 /// What a reference site points at.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefTarget {

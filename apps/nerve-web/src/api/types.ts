@@ -268,7 +268,16 @@ export interface SourceSnippet {
   text: string;
 }
 
-/** The closed vocabularies, mirrored from `nerve-core::vocab`. */
+/**
+ * The closed vocabularies, mirrored from `nerve-core::vocab`.
+ *
+ * These two are data rather than prose: `ENTITY_KINDS` is the search filter and `RELATIONS` the
+ * graph filter, so a member missing here is not a missing sentence — it is a question the user
+ * cannot ask. Order matches the Rust declaration order because that is the order they render in.
+ *
+ * `crates/nerve-server/tests/ui_vocabulary.rs` asserts both lists against `EntityKind::ALL` and
+ * `Relation::ALL` exactly, so neither can fall behind the backend again without a test failing.
+ */
 export const ENTITY_KINDS = [
   'repository',
   'directory',
@@ -278,6 +287,8 @@ export const ENTITY_KINDS = [
   'method',
   'class',
   'interface',
+  'document',
+  'section',
   'unresolved',
 ] as const;
 
@@ -290,4 +301,5 @@ export const RELATIONS = [
   'REFERENCES',
   'EXTENDS',
   'IMPLEMENTS',
+  'SUPERSEDES',
 ] as const;

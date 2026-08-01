@@ -32,6 +32,22 @@ const UNRESOLVED_REASON: Record<string, string> = {
     '`this` is rebound by an enclosing function, so what it refers to depends on the call.',
   'heritage-other': 'An extends or implements clause that is not a plain name.',
   'tagged-template': 'A tagged template whose tag could not be resolved.',
+
+  // Document references. A link in prose and a supersession field are both a document naming
+  // something, so they fail in the same small number of ways and are read here together.
+  document_link_target_not_indexed:
+    'The link points at a repository path that names no indexed file. This is what a stale documentation link looks like.',
+  document_link_refused:
+    'The path guard refused the destination, so the file was never opened. Nothing outside the repository is read.',
+  document_anchor_no_symbol:
+    'The `#L` line anchor resolved to no symbol — either nothing is declared on that line, or the line is past the end of the file.',
+  document_supersedes_target_not_indexed:
+    'The document says it supersedes something this repository does not contain as a document.',
+  document_supersedes_target_ambiguous:
+    'More than one indexed document answers to that identifier, so which one was meant is not decidable. It is refused rather than guessed.',
+  document_supersedes_self: 'The document names itself. A decision cannot replace itself.',
+  document_supersedes_unparsed:
+    'A supersession field is present, but its value is empty, too long, or not in a form that names a target.',
 };
 
 /**
@@ -55,8 +71,10 @@ export function reasonLabel(code: string): string {
 
 const UNMODELLED_FORM: Record<string, string> = {
   'call-result': 'Calling the result of another call.',
+  'complex-receiver': 'The thing being called is an expression rather than a name.',
   'computed-member': 'A member reached by a computed key, such as `object[name]()`.',
   'heritage-call': 'A class extending the result of a call — a mixin factory.',
+  'heritage-other': 'An extends or implements clause that is not a plain name.',
   iife: 'A function expression invoked where it is written.',
   require: 'A CommonJS `require`, which this build does not model.',
   super: 'A `super` call.',
@@ -79,10 +97,86 @@ const KIND_GLOSS: Record<string, string> = {
   method: 'A function declared on a class or interface.',
   class: 'A declared class.',
   interface: 'A declared interface.',
+  document: 'A prose document Nerve read as text rather than as code. For Markdown, one per file.',
+  section: 'A heading and everything under it, up to the next heading of the same level or higher.',
   unresolved:
     'A reference Nerve recorded but could not connect to a declaration. It is kept, not discarded.',
 };
 
 export function kindGloss(kind: string): string {
   return KIND_GLOSS[kind] ?? 'This build has no description for that entity kind.';
+}
+
+/**
+ * What an unresolved entity was standing in for.
+ *
+ * The category is part of the entity's identity, not decoration: an unresolvable import named
+ * `parse` and an unresolvable call to `parse()` are different missing things, and collapsing
+ * them would have Nerve claim a module and a value are one entity.
+ */
+const UNRESOLVED_CATEGORY: Record<string, string> = {
+  module: 'A module specifier that named no indexed module.',
+  value: 'A value or type name that no binding in scope could account for.',
+  document_link: 'A link in a document — or its line anchor — that named nothing indexed.',
+  document_supersedes: 'A supersession field in an ADR that named no single indexed document.',
+};
+
+export function unresolvedCategory(value: string): string {
+  return UNRESOLVED_CATEGORY[value] ?? 'This build has no description for that unresolved category.';
+}
+
+/**
+ * The status an ADR gives itself, read from its own header.
+ *
+ * `unparsed` is not an absence and not an error: it means the document *did* state a status and
+ * the word was outside the vocabulary. Nerve records that rather than coercing it to the nearest
+ * value, because the raw text is preserved and a guessed status would outrank the evidence.
+ */
+const ADR_STATUS: Record<string, string> = {
+  Proposed: 'Put forward, not yet agreed.',
+  Accepted: 'In force. This is the decision that currently governs.',
+  Rejected: 'Considered and turned down. It never took effect.',
+  Deprecated: 'No longer to be followed, with nothing named as its replacement.',
+  Superseded: 'Replaced by a later decision.',
+  unparsed:
+    'The document states a status, and the word is not one of the five. The raw text is kept; Nerve does not guess which was meant.',
+};
+
+export function adrStatusGloss(value: string): string {
+  return ADR_STATUS[value] ?? 'This build has no description for that ADR status.';
+}
+
+/**
+ * A reading for a key/value pair inside an extractor's `details` blob, where one exists.
+ *
+ * `details` is an open JSON object — most of it is paths, names and line numbers that need no
+ * gloss. A few keys carry a closed vocabulary, and those are exactly the ones that would
+ * otherwise be shown to a reader as a bare identifier such as
+ * `document_supersedes_target_ambiguous`. Anything else returns `undefined` and is left alone;
+ * inventing a sentence for an arbitrary key would be worse than saying nothing.
+ */
+export function detailGloss(key: string, value: string): string | undefined {
+  // An absent value is not a vocabulary member. `reason` is `null` on every reference that
+  // resolved, and glossing that with "this build has no description for that reason code" would
+  // report a missing gloss where there is nothing to gloss — the loudest possible way to say
+  // that nothing went wrong.
+  if (value === 'null' || value === '') return undefined;
+
+  switch (key) {
+    case 'reason':
+      return unresolvedReason(value);
+    case 'status':
+      return adrStatusGloss(value);
+    case 'category':
+      return UNRESOLVED_CATEGORY[value];
+    case 'child_kind':
+    case 'container_kind':
+    case 'declaration_kind':
+    case 'source_kind':
+      return KIND_GLOSS[value];
+    case 'call_form':
+      return UNMODELLED_FORM[value];
+    default:
+      return undefined;
+  }
 }

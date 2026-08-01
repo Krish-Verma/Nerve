@@ -17,7 +17,7 @@ Authoritative slice list. Update the status column at the end of every slice.
 | 5c | Document↔code **link resolution** — `REFERENCES` by explicit path and `#L<n>` anchor, unresolved reasons, measured precision, invalidation | ✅ Complete (2026-08-01) — 564 tests; FP=0 on fixtures, but **only 5 link sites exist across Nerve's own 45 documents** |
 | 5d-i | **Corrective** filesystem evidence — `FILESYSTEM_OBSERVED` + `fs-structural`, ADR-0007, schema v4 migration, amended T7 | ✅ Complete (2026-08-01) — 577 tests; a docs-only tree now yields **0** `ts-js-structural` observations, was 4 mislabelled `AST_DIRECT` |
 | 5d-ii | `Document SUPERSEDES Document` — explicit evidence only, chains, cycles, ambiguity, measured precision | ✅ Complete (2026-08-01) — 596 tests; FP=0 over a 26-file corpus whose ground truth was written before the resolver; **Nerve's own ADRs state no supersession and produce 0 edges** |
-| 5d-iii | UI vocabulary catch-up — glosses driven from the Rust vocabularies, asset re-embed, screenshots | ⬜ Not started |
+| 5d-iii | UI vocabulary catch-up — glosses driven from the Rust vocabularies, asset re-embed, screenshots | ✅ Complete (2026-08-01) — 610 tests; a new test reads the TypeScript gloss maps and fails when a Rust vocabulary gains a member, so the two cannot drift again; **found 120 real sites rendering fallback text**, and a gloss for a status the backend cannot emit |
 | 6 | Test evidence (**coverage only**) — `TEST_COVERS_SYMBOL`, freshness, affected-test experiment | ⬜ Not started |
 | 7 | CLI + query expansion — `impact`, `gaps`, `check`, evidence packets | ⬜ Not started |
 | 8 | MCP — one default investigation tool | ⬜ Not started |

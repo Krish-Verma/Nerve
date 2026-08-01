@@ -60,7 +60,8 @@ const SOURCE_TYPES: Record<string, string> = {
   DOCUMENT_STATED: 'A document asserts it.',
   HUMAN_CONFIRMED: 'A person confirmed it.',
   LLM_DERIVED: 'A language model suggested it.',
-  FILESYSTEM_OBSERVED: 'The filesystem contains this. Found by a directory walk, not by reading any file.',
+  FILESYSTEM_OBSERVED:
+    'The filesystem contains this. Found by walking directories, never by reading a file.',
 };
 
 export function sourceTypeGloss(value: string): string {
@@ -77,16 +78,25 @@ export function directnessGloss(value: string): string {
   return DIRECTNESS[value] ?? 'This build has no description for that directness value.';
 }
 
-/** Class suffix for the spine node, which encodes directness by fill rather than by colour. */
+/**
+ * Class suffix for the spine node, which encodes directness by fill rather than by colour.
+ *
+ * Every member of the vocabulary is named, and there is deliberately **no `default` arm**. This
+ * function used to end in `default: return 'obs--inferred'`, which meant a directness the build
+ * did not recognise was drawn as though a rule had concluded it — a statement about the strength
+ * of the evidence that nothing had observed. An unknown value is now drawn as unknown, which is
+ * the only honest thing to say about it.
+ */
 export function directnessClass(value: string): string {
   switch (value) {
     case 'DIRECT':
       return 'obs--direct';
     case 'RESOLVED':
       return 'obs--resolved';
-    default:
+    case 'INFERRED':
       return 'obs--inferred';
   }
+  return 'obs--unrecognised';
 }
 
 const RELATION_VERB: Record<string, [string, string]> = {
@@ -98,6 +108,9 @@ const RELATION_VERB: Record<string, [string, string]> = {
   REFERENCES: ['references', 'is referenced by'],
   EXTENDS: ['extends', 'is extended by'],
   IMPLEMENTS: ['implements', 'is implemented by'],
+  // Stored one way only — `A SUPERSEDES B` means A replaces B — so the incoming reading is a
+  // query over the same edge rather than a second edge pointing the other way.
+  SUPERSEDES: ['supersedes', 'is superseded by'],
 };
 
 /** How to read a relation from the subject's side. */
@@ -110,7 +123,9 @@ export function relationPhrase(relation: string, outgoing: boolean): string {
 const STATUS_GLOSS: Record<string, string> = {
   SUPPORTED: 'At least one observation supports this and none contradicts it.',
   CONTRADICTED: 'Observations disagree about this relationship.',
-  RETRACTED: 'The evidence that supported this is gone from the current state.',
+  STALE: 'Last observed in an older state of the repository. Re-index to find out whether it survived.',
+  UNRESOLVED: 'Supported, but one end is a reference Nerve could not connect to a declaration.',
+  DELETED: 'The evidence that supported this is gone from the current state. Kept, not erased.',
 };
 
 export function statusGloss(value: string): string {
