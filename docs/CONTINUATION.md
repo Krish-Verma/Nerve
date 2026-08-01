@@ -8,19 +8,38 @@
 
 | | |
 |---|---|
-| **Current HEAD** | `cbe667a` — `feat: Slice 5a — Markdown and ADR evidence, and two closed identity forgeries` |
+| **Current HEAD** | `f83c159` — `feat: the document link resolver, tested in isolation and not yet emitting` |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 5a** (`cbe667a`) |
-| **Next slice** | **Slice 5b** — document↔code links, measured precision, invalidation |
-| **Roadmap status** | **INCOMPLETE.** 5b, 5c, 6–14 and real-world validation not started. |
+| **Last completed slice** | **Slice 5b** (`d23c82c`), plus the 5c resolver core (`f83c159`) |
+| **Next slice** | **Slice 5c, remaining half** — emission, precision harness, invalidation |
+| **Roadmap status** | **INCOMPLETE.** 5c (part), 5d, 6–14 and real-world validation not started. |
+
+## Slice 5c — exactly what is done and what is not
+
+**Done and committed** (`f83c159`): `crates/nerve-index/src/docref.rs`, the resolver, 12 tests,
+wired into the crate and clippy-clean. It gives `resolve_destination`, `resolve_path`, `anchor_of`,
+`innermost_covering`, `cached_destinations`, `Corpus`, `LinkOutcome`, `LinkSite`, `DocumentLinks`.
+
+**Deliberately NOT done:** nothing calls it. `md-structural` still emits only Slice 5a's `CONTAINS`
+structure and its version stays **`1.0.0`** — a version bump means "re-extract every document", and
+no behaviour has changed yet. The bump to `1.1.0` belongs with the emission. `crates/nerve-cli/tests/cli.rs:367`
+pins that version and must change with it.
+
+**Remaining:** emit `Section REFERENCES <File>` and `<symbol>` (via `#L<n>` and `innermost_covering`),
+`Unresolved` entities carrying `UnresolvedCategory::DocumentLink`, the `module_facts` destination
+cache feeding `resolution_changed`, line-anchor invalidation, the equivalence-sequence extension,
+and the precision harness mirroring `crates/nerve-index/tests/precision.rs`.
+
+**`Document SUPERSEDES Document` is deferred to Slice 5d** — cut from 5c on purpose after two
+oversized dispatches were lost.
 
 ## Verification state at HEAD
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace                                  → 506 passed, 0 failed, 2 ignored
+cargo test --workspace                                  → 553 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
 ```
 
@@ -121,8 +140,13 @@ autonomously and recorded in `docs/plans/slice-15-real-world-validation.md`.
 
 ## Environment notes
 
-- **Session limits are real here.** One agent was terminated mid-slice; another stalled on a 600 s
-  watchdog. **Keep slices small.**
+- **Session limits and watchdogs are real here, and have now cost three agents.** One terminated
+  mid-slice (4b), one stalled at the 600 s watchdog (5b), one hit a hard session limit (5c).
+  **Keep slices small.** In every case the partial work was inspected rather than discarded — it
+  built, clippy was clean, the suite was green — and the salvageable half was committed as its own
+  verified unit. Do that rather than restarting from zero.
+- A version constant like `EXTRACTOR_VERSION` is a **behavioural contract**, not a label: bumping it
+  re-extracts every file of that kind. Bump it in the commit that changes behaviour, never earlier.
 - Machine load ranged 5–51 across sessions. **Run timing measurements ≥3 times and report every
   run**, never a single flattering number.
 - `rm` is aliased interactively; use `/bin/rm -f` in scripts.
