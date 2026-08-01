@@ -1,7 +1,8 @@
 //! Nerve indexing pipeline.
 //!
-//! Discovery and ignore rules, path safety, tree-sitter parsing, the `ts-js-structural`,
-//! `ts-js-reference` and `md-structural` extractors, lexical binding, export closure, specifier
+//! Discovery and ignore rules, path safety, tree-sitter parsing, the `fs-structural`,
+//! `ts-js-structural`, `ts-js-reference` and `md-structural` extractors, lexical binding,
+//! export closure, specifier
 //! resolution, a hand-written Markdown block scanner, the `init` / `index` application entry
 //! points, and the query-time file prober that gives `nerve why` its freshness answer without
 //! loosening any of those path rules.
@@ -22,6 +23,7 @@ pub mod error;
 pub mod exports;
 pub mod extract;
 pub mod facts;
+pub mod fsstruct;
 pub mod gitinfo;
 pub mod incremental;
 pub mod init;
@@ -44,6 +46,10 @@ pub use error::{IndexError, Result};
 pub use exports::ExportIndex;
 pub use extract::{extract_module, ModuleExtraction, EXTRACTOR_ID, EXTRACTOR_VERSION};
 pub use facts::{CachedCounters, CachedReExport, CachedSymbol, DocumentCounters, ModuleFacts};
+pub use fsstruct::{
+    FsEntry, EXTRACTOR_ID as FILESYSTEM_EXTRACTOR_ID,
+    EXTRACTOR_VERSION as FILESYSTEM_EXTRACTOR_VERSION,
+};
 pub use incremental::{
     classify, invalidation_set, propose_moves, ChangeKind, ChangeSet, MoveCandidate, MoveProposal,
     PreviousModule,

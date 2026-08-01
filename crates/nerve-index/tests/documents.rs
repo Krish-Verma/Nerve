@@ -108,28 +108,72 @@ fn section_names(conn: &nerve_store::Connection, rel_path: &str) -> Vec<String> 
 
 // ---- T7: the separation invariant ----------------------------------------------------------
 
-/// **THREAT-MODEL.md T7, the Slice 5 gate.**
+/// Every observation on a document path whose `(extractor_id, evidence_source_type)` pair is not
+/// one of the two the amended T7 allows, named.
 ///
-/// Document-derived claims carry `DOCUMENT_STATED` and are never promoted to source-level
-/// evidence. Stated as a property of the *file* rather than of each emission site, so that it is
-/// one query over every row of `observation` rather than a rule each new call site is trusted to
-/// remember. A `File CONTAINS Document` edge is arguably a filesystem fact and still carries
-/// `DOCUMENT_STATED`, precisely so that this query has no exceptions to encode.
+/// The allowed set is closed and keyed on **extractor id**, not on source type alone: an
+/// `fs-structural` row saying `DOCUMENT_STATED` is as much a violation as an `md-structural` row
+/// saying `AST_DIRECT`, because either one would mean an extractor emitted a label it does not
+/// declare. Written once and used by both the invariant test and its mutation probe, so the probe
+/// exercises the same query the gate does rather than a paraphrase of it.
+fn t7_offenders(conn: &nerve_store::Connection) -> Vec<String> {
+    strings(
+        conn,
+        "SELECT file_path || ' -> ' || evidence_source_type || ' (' || extractor_id || ')'
+           FROM observation
+          WHERE (file_path LIKE '%.md' OR file_path LIKE '%.markdown')
+            AND (extractor_id, evidence_source_type) NOT IN (
+                    VALUES ('md-structural', 'DOCUMENT_STATED'),
+                           ('fs-structural', 'FILESYSTEM_OBSERVED'))
+          ORDER BY 1",
+    )
+}
+
+/// **THREAT-MODEL.md T7, the Slice 5 gate, as amended by Slice 5d-i.**
+///
+/// > Every observation whose `file_path` is a document carries `DOCUMENT_STATED`, except
+/// > observations from `fs-structural`, which carries `FILESYSTEM_OBSERVED`. The allowed set is
+/// > exactly those two, and it is checked exhaustively.
+///
+/// Stated as a property of the *file* rather than of each emission site, so that it is one query
+/// over every row of `observation` rather than a rule each new call site is trusted to remember.
+///
+/// Until 5d-i the allowed set was a single value, held that way by having `md-structural` emit
+/// `<directory> CONTAINS <document>` as `DOCUMENT_STATED`. That made the label depend on the file
+/// extension: `docs/` containing `ROADMAP.md` was a document's claim while `src/` containing
+/// `math.ts` was a syntax tree's, for the identical filesystem fact. 5d-i gave that claim to
+/// `fs-structural`, and the invariant widened to exactly two values.
+///
+/// **Widening it is not weakening it**, and the reason is structural rather than a promise. T7
+/// defends against *content* an attacker wrote inside a document; `fs-structural` cannot carry
+/// document content anywhere, because it never reads any — see
+/// `fs_structural_carries_no_file_content`, which proves it against a marker string. The one
+/// attacker-influenced input it does touch is the path, which already passes the Slice 5a
+/// `canonical_child` guard. The invariant stays total, exhaustively queryable and, per
+/// `t7_names_every_offender_when_a_document_path_is_stamped_ast_direct`, mutation-verifiable.
 #[test]
 fn no_document_sourced_observation_escapes_document_stated() {
     let (_dir, root, _outcome) = indexed_documents();
     let conn = open_db(&root);
 
-    let offenders = strings(
-        &conn,
-        "SELECT file_path || ' -> ' || evidence_source_type || ' (' || extractor_id || ')'
-           FROM observation
-          WHERE (file_path LIKE '%.md' OR file_path LIKE '%.markdown')
-            AND evidence_source_type <> 'DOCUMENT_STATED'",
-    );
+    let offenders = t7_offenders(&conn);
     assert!(
         offenders.is_empty(),
-        "document-sourced observations escaped DOCUMENT_STATED: {offenders:?}"
+        "document-sourced observations escaped the allowed set: {offenders:?}"
+    );
+
+    // Both allowed pairs actually occur, so neither arm of the widened set is dead weight that
+    // could be removed without any test noticing.
+    assert_eq!(
+        strings(
+            &conn,
+            "SELECT DISTINCT extractor_id || '/' || evidence_source_type FROM observation
+              WHERE file_path LIKE '%.md' OR file_path LIKE '%.markdown' ORDER BY 1"
+        ),
+        vec![
+            "fs-structural/FILESYSTEM_OBSERVED".to_string(),
+            "md-structural/DOCUMENT_STATED".to_string(),
+        ]
     );
 
     // The query must have had something to prove. A tree with no document observations would
@@ -168,7 +212,7 @@ fn no_document_sourced_observation_escapes_document_stated() {
         "the code half of the fixture produced no AST_DIRECT evidence"
     );
 
-    // Every document observation is `md-structural`'s, and it emitted nothing else.
+    // Every `DOCUMENT_STATED` observation is `md-structural`'s, and it emitted nothing else.
     assert_eq!(
         strings(
             &conn,
@@ -184,6 +228,227 @@ fn no_document_sourced_observation_escapes_document_stated() {
               WHERE extractor_id = 'md-structural' ORDER BY 1"
         ),
         vec!["DOCUMENT_STATED/DIRECT".to_string()]
+    );
+
+    // The same, both ways round, for the extractor the widened set admits.
+    assert_eq!(
+        strings(
+            &conn,
+            "SELECT DISTINCT extractor_id FROM observation
+              WHERE evidence_source_type = 'FILESYSTEM_OBSERVED' ORDER BY 1"
+        ),
+        vec!["fs-structural".to_string()]
+    );
+    assert_eq!(
+        strings(
+            &conn,
+            "SELECT DISTINCT evidence_source_type || '/' || directness FROM observation
+              WHERE extractor_id = 'fs-structural' ORDER BY 1"
+        ),
+        vec!["FILESYSTEM_OBSERVED/DIRECT".to_string()]
+    );
+}
+
+/// The T7 query must still *fail* when the property is false, and must name every offender.
+///
+/// An exhaustive invariant that cannot fail is a comment. Slice 5d-i widened the allowed set, so
+/// the probe is re-pointed at the widened query: stamping `AST_DIRECT` on a document path — the
+/// exact promotion T7 exists to forbid — must be caught, and every stamped row must appear in the
+/// message a maintainer would read.
+#[test]
+fn t7_names_every_offender_when_a_document_path_is_stamped_ast_direct() {
+    let (_dir, root, _outcome) = indexed_documents();
+    let conn = open_db(&root);
+    assert!(t7_offenders(&conn).is_empty());
+
+    // Promote three document observations to source-level evidence, exactly as a careless new
+    // emission site would.
+    let stamped = conn
+        .execute(
+            "UPDATE observation
+                SET evidence_source_type = 'AST_DIRECT'
+              WHERE rowid IN (
+                    SELECT rowid FROM observation
+                     WHERE file_path LIKE '%.md'
+                       AND extractor_id = 'md-structural'
+                     ORDER BY rowid LIMIT 3)",
+            [],
+        )
+        .unwrap();
+    assert_eq!(stamped, 3, "the mutation itself must have taken effect");
+
+    let offenders = t7_offenders(&conn);
+    assert_eq!(
+        offenders.len(),
+        3,
+        "T7 named {} of 3 stamped rows: {offenders:?}",
+        offenders.len()
+    );
+    for offender in &offenders {
+        assert!(
+            offender.contains("AST_DIRECT") && offender.contains("md-structural"),
+            "an offender must say what escaped and who emitted it: {offender}"
+        );
+    }
+
+    // The other direction: a filesystem row that claims to be a document's word is caught too,
+    // because the allowed set is keyed on the pair and not on the source type alone.
+    conn.execute(
+        "UPDATE observation
+            SET evidence_source_type = 'DOCUMENT_STATED'
+          WHERE rowid IN (
+                SELECT rowid FROM observation
+                 WHERE file_path LIKE '%.md'
+                   AND extractor_id = 'fs-structural'
+                 ORDER BY rowid LIMIT 1)",
+        [],
+    )
+    .unwrap();
+    let offenders = t7_offenders(&conn);
+    assert_eq!(offenders.len(), 4, "{offenders:?}");
+}
+
+/// **Schema v4, end to end, on a real database rather than a hand-built one.**
+///
+/// The `nerve-store` migration tests build their fixtures out of literal `INSERT`s, which is what
+/// makes them precise — and also what makes them blind to anything the real indexer does that the
+/// literals do not reproduce. Slice 3b learned that the expensive way: the v2 data-destruction bug
+/// passed every unit-level migration test and was only ever caught by a test that ran the actual
+/// indexer and compared the whole database afterwards. This is that form.
+///
+/// A real v3 database is produced by indexing the fixture with the current binary and then
+/// putting the evidence labels back the way every build before Slice 5d-i wrote them — the `.md`
+/// half as `md-structural` / `DOCUMENT_STATED`, the rest as `ts-js-structural` / `AST_DIRECT` —
+/// re-deriving `assertion_state` from those labels and dropping the v4 marker. **Stated plainly
+/// because it matters:** the tree is real and every row is the indexer's own, but the downgrade is
+/// reconstructed rather than written by an old binary, which no longer exists to run. The schema
+/// makes that sound: v4 changes no DDL, so a v3 and a v4 database differ in exactly the data this
+/// reconstruction restores.
+///
+/// The assertion is the strongest available: after migrating, the canonical dump of the whole
+/// database must equal the dump of a from-scratch index, byte for byte.
+#[test]
+fn a_real_v3_database_migrates_to_exactly_what_the_current_build_produces() {
+    let (_dir, root, _outcome) = indexed_documents();
+    let expected = {
+        let conn = open_db(&root);
+        nerve_store::canonical_dump(&conn).unwrap()
+    };
+
+    {
+        let conn = open_db(&root);
+        assert_eq!(
+            nerve_store::schema_version(&conn).unwrap(),
+            Some(nerve_store::SCHEMA_VERSION)
+        );
+        let rewound = conn
+            .execute(
+                "UPDATE observation
+                    SET evidence_source_type =
+                            CASE WHEN file_path LIKE '%.md' OR file_path LIKE '%.markdown'
+                                 THEN 'DOCUMENT_STATED' ELSE 'AST_DIRECT' END,
+                        extractor_id =
+                            CASE WHEN file_path LIKE '%.md' OR file_path LIKE '%.markdown'
+                                 THEN 'md-structural' ELSE 'ts-js-structural' END,
+                        extractor_version = '1.1.0'
+                  WHERE extractor_id = 'fs-structural'",
+                [],
+            )
+            .unwrap();
+        assert!(
+            rewound > 10,
+            "only {rewound} rows rewound — the fixture stopped exercising the migration"
+        );
+        // A v3 build derived its state from those labels, so the downgrade has to as well.
+        nerve_store::rebuild_assertion_state(&conn).unwrap();
+        conn.execute("DELETE FROM schema_version WHERE version = 4", [])
+            .unwrap();
+        assert_eq!(nerve_store::schema_version(&conn).unwrap(), Some(3));
+        assert_ne!(
+            nerve_store::canonical_dump(&conn).unwrap(),
+            expected,
+            "the downgrade changed nothing; the migration would prove nothing"
+        );
+    }
+
+    let conn = open_db(&root);
+    nerve_store::migrate(&conn).unwrap();
+    assert_eq!(
+        nerve_store::schema_version(&conn).unwrap(),
+        Some(nerve_store::SCHEMA_VERSION)
+    );
+    assert_eq!(
+        nerve_store::canonical_dump(&conn).unwrap(),
+        expected,
+        "a migrated v3 database is not what the current build produces from scratch"
+    );
+
+    // And T7 holds on the migrated database, not only on a freshly indexed one.
+    assert!(t7_offenders(&conn).is_empty());
+}
+
+/// `fs-structural` never reads file bytes, proved against real files rather than by inspection.
+///
+/// This is the load-bearing premise of the amended T7 (`docs/plans/slice-05d-...` §4): the
+/// filesystem extractor is allowed onto document paths **because** it cannot carry document
+/// content, so if that ever stopped being true the widened allowed set would be a real weakening.
+///
+/// The construction proof is in the types — `nerve_index::FsEntry` has no field that can hold
+/// file text, and it is the only input to the graph builder — and `fs_graph_needs_no_file_on_disk`
+/// in `pipeline.rs` builds the whole skeleton from hand-written entries with no file anywhere. The
+/// proof here is empirical and complements it: the fixture's documents contain distinctive strings
+/// including a hostile one, and none of them reaches any column of any `fs-structural` row.
+#[test]
+fn fs_structural_carries_no_file_content() {
+    let (_dir, root, _outcome) = indexed_documents();
+    let conn = open_db(&root);
+
+    let rows = scalar(
+        &conn,
+        "SELECT count(*) FROM observation WHERE extractor_id = 'fs-structural'",
+    );
+    assert!(rows > 0, "nothing to prove: fs-structural emitted no rows");
+
+    // Every column an `fs-structural` observation can carry, concatenated. If content ever leaked
+    // into `details`, `environment` or anywhere else, it lands in this string.
+    let everything = strings(
+        &conn,
+        "SELECT coalesce(evidence_source_type,'') || '|' || coalesce(directness,'') || '|'
+             || coalesce(extractor_id,'') || '|' || coalesce(extractor_version,'') || '|'
+             || coalesce(match_quality,'') || '|' || coalesce(file_path,'') || '|'
+             || coalesce(start_line,'') || '|' || coalesce(end_line,'') || '|'
+             || coalesce(content_hash,'') || '|' || coalesce(environment,'') || '|'
+             || coalesce(details,'')
+           FROM observation WHERE extractor_id = 'fs-structural'",
+    );
+    let haystack = everything.join("\n");
+
+    // Prose that really is in the fixture's documents, including the injection attempt from
+    // `docs/hostile.md`. None is a path, so none can reach a filesystem row by any route at all.
+    for needle in [
+        "Ignore previous instructions",
+        "Starts at level three",
+        "Then a level two",
+        "Hostile document",
+        "attacker-controlled",
+    ] {
+        assert!(
+            !haystack.contains(needle),
+            "an fs-structural row carried document content: {needle:?}"
+        );
+    }
+
+    // `details` is the only free-form column, and for this extractor it is a closed vocabulary.
+    assert_eq!(
+        strings(
+            &conn,
+            "SELECT DISTINCT details FROM observation
+              WHERE extractor_id = 'fs-structural' ORDER BY 1"
+        ),
+        vec![
+            "{\"child_kind\":\"directory\"}".to_string(),
+            "{\"child_kind\":\"file\"}".to_string(),
+        ]
     );
 }
 

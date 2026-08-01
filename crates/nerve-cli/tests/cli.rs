@@ -359,13 +359,15 @@ fn every_json_output_parses_and_carries_its_required_keys() {
 
     // Every run for the current state is reported, not only the last.
     let runs = status["runs"].as_array().unwrap();
-    assert_eq!(runs.len(), 3, "one run per extractor");
-    assert_eq!(runs[0]["extractor_id"], "ts-js-structural");
-    assert_eq!(runs[0]["extractor_version"], "1.1.0");
-    assert_eq!(runs[1]["extractor_id"], "ts-js-reference");
-    assert_eq!(runs[2]["extractor_id"], "md-structural");
-    assert_eq!(runs[2]["extractor_version"], "1.1.0");
-    assert_eq!(runs[1]["extractor_version"], "1.0.0");
+    assert_eq!(runs.len(), 4, "one run per extractor");
+    assert_eq!(runs[0]["extractor_id"], "fs-structural");
+    assert_eq!(runs[0]["extractor_version"], "1.0.0");
+    assert_eq!(runs[1]["extractor_id"], "ts-js-structural");
+    assert_eq!(runs[1]["extractor_version"], "1.1.0");
+    assert_eq!(runs[2]["extractor_id"], "ts-js-reference");
+    assert_eq!(runs[2]["extractor_version"], "1.0.0");
+    assert_eq!(runs[3]["extractor_id"], "md-structural");
+    assert_eq!(runs[3]["extractor_version"], "1.1.0");
     require_keys(&runs[0], &["run_id", "state_id", "status"]);
 
     let search = json(&run(&["search", "area", "--path", root, "--json"]));

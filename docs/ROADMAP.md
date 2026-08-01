@@ -15,7 +15,9 @@ Authoritative slice list. Update the status column at the end of every slice.
 | 5a | Markdown + ADR ingestion — `Document`/`Section` entities, `CONTAINS` structure, ADR status, T7 controls | ✅ Complete (2026-08-01) — 506 tests; T7 exhaustive and mutation-verified; **closed two identity-forgery vectors**, one of them pre-existing in every id constructor |
 | 5b | Markdown **link scanning** — destinations, forms, spans; code-span mentions counted not emitted | ✅ Complete (2026-08-01) — 541 tests; the tests found 6 real scanner defects, two of them turning hostile HTML into link destinations |
 | 5c | Document↔code **link resolution** — `REFERENCES` by explicit path and `#L<n>` anchor, unresolved reasons, measured precision, invalidation | ✅ Complete (2026-08-01) — 564 tests; FP=0 on fixtures, but **only 5 link sites exist across Nerve's own 45 documents** |
-| 5d | `Document SUPERSEDES Document`, **corrective** filesystem-evidence relabelling, and UI vocabulary catch-up | ⬜ Not started |
+| 5d-i | **Corrective** filesystem evidence — `FILESYSTEM_OBSERVED` + `fs-structural`, ADR-0007, schema v4 migration, amended T7 | ✅ Complete (2026-08-01) — 577 tests; a docs-only tree now yields **0** `ts-js-structural` observations, was 4 mislabelled `AST_DIRECT` |
+| 5d-ii | `Document SUPERSEDES Document` — explicit evidence only, chains, cycles, ambiguity, measured precision | ⬜ Not started |
+| 5d-iii | UI vocabulary catch-up — glosses driven from the Rust vocabularies, asset re-embed, screenshots | ⬜ Not started |
 | 6 | Test evidence (**coverage only**) — `TEST_COVERS_SYMBOL`, freshness, affected-test experiment | ⬜ Not started |
 | 7 | CLI + query expansion — `impact`, `gaps`, `check`, evidence packets | ⬜ Not started |
 | 8 | MCP — one default investigation tool | ⬜ Not started |

@@ -60,6 +60,7 @@ const SOURCE_TYPES: Record<string, string> = {
   DOCUMENT_STATED: 'A document asserts it.',
   HUMAN_CONFIRMED: 'A person confirmed it.',
   LLM_DERIVED: 'A language model suggested it.',
+  FILESYSTEM_OBSERVED: 'The filesystem contains this. Found by a directory walk, not by reading any file.',
 };
 
 export function sourceTypeGloss(value: string): string {

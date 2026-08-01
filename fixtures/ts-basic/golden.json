@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "project_id": "00000000000000000000000000000001",
   "state_ids": [
     "17a7b88bb86b3a3d2b02b7303480029f34f8e86825e496ff8ab2a13046a85933"
@@ -1752,10 +1752,10 @@
     },
     {
       "assertion_id": "184c183738e370fe97ff15e49284ff3ca2c8aa86b0b4b2dc162a0ddadec0584b",
-      "evidence_source_type": "AST_DIRECT",
+      "evidence_source_type": "FILESYSTEM_OBSERVED",
       "directness": "DIRECT",
-      "extractor_id": "ts-js-structural",
-      "extractor_version": "1.1.0",
+      "extractor_id": "fs-structural",
+      "extractor_version": "1.0.0",
       "match_quality": null,
       "file_path": "src/widget.tsx",
       "start_line": 0,
@@ -1860,10 +1860,10 @@
     },
     {
       "assertion_id": "28dbfdc581b1a28220875f987ca3275e7e1e4421a7293f48e6403f8f17c1ae40",
-      "evidence_source_type": "AST_DIRECT",
+      "evidence_source_type": "FILESYSTEM_OBSERVED",
       "directness": "DIRECT",
-      "extractor_id": "ts-js-structural",
-      "extractor_version": "1.1.0",
+      "extractor_id": "fs-structural",
+      "extractor_version": "1.0.0",
       "match_quality": null,
       "file_path": "src/legacy.cjs",
       "start_line": 0,
@@ -2120,10 +2120,10 @@
     },
     {
       "assertion_id": "4839ae8a36f4438252c480c57efdfdf8842a37759ebae7dd61f1143f511073d8",
-      "evidence_source_type": "AST_DIRECT",
+      "evidence_source_type": "FILESYSTEM_OBSERVED",
       "directness": "DIRECT",
-      "extractor_id": "ts-js-structural",
-      "extractor_version": "1.1.0",
+      "extractor_id": "fs-structural",
+      "extractor_version": "1.0.0",
       "match_quality": null,
       "file_path": "src/alias.ts",
       "start_line": 0,
@@ -2486,10 +2486,10 @@
     },
     {
       "assertion_id": "86bd849a56fb01a254de599b3b41501528dc7518c5fdac06c8c014e5c53d279a",
-      "evidence_source_type": "AST_DIRECT",
+      "evidence_source_type": "FILESYSTEM_OBSERVED",
       "directness": "DIRECT",
-      "extractor_id": "ts-js-structural",
-      "extractor_version": "1.1.0",
+      "extractor_id": "fs-structural",
+      "extractor_version": "1.0.0",
       "match_quality": null,
       "file_path": "src/ambiguous.ts",
       "start_line": 0,
@@ -2593,10 +2593,10 @@
     },
     {
       "assertion_id": "935a440a96fc3e97f8d2d5ddf9954652d63981ba7fa862c5f77adf3910503669",
-      "evidence_source_type": "AST_DIRECT",
+      "evidence_source_type": "FILESYSTEM_OBSERVED",
       "directness": "DIRECT",
-      "extractor_id": "ts-js-structural",
-      "extractor_version": "1.1.0",
+      "extractor_id": "fs-structural",
+      "extractor_version": "1.0.0",
       "match_quality": null,
       "file_path": "src/math.ts",
       "start_line": 0,
@@ -2719,10 +2719,10 @@
     },
     {
       "assertion_id": "b31eec01e78cba00ad0170f5a90d77984fe4f26554e1347b06f90e39d04118cb",
-      "evidence_source_type": "AST_DIRECT",
+      "evidence_source_type": "FILESYSTEM_OBSERVED",
       "directness": "DIRECT",
-      "extractor_id": "ts-js-structural",
-      "extractor_version": "1.1.0",
+      "extractor_id": "fs-structural",
+      "extractor_version": "1.0.0",
       "match_quality": null,
       "file_path": "src/shapes.ts",
       "start_line": 0,
@@ -2948,10 +2948,10 @@
     },
     {
       "assertion_id": "cd4c9cb72e696d062d92ca17630b02366647d9d4254bd062d1c1f8094f75ac6d",
-      "evidence_source_type": "AST_DIRECT",
+      "evidence_source_type": "FILESYSTEM_OBSERVED",
       "directness": "DIRECT",
-      "extractor_id": "ts-js-structural",
-      "extractor_version": "1.1.0",
+      "extractor_id": "fs-structural",
+      "extractor_version": "1.0.0",
       "match_quality": null,
       "file_path": "src/unresolved.ts",
       "start_line": 0,
@@ -3035,10 +3035,10 @@
     },
     {
       "assertion_id": "e2ceaf4c6ab97c26d5eafe0493c8be7406bd4c3c07e3f4be487b74476c3bae8c",
-      "evidence_source_type": "AST_DIRECT",
+      "evidence_source_type": "FILESYSTEM_OBSERVED",
       "directness": "DIRECT",
-      "extractor_id": "ts-js-structural",
-      "extractor_version": "1.1.0",
+      "extractor_id": "fs-structural",
+      "extractor_version": "1.0.0",
       "match_quality": null,
       "file_path": "src",
       "start_line": 0,
@@ -3142,10 +3142,10 @@
     },
     {
       "assertion_id": "f0d306a3fd0d392a03f11615f7843a16b61633898c2428fd4b4cbc3b9ab5ccf6",
-      "evidence_source_type": "AST_DIRECT",
+      "evidence_source_type": "FILESYSTEM_OBSERVED",
       "directness": "DIRECT",
-      "extractor_id": "ts-js-structural",
-      "extractor_version": "1.1.0",
+      "extractor_id": "fs-structural",
+      "extractor_version": "1.0.0",
       "match_quality": null,
       "file_path": "src/index.ts",
       "start_line": 0,
@@ -3344,8 +3344,8 @@
     {
       "assertion_id": "184c183738e370fe97ff15e49284ff3ca2c8aa86b0b4b2dc162a0ddadec0584b",
       "status": "SUPPORTED",
-      "strongest_source_type": "AST_DIRECT",
-      "source_type_mask": 1,
+      "strongest_source_type": "FILESYSTEM_OBSERVED",
+      "source_type_mask": 2048,
       "observation_count": 1,
       "is_unresolved": 0
     },
@@ -3392,8 +3392,8 @@
     {
       "assertion_id": "28dbfdc581b1a28220875f987ca3275e7e1e4421a7293f48e6403f8f17c1ae40",
       "status": "SUPPORTED",
-      "strongest_source_type": "AST_DIRECT",
-      "source_type_mask": 1,
+      "strongest_source_type": "FILESYSTEM_OBSERVED",
+      "source_type_mask": 2048,
       "observation_count": 1,
       "is_unresolved": 0
     },
@@ -3488,8 +3488,8 @@
     {
       "assertion_id": "4839ae8a36f4438252c480c57efdfdf8842a37759ebae7dd61f1143f511073d8",
       "status": "SUPPORTED",
-      "strongest_source_type": "AST_DIRECT",
-      "source_type_mask": 1,
+      "strongest_source_type": "FILESYSTEM_OBSERVED",
+      "source_type_mask": 2048,
       "observation_count": 1,
       "is_unresolved": 0
     },
@@ -3640,8 +3640,8 @@
     {
       "assertion_id": "86bd849a56fb01a254de599b3b41501528dc7518c5fdac06c8c014e5c53d279a",
       "status": "SUPPORTED",
-      "strongest_source_type": "AST_DIRECT",
-      "source_type_mask": 1,
+      "strongest_source_type": "FILESYSTEM_OBSERVED",
+      "source_type_mask": 2048,
       "observation_count": 1,
       "is_unresolved": 0
     },
@@ -3688,8 +3688,8 @@
     {
       "assertion_id": "935a440a96fc3e97f8d2d5ddf9954652d63981ba7fa862c5f77adf3910503669",
       "status": "SUPPORTED",
-      "strongest_source_type": "AST_DIRECT",
-      "source_type_mask": 1,
+      "strongest_source_type": "FILESYSTEM_OBSERVED",
+      "source_type_mask": 2048,
       "observation_count": 1,
       "is_unresolved": 0
     },
@@ -3736,8 +3736,8 @@
     {
       "assertion_id": "b31eec01e78cba00ad0170f5a90d77984fe4f26554e1347b06f90e39d04118cb",
       "status": "SUPPORTED",
-      "strongest_source_type": "AST_DIRECT",
-      "source_type_mask": 1,
+      "strongest_source_type": "FILESYSTEM_OBSERVED",
+      "source_type_mask": 2048,
       "observation_count": 1,
       "is_unresolved": 0
     },
@@ -3824,8 +3824,8 @@
     {
       "assertion_id": "cd4c9cb72e696d062d92ca17630b02366647d9d4254bd062d1c1f8094f75ac6d",
       "status": "SUPPORTED",
-      "strongest_source_type": "AST_DIRECT",
-      "source_type_mask": 1,
+      "strongest_source_type": "FILESYSTEM_OBSERVED",
+      "source_type_mask": 2048,
       "observation_count": 1,
       "is_unresolved": 0
     },
@@ -3864,8 +3864,8 @@
     {
       "assertion_id": "e2ceaf4c6ab97c26d5eafe0493c8be7406bd4c3c07e3f4be487b74476c3bae8c",
       "status": "SUPPORTED",
-      "strongest_source_type": "AST_DIRECT",
-      "source_type_mask": 1,
+      "strongest_source_type": "FILESYSTEM_OBSERVED",
+      "source_type_mask": 2048,
       "observation_count": 1,
       "is_unresolved": 0
     },
@@ -3912,8 +3912,8 @@
     {
       "assertion_id": "f0d306a3fd0d392a03f11615f7843a16b61633898c2428fd4b4cbc3b9ab5ccf6",
       "status": "SUPPORTED",
-      "strongest_source_type": "AST_DIRECT",
-      "source_type_mask": 1,
+      "strongest_source_type": "FILESYSTEM_OBSERVED",
+      "source_type_mask": 2048,
       "observation_count": 1,
       "is_unresolved": 0
     },

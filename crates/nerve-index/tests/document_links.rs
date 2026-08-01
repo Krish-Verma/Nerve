@@ -671,6 +671,26 @@ fn the_document_extractor_stays_inside_its_declaration() {
         vec!["CONTAINS".to_string(), "REFERENCES".to_string()]
     );
 
+    // `md-structural` keeps `CONTAINS` — `File CONTAINS Document`, `Document CONTAINS Section`,
+    // `Section CONTAINS Section` are all a heading scan's claims. What it lost in Slice 5d-i is
+    // containment whose *source* is the repository or a directory: "`docs/` holds `ROADMAP.md`"
+    // is a filesystem fact whoever asks, and having two extractors answer it differently by file
+    // extension was the incoherence that slice removed.
+    assert_eq!(
+        distinct(
+            "SELECT DISTINCT source.kind FROM assertion a
+               JOIN entity source ON source.entity_id = a.source_entity_id
+               JOIN observation o ON o.assertion_id = a.assertion_id
+              WHERE o.extractor_id = 'md-structural' AND a.relation = 'CONTAINS'
+              ORDER BY 1"
+        ),
+        vec![
+            "document".to_string(),
+            "file".to_string(),
+            "section".to_string()
+        ]
+    );
+
     // `SUPERSEDES` is declared and emitted by nothing. Slice 5c deliberately does not build it:
     // an ADR superseding another is a claim about decisions, and the evidence for it is not the
     // same evidence a path resolution provides.

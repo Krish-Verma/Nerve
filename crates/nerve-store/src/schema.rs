@@ -1,4 +1,4 @@
-//! Schema v1 (ADR-0003), v2 (Slice 3), v3 (Slice 3b), and migrations.
+//! Schema v1 (ADR-0003), v2 (Slice 3), v3 (Slice 3b), v4 (Slice 5d-i), and migrations.
 //!
 //! Migrations are append-only. `V1` is immutable: a database written by an older build must be
 //! upgradable by replaying the later steps, so editing an already-shipped step in place would
@@ -11,7 +11,7 @@ use nerve_core::ids;
 use crate::error::{Result, StoreError};
 
 /// The schema version this build writes and understands.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// Human-readable description recorded in `schema_version`.
 pub const SCHEMA_V1_DESCRIPTION: &str =
@@ -25,6 +25,11 @@ pub const SCHEMA_V2_DESCRIPTION: &str =
 pub const SCHEMA_V3_DESCRIPTION: &str =
     "Slice 3b (ADR-0006): repository state normalized out of occurrence, observation \
      and assertion_state; occurrence_id no longer digests the state";
+
+/// Human-readable description recorded in `schema_version` for the Slice 5d-i upgrade.
+pub const SCHEMA_V4_DESCRIPTION: &str =
+    "Slice 5d-i: filesystem containment re-attributed from ts-js-structural/AST_DIRECT and \
+     md-structural/DOCUMENT_STATED to fs-structural/FILESYSTEM_OBSERVED";
 
 const V1: &str = r#"
 CREATE TABLE repository (
@@ -261,10 +266,11 @@ enum Step {
 /// Migration steps, in application order: `(version, description, step)`.
 ///
 /// Appending to this list is how the schema evolves. Editing an existing entry is prohibited.
-const MIGRATIONS: [(i64, &str, Step); 3] = [
+const MIGRATIONS: [(i64, &str, Step); 4] = [
     (1, SCHEMA_V1_DESCRIPTION, Step::Sql(V1)),
     (2, SCHEMA_V2_DESCRIPTION, Step::Sql(V2)),
     (3, SCHEMA_V3_DESCRIPTION, Step::Rust(migrate_v3)),
+    (4, SCHEMA_V4_DESCRIPTION, Step::Rust(migrate_v4)),
 ];
 
 /// Apply [`V3`], then restate every `occurrence_id` under the ADR-0006 tuple.
@@ -331,6 +337,70 @@ fn migrate_v3(conn: &Connection) -> Result<()> {
         [],
     )?;
     conn.execute_batch("DROP TABLE occurrence_v3_ids;")?;
+    Ok(())
+}
+
+/// The evidence label v4 writes, pinned as literals rather than read from the live constants.
+///
+/// A migration must mean the same thing forever. `fs-structural`'s version will move one day, and
+/// when it does this step must still write `1.0.0`, because `1.0.0` is what the rules being
+/// applied here are — that is the same reason [`V1`] is immutable. The `nerve-index` crate that
+/// owns these names is downstream of this one and cannot be imported, which makes the literals
+/// unavoidable as well as correct; `nerve-index/tests/graph.rs` asserts the two agree today.
+const V4_SOURCE_TYPE: &str = "FILESYSTEM_OBSERVED";
+const V4_EXTRACTOR_ID: &str = "fs-structural";
+const V4_EXTRACTOR_VERSION: &str = "1.0.0";
+
+/// Schema v4 — Slice 5d-i. **No DDL**: the correction is entirely in the data.
+///
+/// `observation.evidence_source_type`, `extractor_id` and `extractor_version` are `TEXT` with no
+/// `CHECK` constraint and no lookup table — the vocabulary is closed in Rust, not in SQL — so
+/// adding `FILESYSTEM_OBSERVED` forces no schema change. What it does force is a rewrite of rows
+/// already on disk that say `AST_DIRECT` / `ts-js-structural` for structure no syntax tree ever
+/// stated.
+///
+/// A re-index cannot be assumed, and would not be sufficient if it were: directory containment is
+/// re-derived every run, but repository→file and directory→file rows are re-emitted only for
+/// files a run actually re-extracts, so an unchanged file would keep a wrong row indefinitely.
+///
+/// "Is this filesystem structure?" is decided **without guessing**: the qualifying set is
+/// `CONTAINS` assertions whose *source* entity kind is `repository` or `directory`, which is
+/// exactly the set the emission sites produce and is a closed query over stored columns. No
+/// `LIKE` on a path, no extension sniffing, no heuristic. `File CONTAINS Document` — source kind
+/// `file` — is deliberately outside it and stays `DOCUMENT_STATED`, as does everything a parse or
+/// a heading scan produced.
+///
+/// Row identity is untouched. `observation_id` is an autoincrement surrogate key (there is no
+/// `ids::observation_id`), so re-stamping the evidence columns updates in place and cannot orphan
+/// or duplicate anything. The uniqueness index does cover `extractor_id`, `extractor_version` and
+/// `evidence_source_type`, so a collision would be a hard SQLite error rather than a silent
+/// merge; it cannot arise here because no `fs-structural` row exists before this step runs.
+const V4: &str = r#"
+UPDATE observation
+   SET evidence_source_type = ?1,
+       extractor_id         = ?2,
+       extractor_version    = ?3
+ WHERE assertion_id IN (
+       SELECT a.assertion_id
+         FROM assertion a
+         JOIN entity e ON e.entity_id = a.source_entity_id
+        WHERE a.relation = 'CONTAINS'
+          AND e.kind IN ('repository', 'directory'))
+"#;
+
+/// Re-stamp filesystem containment, then re-derive `assertion_state` from the corrected rows.
+///
+/// The second half reuses [`crate::derive::rebuild_assertion_state`] rather than patching
+/// `strongest_source_type` and `source_type_mask` by hand. That is the Slice 3b precedent and it
+/// is not a style preference: the mask's bit layout is generated from `EvidenceSourceType::ALL`
+/// at runtime, so the derivation is the only thing that knows it, and a second implementation
+/// here would be a second thing to keep in step with the vocabulary.
+fn migrate_v4(conn: &Connection) -> Result<()> {
+    conn.execute(
+        V4,
+        params![V4_SOURCE_TYPE, V4_EXTRACTOR_ID, V4_EXTRACTOR_VERSION],
+    )?;
+    crate::derive::rebuild_assertion_state(conn)?;
     Ok(())
 }
 

@@ -4,10 +4,20 @@
 //! be byte-identical across runs, and an ordered parallel merge is a later slice — introducing
 //! it alongside deletion and invalidation would confound two new causes of divergence.
 //!
-//! Three extractors run per index, each with its own `extractor_run` row and its own batch
+//! Four extractors run per index, each with its own `extractor_run` row and its own batch
 //! verified against its own declared source types. Keeping them separate is what makes a
 //! `DELETE FROM observation WHERE extractor_id = 'ts-js-reference'` a complete retraction of
 //! everything resolution claimed, with the structural graph untouched.
+//!
+//! # Filesystem structure (Slice 5d-i)
+//!
+//! `fs-structural` runs first and owns everything a **directory walk** knows: the repository
+//! entity, every directory entity, and every `CONTAINS` edge whose source is the repository or a
+//! directory. It emits `FILESYSTEM_OBSERVED` and nothing else. Before 5d-i those claims were
+//! `ts-js-structural` / `AST_DIRECT`, which made a documentation-only tree — no TypeScript in it
+//! at all — produce observations asserting that a syntax tree contained them. See
+//! [`crate::fsstruct`] for why the extractor cannot read file content, which is what the amended
+//! T7 rests on.
 //!
 //! # Documents (Slice 5a)
 //!
@@ -20,10 +30,11 @@
 //! > No observation whose `file_path` is a document has any `evidence_source_type` other than
 //! > `DOCUMENT_STATED`.
 //!
-//! That is why `md-structural`, not `ts-js-structural`, emits a document's `File` entity and the
-//! `CONTAINS` edge that holds it: those observations cite a `.md` path, so they fall on the
-//! document side of the invariant. Directory containment stays with `ts-js-structural`, because
-//! its evidence cites a directory rather than any file.
+//! Slice 5d-i amends that invariant rather than weakening it. `Directory CONTAINS <file>` is a
+//! filesystem fact whatever the extension, so it moved to `fs-structural`, and the allowed set on
+//! a document path became exactly `{DOCUMENT_STATED, FILESYSTEM_OBSERVED}` keyed on extractor id
+//! — still total, still checked exhaustively. The reason it is not a loosening is that
+//! `fs-structural` cannot carry document content anywhere, because it never reads any.
 //!
 //! Slice 5c adds `REFERENCES` edges for resolved links and leaves that invariant untouched: a
 //! resolved link is still only a document's claim, so it stays `DOCUMENT_STATED` and moves the
@@ -95,6 +106,7 @@ use crate::extract::{
     self, ExportTarget, ModuleExtraction, DECLARED_SOURCE_TYPES, EXTRACTOR_ID, EXTRACTOR_VERSION,
 };
 use crate::facts::{self, ModuleFacts};
+use crate::fsstruct::{self, FsEntry};
 use crate::gitinfo;
 use crate::incremental::{self, MoveCandidate, PreviousModule};
 use crate::lang::{path_is_document, FileKind, Language, MARKDOWN_LANGUAGE};
@@ -408,6 +420,15 @@ impl Evidence {
     const DIRECT: Evidence = Evidence {
         source_type: EvidenceSourceType::AstDirect,
         directness: Directness::Direct,
+    };
+
+    /// The filesystem contains this. The only profile `fs-structural` may emit.
+    ///
+    /// `DIRECT` because the directory walk literally found the entry: no resolution step, no
+    /// rule, and — the point of the whole extractor — no file was opened to learn it.
+    const FILESYSTEM: Evidence = Evidence {
+        source_type: EvidenceSourceType::FilesystemObserved,
+        directness: fsstruct::DIRECTNESS,
     };
 
     /// Module, export or binding resolution produced this.
@@ -785,13 +806,24 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         })
         .collect();
 
-    let batch = build_graph(
-        &config.project_id,
-        &loaded,
-        &targets,
-        &module_exports,
-        &indexed,
-    )?;
+    // `fs-structural` sees a projection of the load, never the load itself: `FsEntry` has no
+    // field that can hold file text, so the filesystem extractor cannot reach content even by
+    // accident. This is the one place the projection happens, and dropping `source` here is what
+    // makes the guarantee structural rather than a convention.
+    let fs_entries: Vec<FsEntry> = loaded
+        .iter()
+        .map(|file| FsEntry {
+            rel_path: file.rel_path.clone(),
+            kind: file.kind,
+            size_bytes: file.size_bytes,
+            content_hash: file.content_hash.clone(),
+        })
+        .collect();
+    let fs_batch = build_fs_graph(&config.project_id, &fs_entries, &target_paths);
+    fs_batch
+        .verify_declared_source_types(fsstruct::EXTRACTOR_ID, &fsstruct::DECLARED_SOURCE_TYPES)?;
+
+    let batch = build_graph(&config.project_id, &targets, &module_exports, &indexed)?;
     batch.verify_declared_source_types(EXTRACTOR_ID, &DECLARED_SOURCE_TYPES)?;
 
     let reference_targets: Vec<(&LoadedFile, &ReferenceExtraction)> = loaded
@@ -930,6 +962,31 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         // 2. Write the new evidence. One `extractor_run` row per extractor: the rows are what
         //    make a contribution attributable, and therefore revocable, per extractor version.
         //    The run carries the repository state; no graph row does (ADR-0006).
+        //    `fs-structural` goes first, and the order is load-bearing rather than tidy: it now
+        //    owns the `File` entity, and the `File` occurrence written by the two extractors that
+        //    do read the file carries a foreign key to it. Entity before occurrence, in one
+        //    transaction.
+        //
+        //    Its file tallies count the whole walk. A file that could not be read is still a file
+        //    the walk found, but it is not one this extractor could describe, so it counts as
+        //    failed here exactly as it does for the extractor that would have parsed it.
+        let filesystem_run = nerve_store::begin_extractor_run(
+            &tx,
+            &repo_id,
+            &state_id,
+            fsstruct::EXTRACTOR_ID,
+            fsstruct::EXTRACTOR_VERSION,
+        )?;
+        rows_written +=
+            nerve_store::persist_batch(&tx, &repo_id, filesystem_run, &fs_batch, &mut touched)?;
+        nerve_store::finish_extractor_run(
+            &tx,
+            filesystem_run,
+            loaded.len() as i64,
+            files_failed as i64,
+            status.as_str(),
+        )?;
+
         let structural_run = nerve_store::begin_extractor_run(
             &tx,
             &repo_id,
@@ -1196,24 +1253,25 @@ fn cached_facts(previous: &BTreeMap<String, PreviousModule>, rel_path: &str) -> 
         .unwrap_or_default()
 }
 
-/// Turn per-module extractions into entities, occurrences, assertions and observations.
+/// Turn the discovery walk into the repository skeleton: `fs-structural`.
 ///
-/// `loaded` is the whole tree and `targets` is the subset being re-extracted. The **skeleton** —
+/// Everything here is a **filesystem** fact — the repository exists, these directories exist,
+/// this directory holds that entry — and every observation carries `FILESYSTEM_OBSERVED`. Until
+/// Slice 5d-i these same rows said `AST_DIRECT` and named `ts-js-structural`, which was false in
+/// any repository containing no TypeScript and misleading in every other.
+///
+/// `entries` is the whole tree and `targets` is the subset being re-extracted. The **skeleton** —
 /// the repository entity, the directory entities, and the `CONTAINS` edges between directories —
-/// is re-derived from `loaded` on every run, because it needs no parsing and because directory
-/// containment is the one part of the graph that no file path owns. Everything file-scoped is
-/// emitted only for `targets`; a file that was not re-extracted keeps the rows it already has.
+/// is re-derived from `entries` on every run, because it needs no parsing and because directory
+/// containment is the one part of the graph that no file path owns. `File` entities and the
+/// `CONTAINS` edge that holds each one are emitted only for `targets`; a file that was not
+/// re-extracted keeps the rows it already has, which is what keeps a run proportional to the
+/// change rather than to the repository.
 ///
-/// `module_exports` covers **every** module, not just the targets: resolving a re-export in a
-/// target file requires the export map of the module it names, which may not have been parsed.
-fn build_graph(
-    project_id: &str,
-    loaded: &[LoadedFile],
-    targets: &[(&LoadedFile, &ModuleExtraction)],
-    module_exports: &BTreeMap<String, BTreeMap<String, String>>,
-    indexed: &BTreeSet<String>,
-) -> Result<GraphBatch> {
-    let mut builder = GraphBuilder::new(EXTRACTOR_ID, EXTRACTOR_VERSION);
+/// The signature is the content-independence proof: [`FsEntry`] has no field that can hold file
+/// text, so this function has nothing to leak even if it tried. See [`crate::fsstruct`].
+fn build_fs_graph(project_id: &str, entries: &[FsEntry], targets: &BTreeSet<String>) -> GraphBatch {
+    let mut builder = GraphBuilder::new(fsstruct::EXTRACTOR_ID, fsstruct::EXTRACTOR_VERSION);
 
     let repo_id = ids::repository_id(project_id);
     // The repository's display name is its own relative path. The directory basename is
@@ -1229,14 +1287,17 @@ fn build_graph(
 
     // Directories that actually contain an indexed file.
     let mut directories: BTreeSet<String> = BTreeSet::new();
-    for file in loaded {
-        let mut ancestor = parent_directory(&file.rel_path);
+    for entry in entries {
+        let mut ancestor = parent_directory(&entry.rel_path);
         while let Some(directory) = ancestor {
             ancestor = parent_directory(&directory);
             directories.insert(directory);
         }
     }
 
+    // A directory has no bytes of its own, so the observation cites a digest of its path. That is
+    // deliberately not a file hash: nothing about a directory's existence depends on what is
+    // inside the files it holds.
     let directory_hash = |rel_path: &str| ids::content_hash(rel_path.as_bytes());
 
     for directory in &directories {
@@ -1258,7 +1319,7 @@ fn build_graph(
             &parent_id,
             Relation::Contains,
             &entity_id,
-            Evidence::DIRECT,
+            Evidence::FILESYSTEM,
             directory,
             Span::NONE,
             &directory_hash(directory),
@@ -1266,31 +1327,36 @@ fn build_graph(
         );
     }
 
-    for (file, extraction) in targets.iter().copied() {
-        let rel_path = file.rel_path.as_str();
-        let hash = file.content_hash.as_str();
+    for entry in entries {
+        let rel_path = entry.rel_path.as_str();
+        if !targets.contains(rel_path) {
+            continue;
+        }
+        let hash = entry.content_hash.as_str();
         let file_entity = ids::file_id(project_id, rel_path);
-        let module_entity = ids::module_id(project_id, rel_path);
         let parent = parent_directory(rel_path);
         let name = last_segment(rel_path);
 
+        // Name, extension, size and language tag are all walk metadata. Nothing here was read
+        // out of the file; the extension decides the language tag, not the bytes.
         builder.add_entity(EntityRecord {
             entity_id: file_entity.clone(),
             kind: EntityKind::File,
             name: name.to_string(),
             scope_path: parent.clone().unwrap_or_default(),
-            language: Some(file.kind.as_str().to_string()),
+            language: Some(entry.kind.as_str().to_string()),
             meta: Some(
                 serde_json::json!({
                     "extension": name.rsplit('.').next().unwrap_or_default(),
-                    "size_bytes": file.size_bytes,
+                    "size_bytes": entry.size_bytes,
                 })
                 .to_string(),
             ),
         });
-        builder.add_occurrence(&file_entity, rel_path, extraction.file_span, hash);
 
-        // Repository or directory CONTAINS this file.
+        // Repository or directory CONTAINS this file — for a `.ts` and a `.md` alike. Having two
+        // extractors answer that question differently by file extension was the incoherence
+        // Slice 5d-i exists to remove.
         let parent_id = match &parent {
             Some(parent) => ids::directory_id(project_id, parent),
             None => repo_id.clone(),
@@ -1299,12 +1365,48 @@ fn build_graph(
             &parent_id,
             Relation::Contains,
             &file_entity,
-            Evidence::DIRECT,
+            Evidence::FILESYSTEM,
             rel_path,
             Span::NONE,
             hash,
             serde_json::json!({ "child_kind": "file" }),
         );
+    }
+
+    builder.batch
+}
+
+/// Turn per-module extractions into entities, occurrences, assertions and observations.
+///
+/// `targets` is the subset of the tree being re-extracted. The repository skeleton is **not**
+/// built here — it is a filesystem fact and belongs to [`build_fs_graph`]. What stays is what a
+/// parse genuinely produced: `File DEFINES Module`, `Module DEFINES <symbol>`, and every symbol
+/// entity, occurrence and edge, all `AST_DIRECT` or `AST_RESOLVED`.
+///
+/// The `File` **occurrence** stays here rather than moving with the entity, and the distinction
+/// is not arbitrary: an occurrence is a *span*, and a whole-file span's end line is the file's
+/// line count — something only reading the file can produce. Attributing it to an extractor that
+/// never opens a file would be the same category error this slice exists to remove. An occurrence
+/// carries no evidence label, so nothing false is asserted by leaving it where the span is made.
+///
+/// `module_exports` covers **every** module, not just the targets: resolving a re-export in a
+/// target file requires the export map of the module it names, which may not have been parsed.
+fn build_graph(
+    project_id: &str,
+    targets: &[(&LoadedFile, &ModuleExtraction)],
+    module_exports: &BTreeMap<String, BTreeMap<String, String>>,
+    indexed: &BTreeSet<String>,
+) -> Result<GraphBatch> {
+    let mut builder = GraphBuilder::new(EXTRACTOR_ID, EXTRACTOR_VERSION);
+
+    for (file, extraction) in targets.iter().copied() {
+        let rel_path = file.rel_path.as_str();
+        let hash = file.content_hash.as_str();
+        let file_entity = ids::file_id(project_id, rel_path);
+        let module_entity = ids::module_id(project_id, rel_path);
+        let name = last_segment(rel_path);
+
+        builder.add_occurrence(&file_entity, rel_path, extraction.file_span, hash);
 
         // File DEFINES Module, 1:1 for TS/JS.
         builder.add_entity(EntityRecord {
@@ -1725,46 +1827,21 @@ fn build_document_graph(
     targets: &[(&LoadedFile, &DocumentExtraction, &DocumentLinks)],
 ) -> GraphBatch {
     let mut builder = GraphBuilder::new(docs::EXTRACTOR_ID, docs::EXTRACTOR_VERSION);
-    let repo_id = ids::repository_id(project_id);
 
     for (file, extraction, resolved) in targets.iter().copied() {
         let rel_path = file.rel_path.as_str();
         let hash = file.content_hash.as_str();
         let name = last_segment(rel_path);
-        let parent = parent_directory(rel_path);
         let file_entity = ids::file_id(project_id, rel_path);
         let document_entity = extraction.entity_id.as_str();
 
-        builder.add_entity(EntityRecord {
-            entity_id: file_entity.clone(),
-            kind: EntityKind::File,
-            name: name.to_string(),
-            scope_path: parent.clone().unwrap_or_default(),
-            language: Some(MARKDOWN_LANGUAGE.to_string()),
-            meta: Some(
-                serde_json::json!({
-                    "extension": name.rsplit('.').next().unwrap_or_default(),
-                    "size_bytes": file.size_bytes,
-                })
-                .to_string(),
-            ),
-        });
+        // The `File` entity and `<directory> CONTAINS <file>` are **not** emitted here. Until
+        // Slice 5d-i they were, so that T7 stayed a total function of the source path; they are
+        // now `fs-structural` / `FILESYSTEM_OBSERVED`, because "`docs/` contains `ROADMAP.md`" is
+        // a filesystem fact whoever asks. T7 stayed total by widening the allowed set to exactly
+        // two values keyed on extractor id — see the module header. The occurrence stays: its
+        // span is the document's line count, which only reading the file produces.
         builder.add_occurrence(&file_entity, rel_path, extraction.file_span, hash);
-
-        let parent_id = match &parent {
-            Some(parent) => ids::directory_id(project_id, parent),
-            None => repo_id.clone(),
-        };
-        builder.claim(
-            &parent_id,
-            Relation::Contains,
-            &file_entity,
-            Evidence::DOCUMENT,
-            rel_path,
-            Span::NONE,
-            hash,
-            serde_json::json!({ "child_kind": "file" }),
-        );
 
         let adr = &extraction.adr;
         builder.add_entity(EntityRecord {
@@ -1990,5 +2067,117 @@ mod tests {
         assert_eq!(ImportForm::ReExport.as_str(), "re-export");
         assert_eq!(ImportForm::Require.as_str(), "require");
         assert_eq!(ImportForm::DynamicLiteral.as_str(), "dynamic-literal");
+    }
+
+    fn fs_entry(rel_path: &str, kind: FileKind) -> FsEntry {
+        FsEntry {
+            rel_path: rel_path.to_string(),
+            kind,
+            size_bytes: 1,
+            content_hash: "h".to_string(),
+        }
+    }
+
+    /// **`fs-structural` never reads file bytes, proved by construction.**
+    ///
+    /// There is no repository here, no temporary directory, no file on disk and no source text
+    /// anywhere in this test — and the whole filesystem skeleton comes out anyway. That is the
+    /// proof: the builder's only input is `&[FsEntry]`, [`FsEntry`] has no field that can hold
+    /// file content, and a function that produces its complete output from metadata alone did not
+    /// consult anything else. The empirical companion —
+    /// `nerve-index/tests/documents.rs::fs_structural_carries_no_file_content` — indexes a real
+    /// tree and checks no document prose reaches any `fs-structural` column.
+    ///
+    /// This is what the amended THREAT-MODEL.md **T7** rests on: the filesystem extractor may
+    /// emit on document paths because it cannot carry document content.
+    #[test]
+    fn fs_graph_needs_no_file_on_disk() {
+        let entries = vec![
+            fs_entry("README.md", FileKind::Doc),
+            fs_entry("docs/decisions/ADR-0001.md", FileKind::Doc),
+            fs_entry("src/math.ts", FileKind::Code(Language::TypeScript)),
+        ];
+        let targets: BTreeSet<String> =
+            entries.iter().map(|entry| entry.rel_path.clone()).collect();
+
+        let batch = build_fs_graph("p", &entries, &targets);
+
+        // Every observation is the declared source type, and the declaration is enforced by the
+        // same call the pipeline makes.
+        batch
+            .verify_declared_source_types(fsstruct::EXTRACTOR_ID, &fsstruct::DECLARED_SOURCE_TYPES)
+            .expect("fs-structural emitted a source type it does not declare");
+        assert!(!batch.observations.is_empty());
+        for observation in &batch.observations {
+            assert_eq!(
+                observation.evidence_source_type,
+                EvidenceSourceType::FilesystemObserved
+            );
+            assert_eq!(observation.directness, Directness::Direct);
+            assert_eq!(observation.extractor_id, fsstruct::EXTRACTOR_ID);
+        }
+
+        // The repository, both intermediate directories, and one entity per file.
+        let kinds: Vec<EntityKind> = batch.entities.iter().map(|entity| entity.kind).collect();
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|k| **k == EntityKind::Repository)
+                .count(),
+            1
+        );
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|k| **k == EntityKind::Directory)
+                .count(),
+            3,
+            "docs, docs/decisions, src"
+        );
+        assert_eq!(kinds.iter().filter(|k| **k == EntityKind::File).count(), 3);
+
+        // Three directory-containment edges and three file-containment edges, and nothing else.
+        assert!(batch
+            .assertions
+            .iter()
+            .all(|assertion| assertion.relation == Relation::Contains));
+        assert_eq!(batch.assertions.len(), 6);
+
+        // No occurrence: a whole-file span's end line is the file's line count, which only
+        // reading the file produces. It stays with the extractor that read it.
+        assert!(batch.occurrences.is_empty());
+    }
+
+    /// A file outside the re-extraction set contributes no file-scoped row, while the directory
+    /// skeleton is still re-derived in full. That is what keeps a run proportional to the change.
+    #[test]
+    fn fs_graph_emits_file_rows_only_for_targets() {
+        let entries = vec![
+            fs_entry("src/changed.ts", FileKind::Code(Language::TypeScript)),
+            fs_entry("src/untouched.ts", FileKind::Code(Language::TypeScript)),
+        ];
+        let mut targets = BTreeSet::new();
+        targets.insert("src/changed.ts".to_string());
+
+        let batch = build_fs_graph("p", &entries, &targets);
+
+        assert_eq!(
+            batch
+                .entities
+                .iter()
+                .filter(|e| e.kind == EntityKind::File)
+                .count(),
+            1
+        );
+        assert_eq!(
+            batch
+                .entities
+                .iter()
+                .filter(|e| e.kind == EntityKind::Directory)
+                .count(),
+            1,
+            "the skeleton is re-derived from the whole tree, not from the targets"
+        );
+        assert_eq!(batch.assertions.len(), 2, "repo/src, and src/changed.ts");
     }
 }

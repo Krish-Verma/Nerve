@@ -116,7 +116,7 @@ fn re_indexing_is_idempotent() {
     assert_eq!(dump_json(&root), dump_before, "logical graph changed");
     assert_eq!(
         count(&conn, "extractor_run"),
-        runs_before + 3,
+        runs_before + 4,
         "extractor_run is a run log and grows by one row per extractor"
     );
 }
@@ -211,15 +211,31 @@ fn each_extractor_emits_only_its_own_relations() {
             .collect()
     };
 
+    // `CONTAINS` left `ts-js-structural` in Slice 5d-i. It is a directory-walk fact: no syntax
+    // tree states that a repository holds a directory, and claiming one did was false in any
+    // repository with no TypeScript in it.
+    assert_eq!(relations_of("fs-structural"), vec!["CONTAINS"]);
     assert_eq!(
         relations_of("ts-js-structural"),
-        vec!["CONTAINS", "DEFINES", "EXPORTS", "IMPORTS"]
+        vec!["DEFINES", "EXPORTS", "IMPORTS"]
     );
     assert_eq!(
         relations_of("ts-js-reference"),
         vec!["CALLS", "IMPLEMENTS", "REFERENCES"],
         "ts-basic has no extends clause"
     );
+}
+
+/// The v4 migration's pinned literals still name the extractor that exists.
+///
+/// `nerve-store` is upstream of `nerve-index` and cannot import these constants, so the migration
+/// spells them out. That is correct — a migration must mean the same thing forever — but it means
+/// nothing else would notice if the extractor were renamed, leaving every upgraded database
+/// attributing filesystem evidence to an extractor that no longer runs.
+#[test]
+fn the_v4_migration_names_the_extractor_that_exists() {
+    assert_eq!(nerve_index::FILESYSTEM_EXTRACTOR_ID, "fs-structural");
+    assert_eq!(nerve_index::FILESYSTEM_EXTRACTOR_VERSION, "1.0.0");
 }
 
 /// ADR-0003: an edge produced by resolution says `AST_RESOLVED`; one the tree literally states
@@ -236,7 +252,23 @@ fn evidence_source_types_distinguish_read_from_resolved() {
         .unwrap()
         .map(|row| row.unwrap())
         .collect();
-    assert_eq!(types, vec!["AST_DIRECT", "AST_RESOLVED"]);
+    assert_eq!(
+        types,
+        vec!["AST_DIRECT", "AST_RESOLVED", "FILESYSTEM_OBSERVED"]
+    );
+
+    // The label is not decorative: no filesystem claim may say a syntax tree stated it, and no
+    // syntax-tree claim may hide behind the filesystem.
+    let misattributed: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM observation
+              WHERE (evidence_source_type = 'FILESYSTEM_OBSERVED')
+                 != (extractor_id = 'fs-structural')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(misattributed, 0);
 
     let mut stmt = conn
         .prepare("SELECT DISTINCT directness FROM observation ORDER BY directness")
@@ -279,6 +311,9 @@ fn evidence_source_types_distinguish_read_from_resolved() {
 /// `md-structural` runs even though `ts-basic` holds no documents: the row says Nerve looked and
 /// found none, which is a fact. A row that appeared only when a document existed would make its
 /// absence ambiguous between "no documents" and "documents were never scanned".
+///
+/// `fs-structural` is first, and the order is load-bearing rather than cosmetic: it owns the
+/// `File` entity that the two extractors which do read files hang their occurrences off.
 #[test]
 fn every_extractor_run_is_recorded_per_index() {
     let (_dir, root) = indexed_fixture();
@@ -292,6 +327,7 @@ fn every_extractor_run_is_recorded_per_index() {
     assert_eq!(
         runs,
         vec![
+            ("fs-structural".to_string(), "1.0.0".to_string()),
             ("ts-js-structural".to_string(), "1.1.0".to_string()),
             ("ts-js-reference".to_string(), "1.0.0".to_string()),
             ("md-structural".to_string(), "1.1.0".to_string()),
@@ -310,6 +346,16 @@ fn every_extractor_run_is_recorded_per_index() {
             .files_processed,
         0,
         "ts-basic has no documents"
+    );
+    assert_eq!(
+        report
+            .runs
+            .iter()
+            .find(|run| run.extractor_id == "fs-structural")
+            .unwrap()
+            .files_processed,
+        8,
+        "the walk found every file, documents included"
     );
     assert!(report.is_healthy());
 }
@@ -498,13 +544,16 @@ fn derived_state_carries_the_source_type_mask() {
         .unwrap()
         .map(|row| row.unwrap())
         .collect();
-    // Bit 0 is AST_DIRECT, bit 1 is AST_RESOLVED. No assertion has both yet: one extractor
-    // observes each relation, and each relation is either resolved or not.
+    // Bit 0 is AST_DIRECT, bit 1 is AST_RESOLVED, bit 11 is FILESYSTEM_OBSERVED. No assertion has
+    // two bits yet: one extractor observes each relation, and each relation is either resolved or
+    // not. The mask is regenerated from `EvidenceSourceType::ALL` by the derivation, never
+    // hand-patched, which is why appending the variant is the whole of the vocabulary change.
     assert_eq!(
         rows,
         vec![
             (1, "AST_DIRECT".to_string()),
-            (2, "AST_RESOLVED".to_string())
+            (2, "AST_RESOLVED".to_string()),
+            (2048, "FILESYSTEM_OBSERVED".to_string()),
         ]
     );
 }

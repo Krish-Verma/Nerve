@@ -278,11 +278,13 @@ pub enum EvidenceSourceType {
     HumanConfirmed,
     /// A language model suggested it.
     LlmDerived,
+    /// The filesystem contains this. Derived from a directory walk, never from file content.
+    FilesystemObserved,
 }
 
 impl EvidenceSourceType {
     /// Every source type, in declaration order. Index in this array is the ordinal.
-    pub const ALL: [EvidenceSourceType; 11] = [
+    pub const ALL: [EvidenceSourceType; 12] = [
         EvidenceSourceType::AstDirect,
         EvidenceSourceType::AstResolved,
         EvidenceSourceType::AstHeuristic,
@@ -294,6 +296,12 @@ impl EvidenceSourceType {
         EvidenceSourceType::DocumentStated,
         EvidenceSourceType::HumanConfirmed,
         EvidenceSourceType::LlmDerived,
+        // Appended in Slice 5d-i. `ordinal()` is the index into this array and `mask_bit()` is
+        // `1 << ordinal`, so `assertion_state.source_type_mask` — a **stored** integer — is a
+        // function of these positions. Appending leaves every existing ordinal and every stored
+        // bit correct; inserting anywhere else silently reinterprets every mask already on disk.
+        // Append only. `evidence_source_type_ordinals_and_masks_are_stable` pins all of them.
+        EvidenceSourceType::FilesystemObserved,
     ];
 
     /// Canonical database name.
@@ -310,6 +318,7 @@ impl EvidenceSourceType {
             EvidenceSourceType::DocumentStated => "DOCUMENT_STATED",
             EvidenceSourceType::HumanConfirmed => "HUMAN_CONFIRMED",
             EvidenceSourceType::LlmDerived => "LLM_DERIVED",
+            EvidenceSourceType::FilesystemObserved => "FILESYSTEM_OBSERVED",
         }
     }
 
@@ -499,17 +508,66 @@ mod tests {
         }
     }
 
+    /// Every ordinal and every mask bit, pinned one by one.
+    ///
+    /// `assertion_state.source_type_mask` is a **stored** integer whose bit layout is
+    /// `1 << ordinal`, and `ordinal` is a position in [`EvidenceSourceType::ALL`]. A variant
+    /// inserted anywhere but the end therefore reinterprets every mask in every database already
+    /// on disk, silently and unrecoverably. Spot-checking the first and last variant would not
+    /// catch an insertion in the middle, so each one is listed: this test is the thing that makes
+    /// such an insertion fail loudly at the point it is written.
     #[test]
     fn evidence_source_type_ordinals_and_masks_are_stable() {
-        assert_eq!(EvidenceSourceType::AstDirect.ordinal(), 0);
-        assert_eq!(EvidenceSourceType::AstDirect.mask_bit(), 1);
-        assert_eq!(EvidenceSourceType::LlmDerived.ordinal(), 10);
-        assert_eq!(EvidenceSourceType::LlmDerived.mask_bit(), 1024);
-        for source in EvidenceSourceType::ALL {
+        let pinned: [(EvidenceSourceType, u32, i64, &str); 12] = [
+            (EvidenceSourceType::AstDirect, 0, 1, "AST_DIRECT"),
+            (EvidenceSourceType::AstResolved, 1, 2, "AST_RESOLVED"),
+            (EvidenceSourceType::AstHeuristic, 2, 4, "AST_HEURISTIC"),
+            (EvidenceSourceType::TypeResolved, 3, 8, "TYPE_RESOLVED"),
+            (EvidenceSourceType::FrameworkRule, 4, 16, "FRAMEWORK_RULE"),
+            (EvidenceSourceType::TestCoverage, 5, 32, "TEST_COVERAGE"),
+            (EvidenceSourceType::TestCallTrace, 6, 64, "TEST_CALL_TRACE"),
+            (
+                EvidenceSourceType::RuntimeCallTrace,
+                7,
+                128,
+                "RUNTIME_CALL_TRACE",
+            ),
+            (
+                EvidenceSourceType::DocumentStated,
+                8,
+                256,
+                "DOCUMENT_STATED",
+            ),
+            (
+                EvidenceSourceType::HumanConfirmed,
+                9,
+                512,
+                "HUMAN_CONFIRMED",
+            ),
+            (EvidenceSourceType::LlmDerived, 10, 1024, "LLM_DERIVED"),
+            (
+                EvidenceSourceType::FilesystemObserved,
+                11,
+                2048,
+                "FILESYSTEM_OBSERVED",
+            ),
+        ];
+
+        assert_eq!(
+            pinned.len(),
+            EvidenceSourceType::ALL.len(),
+            "a source type was added without pinning its ordinal and mask bit"
+        );
+        for (index, (source, ordinal, mask, name)) in pinned.into_iter().enumerate() {
             assert_eq!(
-                source.as_str().parse::<EvidenceSourceType>().unwrap(),
-                source
+                EvidenceSourceType::ALL[index],
+                source,
+                "{name} moved position in ALL"
             );
+            assert_eq!(source.ordinal(), ordinal, "{name} ordinal moved");
+            assert_eq!(source.mask_bit(), mask, "{name} mask bit moved");
+            assert_eq!(source.as_str(), name, "{name} canonical name changed");
+            assert_eq!(name.parse::<EvidenceSourceType>().unwrap(), source);
         }
     }
 
