@@ -105,6 +105,36 @@ enum Command {
         #[arg(long, default_value = ".")]
         path: PathBuf,
     },
+    /// Report symbols no test is known to touch.
+    ///
+    /// Answers the question the coverage evidence exists for, and distinguishes the two things
+    /// a naive implementation would render identically: a repository where coverage was
+    /// ingested and this symbol has none, and a repository where **no coverage was ever
+    /// ingested at all**. The second is not "your tests cover nothing", it is "Nerve has not
+    /// been told anything about your tests", and it is reported as unanswerable rather than as
+    /// a list of every symbol you have.
+    ///
+    /// Finding gaps is not a failure, so this exits 0 whatever it finds. CI-failing behaviour
+    /// belongs to `nerve check`.
+    Gaps {
+        /// Repository root. Defaults to the current directory.
+        path: Option<PathBuf>,
+        /// Repository root. Equivalent to the positional form.
+        #[arg(long = "path", value_name = "PATH")]
+        path_flag: Option<PathBuf>,
+        /// Restrict to this repository-relative file, or to anything under this directory.
+        #[arg(long, value_name = "PATH")]
+        under: Option<String>,
+        /// Restrict to one symbol kind.
+        #[arg(long)]
+        kind: Option<String>,
+        /// Also list partially covered symbols. They are counted either way, never as gaps.
+        #[arg(long)]
+        include_partial: bool,
+        /// Maximum rows listed. The tallies stay exact.
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
     /// Find how two entities are connected.
     Path {
         /// Source selector: entity id, rel/path.ts, rel/path.ts#Name, or a unique name.
@@ -284,6 +314,26 @@ fn main() {
             limit,
             path,
         } => run_search(&output, &path, &query, kind.as_deref(), limit),
+        Command::Gaps {
+            path,
+            path_flag,
+            under,
+            kind,
+            include_partial,
+            limit,
+        } => {
+            let arguments = GapArguments {
+                under,
+                kind,
+                include_partial,
+                limit,
+            };
+            run_gaps(
+                &output,
+                &path.or(path_flag).unwrap_or_else(|| PathBuf::from(".")),
+                arguments,
+            )
+        }
         Command::Path {
             from,
             to,
@@ -910,6 +960,232 @@ fn run_search(output: &Output, path: &Path, query: &str, kind: Option<&str>, lim
             "start_line": hit.start_line,
             "end_line": hit.end_line,
             "score": hit.score,
+        })).collect::<Vec<_>>(),
+    }));
+
+    exit::SUCCESS
+}
+
+// ---- gaps ------------------------------------------------------------------------------------
+
+/// Everything `nerve gaps` was asked for, minus the repository.
+struct GapArguments {
+    under: Option<String>,
+    kind: Option<String>,
+    include_partial: bool,
+    limit: usize,
+}
+
+/// The symbol kinds a coverage gap can be about, for the `--kind` refusal message.
+fn symbol_kind_names() -> String {
+    nerve_core::EntityKind::ALL
+        .iter()
+        .filter(|kind| kind.is_symbol())
+        .map(|kind| kind.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn coverage_run_json(run: &nerve_store::CoverageRunRef) -> serde_json::Value {
+    json!({
+        "entity_id": run.entity_id,
+        "report_path": run.report_path,
+        "report_content_hash": run.report_content_hash,
+        "freshness": run.freshness.map(|freshness| freshness.as_str()),
+        "source_files_in_report": run.source_files_in_report,
+    })
+}
+
+/// Report symbols no test is known to touch.
+///
+/// Exit 0 in every successful case, gaps or none. Reporting a fact is not a failure, and a
+/// command that exited non-zero because a repository has untested code would be unusable as the
+/// reporting tool it is; `nerve check` is where CI-failing behaviour belongs. The **unanswerable**
+/// case exits 0 too, because there is nothing wrong with the index — but it says so in the first
+/// line of human output and in `answerable` in `--json`, and its tallies are `null` rather than
+/// zero, so a script cannot read "no coverage was ever ingested" as "no gaps".
+fn run_gaps(output: &Output, path: &Path, arguments: GapArguments) -> i32 {
+    if arguments.limit == 0 {
+        return output.failure("gaps", exit::USAGE, "--limit must be at least 1");
+    }
+    let kind = match &arguments.kind {
+        None => None,
+        Some(name) => match name.parse::<nerve_core::EntityKind>() {
+            Ok(kind) if kind.is_symbol() => Some(kind),
+            _ => {
+                return output.failure(
+                    "gaps",
+                    exit::USAGE,
+                    &format!(
+                        "unknown --kind {name:?}; a coverage gap is about a symbol, so expected \
+                         one of: {}",
+                        symbol_kind_names()
+                    ),
+                )
+            }
+        },
+    };
+
+    let OpenIndex { root, conn, .. } = match open_existing(path) {
+        Ok(opened) => opened,
+        Err(message) => return output.failure("gaps", exit::NO_INDEX, &message),
+    };
+    // Freshness is computed by re-reading the repository, so the reader is built from the
+    // repository root and enforces the Slice 1 path rules on every path the database supplies.
+    let prober = match nerve_index::RepositoryProber::new(&root) {
+        Ok(prober) => prober,
+        Err(err) => return output.failure("gaps", error_exit_code(&err), &err.to_string()),
+    };
+
+    let query = nerve_store::GapQuery {
+        path_prefix: arguments.under.clone(),
+        kind,
+        include_partial: arguments.include_partial,
+        limit: arguments.limit,
+    };
+    let report = match nerve_store::gaps(&conn, &query, &prober) {
+        Ok(report) => report,
+        Err(err) => return output.failure("gaps", exit::INTERNAL, &err.to_string()),
+    };
+
+    if report.coverage.is_answerable() {
+        output.line(format!("Coverage gaps in {}", root.display()));
+        output.line(format!(
+            "  coverage       present · {} run(s) · {} file(s) re-hashed",
+            report.runs.len(),
+            report.files_probed
+        ));
+    } else {
+        output.line(format!("No coverage evidence in {}", root.display()));
+        output.line("  coverage       absent · the gap question is unanswerable here");
+    }
+    for run in &report.runs {
+        output.line(format!(
+            "    {:<28} {:<12} {} source file(s) in report",
+            run.report_path.as_deref().unwrap_or("(no occurrence)"),
+            run.freshness
+                .map(|freshness| freshness.as_str())
+                .unwrap_or("-"),
+            run.source_files_in_report
+                .map(|count| count.to_string())
+                .unwrap_or_else(|| "?".to_string())
+        ));
+    }
+    output.line(format!(
+        "  symbols        {} in scope",
+        report.symbols_in_scope
+    ));
+    if let Some(under) = &arguments.under {
+        output.line(format!("  under          {under}"));
+    }
+    if let Some(kind) = kind {
+        output.line(format!("  kind           {}", kind.as_str()));
+    }
+
+    match &report.totals {
+        Some(totals) => {
+            output.line(format!("  covered        {}", totals.covered));
+            // `partial` is a recorded value and is never rounded into either neighbour.
+            output.line(format!("  partial        {}", totals.partial));
+            output.line(format!(
+                "  uncovered      {}  (a run measured the file; no line in the symbol ran)",
+                totals.uncovered
+            ));
+            output.line(format!(
+                "  unmeasured     {}  (no coverage evidence names the file at all)",
+                totals.unmeasured
+            ));
+            output.line(format!("  gaps           {}", totals.gaps()));
+            output.line(format!(
+                "  stale          {} symbol(s) over {} file(s) whose bytes have moved since \
+                 the coverage was taken",
+                totals.stale, totals.stale_files
+            ));
+            output.line(format!(
+                "  measured       {} file(s) some coverage observation names",
+                totals.measured_files
+            ));
+            output.line(String::new());
+
+            if report.results.is_empty() {
+                output.line("Every symbol in scope is covered by the ingested coverage.");
+            }
+            for row in &report.results {
+                let lines = match (row.covered_lines, row.instrumented_lines) {
+                    (Some(covered), Some(instrumented)) => {
+                        format!("{covered}/{instrumented} lines")
+                    }
+                    _ => "-".to_string(),
+                };
+                output.line(format!(
+                    "{:<11} {:<10} {:<34} {:<24} {:<12} {}",
+                    row.state.as_str(),
+                    row.entity.kind,
+                    row.entity.qualified_name(),
+                    row.entity.location(),
+                    row.coverage_freshness
+                        .map(|freshness| freshness.as_str())
+                        .unwrap_or("-"),
+                    lines
+                ));
+            }
+            if report.truncated {
+                output.line(String::new());
+                output.line(format!(
+                    "Listed {} of {} matching symbol(s); raise --limit to see the rest. The \
+                     tallies above are exact.",
+                    report.results.len(),
+                    report.results_total
+                ));
+            }
+        }
+        None => {
+            output.line(String::new());
+            output.line(format!(
+                "  {} symbol(s) are in scope and nothing is known about any of them.",
+                report.symbols_in_scope
+            ));
+            output.line("  This is not \"no test covers your code\" — it is \"Nerve has not been");
+            output.line("  told what your tests cover\". Those are different answers, and listing");
+            output.line("  every symbol as a gap would report the second as the first.");
+            output.line("  Run `nerve coverage <lcov-report>` first, then ask again.");
+        }
+    }
+
+    output.object(json!({
+        "command": "gaps",
+        "ok": true,
+        "exit_code": exit::SUCCESS,
+        "root": root.display().to_string(),
+        "coverage": report.coverage.as_str(),
+        "answerable": report.coverage.is_answerable(),
+        "under": arguments.under,
+        "kind": kind.map(|kind| kind.as_str()),
+        "include_partial": query.include_partial,
+        "limit": report.limit,
+        "runs": report.runs.iter().map(coverage_run_json).collect::<Vec<_>>(),
+        "symbols_in_scope": report.symbols_in_scope,
+        "totals": report.totals.as_ref().map(|totals| json!({
+            "covered": totals.covered,
+            "partial": totals.partial,
+            "uncovered": totals.uncovered,
+            "unmeasured": totals.unmeasured,
+            "gaps": totals.gaps(),
+            "stale": totals.stale,
+            "measured_files": totals.measured_files,
+            "stale_files": totals.stale_files,
+        })),
+        "count": report.results.len(),
+        "results_total": report.results_total,
+        "truncated": report.truncated,
+        "files_probed": report.files_probed,
+        "results": report.results.iter().map(|row| json!({
+            "entity": entity_json(&row.entity),
+            "state": row.state.as_str(),
+            "coverage_freshness": row.coverage_freshness.map(|freshness| freshness.as_str()),
+            "covered_lines": row.covered_lines,
+            "instrumented_lines": row.instrumented_lines,
+            "covered_by": row.covered_by,
         })).collect::<Vec<_>>(),
     }));
 

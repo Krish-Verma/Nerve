@@ -10,8 +10,9 @@
 use serde_json::{json, Value};
 
 use nerve_store::{
-    AssertionEvidence, EntityRef, NeighbourEdge, NeighbourhoodReport, ObservationEvidence,
-    OccurrenceRow, PathHop, PathReport, SearchHit, WhyReport,
+    AssertionEvidence, CoverageRunRef, EntityRef, GapReport, GapRow, NeighbourEdge,
+    NeighbourhoodReport, ObservationEvidence, OccurrenceRow, PathHop, PathReport, SearchHit,
+    WhyReport,
 };
 
 /// An entity, with its qualified name and first location resolved.
@@ -173,6 +174,59 @@ pub fn why_report(report: &WhyReport) -> Value {
         "files_probed": report.files_probed,
         "count": report.assertions.len(),
         "assertions": report.assertions.iter().map(assertion).collect::<Vec<_>>(),
+    })
+}
+
+/// One coverage run a gap answer is relative to.
+pub fn coverage_run(run: &CoverageRunRef) -> Value {
+    json!({
+        "entity_id": run.entity_id,
+        "report_path": run.report_path,
+        "report_content_hash": run.report_content_hash,
+        "freshness": run.freshness.map(|freshness| freshness.as_str()),
+        "source_files_in_report": run.source_files_in_report,
+    })
+}
+
+/// One symbol and what coverage says about it.
+pub fn gap_row(row: &GapRow) -> Value {
+    json!({
+        "entity": entity(&row.entity),
+        "state": row.state.as_str(),
+        "coverage_freshness": row.coverage_freshness.map(|freshness| freshness.as_str()),
+        "covered_lines": row.covered_lines,
+        "instrumented_lines": row.instrumented_lines,
+        "covered_by": row.covered_by,
+    })
+}
+
+/// The whole gap answer, including the state that says it cannot be answered.
+///
+/// `totals` is `null` — not a row of zeroes — when no coverage was ever ingested. A tally that
+/// could not be computed must not be served as a measurement of nothing, because a client
+/// reading `uncovered: 0` would conclude the opposite of the truth.
+pub fn gap_report(report: &GapReport) -> Value {
+    json!({
+        "coverage": report.coverage.as_str(),
+        "answerable": report.coverage.is_answerable(),
+        "runs": report.runs.iter().map(coverage_run).collect::<Vec<_>>(),
+        "symbols_in_scope": report.symbols_in_scope,
+        "totals": report.totals.as_ref().map(|totals| json!({
+            "covered": totals.covered,
+            "partial": totals.partial,
+            "uncovered": totals.uncovered,
+            "unmeasured": totals.unmeasured,
+            "gaps": totals.gaps(),
+            "stale": totals.stale,
+            "measured_files": totals.measured_files,
+            "stale_files": totals.stale_files,
+        })),
+        "limit": report.limit,
+        "count": report.results.len(),
+        "results_total": report.results_total,
+        "truncated": report.truncated,
+        "files_probed": report.files_probed,
+        "results": report.results.iter().map(gap_row).collect::<Vec<_>>(),
     })
 }
 

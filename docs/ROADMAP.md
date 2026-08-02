@@ -20,7 +20,8 @@ Authoritative slice list. Update the status column at the end of every slice.
 | 5d-iii | UI vocabulary catch-up — glosses driven from the Rust vocabularies, asset re-embed, screenshots | ✅ Complete (2026-08-01) — 610 tests; a new test reads the TypeScript gloss maps and fails when a Rust vocabulary gains a member, so the two cannot drift again; **found 120 real sites rendering fallback text**, and a gloss for a status the backend cannot emit |
 | 6a | Coverage **vocabulary + LCOV parser** — `CoverageRun`, `COVERS`, ADR-0008 | ✅ Complete (2026-08-01) — 648 tests; the gating question answered empirically: **LCOV is aggregate**, so the endpoint is a coverage run and `TEST_COVERS_SYMBOL` is refused by the vocabulary |
 | 6b | Coverage **ingestion** — `nerve coverage`, line→symbol mapping, freshness, T9 attack tests, equivalence | ✅ Complete (2026-08-02) — 692 tests; T9 verified by attack; **zero call-shaped relations asserted over `Relation::ALL`**; found that coverage surviving a re-index required splitting the pipeline's withdrawal in two, and that a file changed since indexing must be refused rather than mapped through stale extents |
-| 7a | `nerve gaps` — the coverage-gap question, CLI + API | ⬜ Not started |
+| 7a | `nerve gaps` — the coverage-gap question, CLI + API | ✅ Complete (2026-08-02) — 729 tests; **"no coverage ingested" is a distinct, unanswerable state with `totals: null`**, not a list of every symbol; four states incl. `unmeasured`; CLI and API asserted byte-equal; **fixed a harness defect where a failing server test hung the whole suite instead of failing** |
+| 7a-ii | **Corrective** — the word "Gaps" now means two different things across surfaces | ⬜ Not started |
 | 7b | `nerve impact` — reverse dependency closure with evidence | ⬜ Not started |
 | 7c | `nerve check` + `nerve doctor` | ⬜ Not started |
 | 8 | MCP — one default investigation tool | ⬜ Not started |

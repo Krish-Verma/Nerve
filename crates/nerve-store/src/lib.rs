@@ -21,6 +21,7 @@ pub mod dump;
 pub mod error;
 pub mod facts;
 pub mod freshness;
+pub mod gaps;
 pub mod graph;
 pub mod prune;
 pub mod query;
@@ -34,6 +35,9 @@ pub use dump::canonical_dump;
 pub use error::{Result, StoreError};
 pub use facts::{delete_module_facts, load_module_facts, upsert_module_facts, ModuleFactsRow};
 pub use freshness::{FileProbe, FileProber, Freshness, FreshnessCache};
+pub use gaps::{
+    gaps, CoverageEvidence, CoverageRunRef, GapQuery, GapReport, GapRow, GapTotals, SymbolCoverage,
+};
 pub use graph::{
     explain, find_paths, neighbourhood, AssertionEvidence, Direction, EdgeDirection, GraphPath,
     NeighbourEdge, NeighbourNode, NeighbourhoodQuery, NeighbourhoodReport, ObservationEvidence,

@@ -155,6 +155,7 @@ fn route(target: &Target, ctx: &Context<'_>) -> Outcome {
         "/api/path" => api::path(ctx, target),
         "/api/why" => api::why(ctx, target),
         "/api/source" => api::source(ctx, target),
+        "/api/gaps" => api::gaps(ctx, target),
         "/api/unresolved" => api::unresolved(ctx, target),
         "/api/partial-parses" => api::partial_parses(ctx),
         other => {
@@ -193,7 +194,7 @@ fn wrap(value: serde_json::Value) -> serde_json::Value {
 }
 
 /// The routes this build serves, in the order a client would meet them.
-pub const ROUTES: [&str; 9] = [
+pub const ROUTES: [&str; 10] = [
     "/api/overview",
     "/api/search",
     "/api/entity",
@@ -201,6 +202,7 @@ pub const ROUTES: [&str; 9] = [
     "/api/path",
     "/api/why",
     "/api/source",
+    "/api/gaps",
     "/api/unresolved",
     "/api/partial-parses",
 ];

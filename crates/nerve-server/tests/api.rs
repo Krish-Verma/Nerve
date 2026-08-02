@@ -528,3 +528,159 @@ fn concurrent_requests_are_answered_consistently() {
         assert_eq!(handle.join().unwrap(), expected);
     }
 }
+
+// ---- gaps ------------------------------------------------------------------------------------
+
+/// A served copy of `ts-coverage` with its report ingested.
+fn served_with_coverage() -> (tempfile::TempDir, std::path::PathBuf, common::Session) {
+    let (dir, root) = common::fixture_copy("ts-coverage");
+    common::index(&root);
+    nerve_index::ingest_coverage(&root, std::path::Path::new("coverage/lcov.info")).unwrap();
+    let session = common::Session::start(&root);
+    (dir, root, session)
+}
+
+/// The endpoint's whole reason to exist: it says which of four things it knows.
+#[test]
+fn gaps_reports_every_state_and_names_the_run_it_is_relative_to() {
+    let (_dir, _root, session) = served_with_coverage();
+    let value = session.json("/api/gaps");
+
+    assert_eq!(value["coverage"], "present");
+    assert_eq!(value["answerable"], true);
+    assert_eq!(value["symbols_in_scope"], 8);
+    assert_eq!(value["totals"]["covered"], 4);
+    assert_eq!(value["totals"]["partial"], 2);
+    assert_eq!(value["totals"]["uncovered"], 2);
+    assert_eq!(value["totals"]["unmeasured"], 0);
+    assert_eq!(value["totals"]["gaps"], 2);
+    assert_eq!(value["count"], 2);
+    assert_eq!(value["truncated"], false);
+    assert_eq!(value["runs"][0]["report_path"], "coverage/lcov.info");
+    assert_eq!(value["runs"][0]["freshness"], "fresh");
+
+    let names: Vec<&str> = value["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["entity"]["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["neverRun", "Shape"]);
+    assert_eq!(value["results"][0]["state"], "uncovered");
+    assert_eq!(value["results"][0]["coverage_freshness"], "fresh");
+}
+
+/// `ts-resolution` has never had coverage ingested. The endpoint must not report its whole
+/// symbol table as a gap list — that would say "your tests cover nothing" when the truth is
+/// "Nerve has been told nothing about your tests".
+#[test]
+fn gaps_refuses_to_answer_where_no_coverage_was_ever_ingested() {
+    let (_dir, _root, session) = common::served();
+    let value = session.json("/api/gaps");
+
+    assert_eq!(value["coverage"], "absent");
+    assert_eq!(value["answerable"], false);
+    assert_eq!(value["totals"], serde_json::Value::Null);
+    assert_eq!(value["count"], 0);
+    assert_eq!(value["results"], serde_json::json!([]));
+    assert_eq!(value["runs"], serde_json::json!([]));
+    assert!(value["symbols_in_scope"].as_u64().unwrap() > 0);
+}
+
+/// Editing a covered file makes the gaps computed from it stale rather than quietly wrong.
+#[test]
+fn gaps_marks_answers_stale_when_the_covered_file_moves_on() {
+    let (_dir, root, session) = served_with_coverage();
+    common::write(&root, "src/math.ts", "export const replaced = 1;\n");
+
+    let value = session.json("/api/gaps?include_partial=1");
+    assert_eq!(value["totals"]["stale_files"], 1);
+    let never_run = value["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["entity"]["name"] == "neverRun")
+        .expect("the gap survives the edit, visibly stale");
+    assert_eq!(never_run["coverage_freshness"], "stale");
+}
+
+/// Partial is a value, not a rounding. It is counted always and listed on request.
+#[test]
+fn gaps_surfaces_partial_without_calling_it_a_gap() {
+    let (_dir, _root, session) = served_with_coverage();
+
+    let default = session.json("/api/gaps");
+    assert!(default["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|row| row["state"] != "partial"));
+
+    let widened = session.json("/api/gaps?include_partial=1");
+    let partial: Vec<&str> = widened["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["state"] == "partial")
+        .map(|row| row["entity"]["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(partial, vec!["clamp", "perimeter"]);
+    assert_eq!(widened["include_partial"], true);
+}
+
+#[test]
+fn gaps_bounds_its_arguments_and_reports_what_the_cap_cut() {
+    let (_dir, _root, session) = served_with_coverage();
+
+    let capped = session.json("/api/gaps?limit=1");
+    assert_eq!(capped["count"], 1);
+    assert_eq!(capped["results_total"], 2);
+    assert_eq!(capped["truncated"], true);
+    assert_eq!(
+        capped["totals"]["gaps"], 2,
+        "the tally is exact whatever the cap cuts"
+    );
+
+    let clamped = session.json("/api/gaps?limit=100000");
+    assert_eq!(clamped["limit"], nerve_server::api::MAX_GAPS_LIMIT as u64);
+
+    let bad = session.get("/api/gaps?limit=abc");
+    assert_eq!(bad.status, 400);
+
+    // A coverage gap is about a symbol; a non-symbol kind is refused rather than answered with
+    // an empty list that would read as "nothing of that kind is uncovered".
+    let wrong_kind = session.get("/api/gaps?kind=file");
+    assert_eq!(wrong_kind.status, 400);
+    let body = wrong_kind.parse_json();
+    assert_eq!(body["error"]["code"], "unknown_kind");
+    let allowed = body["error"]["detail"]["allowed"].as_array().unwrap();
+    assert!(allowed.iter().any(|kind| kind == "function"));
+    assert!(!allowed.iter().any(|kind| kind == "file"));
+}
+
+#[test]
+fn gaps_scopes_by_path_without_interpreting_it_as_a_pattern() {
+    let (_dir, _root, session) = served_with_coverage();
+
+    let scoped = session.json("/api/gaps?under=src%2Fshapes.ts");
+    assert_eq!(scoped["under"], "src/shapes.ts");
+    assert_eq!(scoped["symbols_in_scope"], 5);
+    assert_eq!(scoped["count"], 1);
+    assert_eq!(scoped["results"][0]["entity"]["name"], "Shape");
+
+    // `%` and `_` are text here, never SQL wildcards.
+    assert_eq!(
+        session.json("/api/gaps?under=src%2F%25")["symbols_in_scope"],
+        0
+    );
+    assert_eq!(session.json("/api/gaps?under=%25")["symbols_in_scope"], 0);
+}
+
+#[test]
+fn gaps_is_deterministic() {
+    let (_dir, _root, session) = served_with_coverage();
+    let first = session.json("/api/gaps?include_partial=1");
+    for _ in 0..5 {
+        assert_eq!(session.json("/api/gaps?include_partial=1"), first);
+    }
+}

@@ -34,6 +34,8 @@ pub const MAX_PATH_DEPTH: usize = 32;
 pub const MAX_PATH_LIMIT: usize = 25;
 /// Largest page of unresolved entities.
 pub const MAX_UNRESOLVED_LIMIT: usize = 500;
+/// Largest page of coverage-gap rows. The tallies are exact whatever this cuts.
+pub const MAX_GAPS_LIMIT: usize = 500;
 /// How many files the overview will re-hash before it reports a partial sweep.
 pub const FRESHNESS_PROBE_CAP: usize = 5_000;
 
@@ -435,6 +437,55 @@ pub fn unresolved(ctx: &Context<'_>, target: &Target) -> Answer {
             "referencing_assertions": row.referencing_assertions,
         })).collect::<Vec<_>>(),
     }))
+}
+
+/// Which symbols no test is known to touch — and whether that question can be answered here.
+///
+/// The whole point of the endpoint is the state it carries. A repository that never ingested
+/// coverage answers `coverage: "absent"`, `answerable: false`, `totals: null` and an empty row
+/// list, rather than every symbol it has. Serving the naive answer would tell a client "your
+/// tests cover nothing" when the truth is "Nerve has not been told anything about your tests".
+///
+/// The query itself lives in `nerve-store` and is the same one `nerve gaps` calls, so the two
+/// surfaces cannot drift into different answers (ARCHITECTURE.md invariant 3).
+pub fn gaps(ctx: &Context<'_>, target: &Target) -> Answer {
+    let kind = match target.get("kind") {
+        None => None,
+        Some(name) => match name.parse::<EntityKind>() {
+            Ok(kind) if kind.is_symbol() => Some(kind),
+            _ => {
+                return Err(ApiError::with_detail(
+                    400,
+                    "unknown_kind",
+                    format!("unknown symbol kind {name:?}"),
+                    json!({
+                        "kind": name,
+                        "allowed": EntityKind::ALL.iter()
+                            .filter(|kind| kind.is_symbol())
+                            .map(|kind| kind.as_str())
+                            .collect::<Vec<_>>(),
+                    }),
+                ))
+            }
+        },
+    };
+    let query = nerve_store::GapQuery {
+        path_prefix: target.get("under").map(str::to_string),
+        kind,
+        include_partial: target.flag("include_partial"),
+        limit: target
+            .bounded("limit", 100, MAX_GAPS_LIMIT)
+            .map_err(ApiError::bad_request)?,
+    };
+    // Freshness is computed by re-reading the repository through the prober, which enforces the
+    // path rules on every path the database hands it.
+    let report = nerve_store::gaps(ctx.conn, &query, ctx.prober).map_err(ApiError::internal)?;
+
+    let mut value = shapes::gap_report(&report);
+    value["under"] = json!(query.path_prefix);
+    value["kind"] = json!(kind.map(|kind| kind.as_str()));
+    value["include_partial"] = json!(query.include_partial);
+    Ok(value)
 }
 
 /// Which files parsed with errors, so what came out of them can be read with suspicion.

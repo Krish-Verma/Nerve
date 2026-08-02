@@ -1218,3 +1218,415 @@ fn a_partly_refused_report_exits_three() {
     // The refused path is counted and never echoed.
     assert!(!serde_json::to_string(&value).unwrap().contains("passwd"));
 }
+
+// ---- gaps -------------------------------------------------------------------------------------
+
+/// Copy, index and ingest `fixtures/ts-coverage`'s report in one step.
+fn covered_fixture() -> (tempfile::TempDir, PathBuf) {
+    let (dir, root) = indexed_fixture("ts-coverage");
+    assert_eq!(
+        code(&run(&[
+            "coverage",
+            "coverage/lcov.info",
+            root.to_str().unwrap()
+        ])),
+        0
+    );
+    (dir, root)
+}
+
+/// The failure the whole command exists to avoid.
+///
+/// `fixtures/ts-basic` has 24 symbols and no coverage. The naive implementation reports 24 gaps
+/// and reads as "your tests cover nothing". The truth is that Nerve has been told nothing, and
+/// the command must say that instead — with `totals` **null** rather than a row of zeroes, so a
+/// script cannot read the absence of evidence as evidence of coverage.
+#[test]
+fn a_repository_with_no_coverage_says_the_question_is_unanswerable() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    let root = root.to_str().unwrap();
+
+    let plain = run(&["gaps", root]);
+    assert_eq!(code(&plain), 0, "reporting a fact is not a failure");
+    let rendered = stdout(&plain);
+    assert!(rendered.contains("No coverage evidence in"), "{rendered}");
+    assert!(rendered.contains("unanswerable"), "{rendered}");
+    assert!(rendered.contains("nerve coverage"), "{rendered}");
+
+    let value = json(&run(&["gaps", root, "--json"]));
+    assert_eq!(value["coverage"], "absent");
+    assert_eq!(value["answerable"], false);
+    assert_eq!(value["totals"], serde_json::Value::Null);
+    assert_eq!(value["count"], 0);
+    assert_eq!(value["results_total"], 0);
+    assert_eq!(value["results"], serde_json::json!([]));
+    assert_eq!(value["runs"], serde_json::json!([]));
+    assert!(
+        value["symbols_in_scope"].as_u64().unwrap() > 0,
+        "the symbols are still counted, so the message can say how much is unanswered"
+    );
+}
+
+/// With coverage ingested, every one of the four states is reported and none is rounded away.
+#[test]
+fn an_ingested_report_makes_the_gap_question_answerable() {
+    let (_dir, root) = covered_fixture();
+    let root = root.to_str().unwrap();
+
+    let plain = run(&["gaps", root]);
+    assert_eq!(code(&plain), 0, "gaps found is not a failure");
+    let rendered = stdout(&plain);
+    assert!(rendered.contains("Coverage gaps in"), "{rendered}");
+    assert!(rendered.contains("neverRun"), "{rendered}");
+
+    let value = json(&run(&["gaps", root, "--json"]));
+    require_keys(
+        &value,
+        &[
+            "command",
+            "ok",
+            "exit_code",
+            "root",
+            "coverage",
+            "answerable",
+            "under",
+            "kind",
+            "include_partial",
+            "limit",
+            "runs",
+            "symbols_in_scope",
+            "totals",
+            "count",
+            "results_total",
+            "truncated",
+            "files_probed",
+            "results",
+        ],
+    );
+    assert_eq!(value["coverage"], "present");
+    assert_eq!(value["answerable"], true);
+    assert_eq!(value["exit_code"], 0);
+
+    // `fixtures/ts-coverage/expected.json` is the hand-read ground truth: 8 symbols, 6 edges,
+    // 4 fully covered, 2 partial, and exactly two symbols with no edge at all.
+    let totals = &value["totals"];
+    assert_eq!(value["symbols_in_scope"], 8);
+    assert_eq!(totals["covered"], 4);
+    assert_eq!(totals["partial"], 2);
+    assert_eq!(totals["uncovered"], 2);
+    assert_eq!(totals["unmeasured"], 0);
+    assert_eq!(totals["gaps"], 2);
+    assert_eq!(totals["stale"], 0);
+    assert_eq!(totals["measured_files"], 2);
+
+    let names: Vec<&str> = value["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["entity"]["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["neverRun", "Shape"]);
+    for row in value["results"].as_array().unwrap() {
+        assert_eq!(row["state"], "uncovered");
+        assert_eq!(row["coverage_freshness"], "fresh");
+    }
+
+    // The answer names the run it is relative to.
+    let run_row = &value["runs"][0];
+    assert_eq!(run_row["report_path"], "coverage/lcov.info");
+    assert_eq!(run_row["freshness"], "fresh");
+    assert_eq!(run_row["source_files_in_report"], 2);
+}
+
+/// A partially covered symbol is not a gap, is counted anyway, and is listed on request.
+#[test]
+fn partial_is_surfaced_rather_than_rounded() {
+    let (_dir, root) = covered_fixture();
+    let root = root.to_str().unwrap();
+
+    let default = json(&run(&["gaps", root, "--json"]));
+    assert!(default["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|row| row["state"] != "partial"));
+
+    let widened = json(&run(&["gaps", root, "--include-partial", "--json"]));
+    assert_eq!(widened["totals"]["partial"], 2);
+    let partial: Vec<&str> = widened["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["state"] == "partial")
+        .map(|row| row["entity"]["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(partial, vec!["clamp", "perimeter"]);
+    let clamp = widened["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["entity"]["name"] == "clamp")
+        .unwrap();
+    assert_eq!(clamp["covered_lines"], 5);
+    assert_eq!(clamp["instrumented_lines"], 6);
+    assert_eq!(
+        clamp["covered_by"],
+        serde_json::json!(["coverage/lcov.info"])
+    );
+}
+
+/// Editing a covered file makes every answer about it stale, gaps included.
+#[test]
+fn a_gap_computed_from_stale_coverage_is_labelled_stale() {
+    let (_dir, root) = covered_fixture();
+    let source = root.join("src/math.ts");
+    let text = std::fs::read_to_string(&source).unwrap();
+    std::fs::write(
+        &source,
+        format!("{text}\nexport function later() {{ return 1; }}\n"),
+    )
+    .unwrap();
+    let root = root.to_str().unwrap();
+    assert_eq!(code(&run(&["index", root])), 0);
+
+    let value = json(&run(&["gaps", root, "--include-partial", "--json"]));
+    assert_eq!(value["coverage"], "present");
+    assert_eq!(value["totals"]["stale_files"], 1);
+    assert!(value["totals"]["stale"].as_u64().unwrap() >= 3);
+
+    let never_run = value["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["entity"]["name"] == "neverRun")
+        .expect("the measured gap survives the edit");
+    assert_eq!(
+        never_run["coverage_freshness"], "stale",
+        "a gap computed from coverage that no longer matches the file is a stale gap"
+    );
+
+    // The symbol the edit added was never in any report, and its file is measured, so it is a
+    // measured gap rather than an unmeasured one.
+    let later = value["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["entity"]["name"] == "later")
+        .expect("the new symbol is a gap");
+    assert_eq!(later["state"], "uncovered");
+}
+
+/// The two absence states are different answers, and both surfaces say which.
+#[test]
+fn a_file_no_report_named_is_unmeasured_rather_than_uncovered() {
+    let (_dir, root) = covered_fixture();
+    std::fs::write(
+        root.join("src/elsewhere.ts"),
+        "export function untouched(): number { return 7; }\n",
+    )
+    .unwrap();
+    let root = root.to_str().unwrap();
+    assert_eq!(code(&run(&["index", root])), 0);
+
+    let value = json(&run(&["gaps", root, "--json"]));
+    let untouched = value["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["entity"]["name"] == "untouched")
+        .expect("a symbol in a file no report named is a gap");
+    assert_eq!(
+        untouched["state"], "unmeasured",
+        "no coverage evidence names this file, so its absence is silence, not a measurement"
+    );
+    assert_eq!(untouched["coverage_freshness"], serde_json::Value::Null);
+    assert_eq!(value["totals"]["unmeasured"], 1);
+    assert_eq!(value["totals"]["uncovered"], 2);
+}
+
+/// Truncation is reported, and the tallies stay exact when the rows are cut.
+#[test]
+fn gaps_truncation_is_honest() {
+    let (_dir, root) = covered_fixture();
+    let root = root.to_str().unwrap();
+
+    let full = json(&run(&["gaps", root, "--json"]));
+    assert_eq!(full["truncated"], false);
+    assert_eq!(full["count"], 2);
+
+    let capped = json(&run(&["gaps", root, "--limit", "1", "--json"]));
+    assert_eq!(capped["truncated"], true);
+    assert_eq!(capped["count"], 1);
+    assert_eq!(capped["results_total"], 2);
+    assert_eq!(
+        capped["totals"]["gaps"], 2,
+        "the tally is exact whatever the cap cuts"
+    );
+    assert!(stdout(&run(&["gaps", root, "--limit", "1"])).contains("Listed 1 of 2"));
+}
+
+/// Filters narrow the question without changing what the states mean.
+#[test]
+fn gaps_filters_scope_by_path_and_by_kind() {
+    let (_dir, root) = covered_fixture();
+    let root = root.to_str().unwrap();
+
+    let scoped = json(&run(&["gaps", root, "--under", "src/shapes.ts", "--json"]));
+    assert_eq!(scoped["under"], "src/shapes.ts");
+    assert_eq!(scoped["symbols_in_scope"], 5);
+    assert_eq!(scoped["count"], 1);
+    assert_eq!(scoped["results"][0]["entity"]["name"], "Shape");
+
+    let by_kind = json(&run(&["gaps", root, "--kind", "interface", "--json"]));
+    assert_eq!(by_kind["kind"], "interface");
+    assert_eq!(by_kind["count"], 1);
+    assert_eq!(by_kind["results"][0]["entity"]["name"], "Shape");
+
+    // A coverage gap is about a symbol; a non-symbol kind is a wrong argument, not an empty
+    // answer that would read as "nothing of that kind is uncovered".
+    let refused = run(&["gaps", root, "--kind", "file"]);
+    assert_eq!(code(&refused), 10);
+    assert!(stderr(&refused).contains("a coverage gap is about a symbol"));
+    assert_eq!(code(&run(&["gaps", root, "--kind", "nonsense"])), 10);
+    assert_eq!(code(&run(&["gaps", root, "--limit", "0"])), 10);
+}
+
+/// Identical repository, identical bytes on stdout.
+#[test]
+fn gaps_output_is_byte_identical_across_runs() {
+    let (_dir, root) = covered_fixture();
+    let root = root.to_str().unwrap();
+
+    let first = stdout(&run(&["gaps", root, "--include-partial", "--json"]));
+    for _ in 0..4 {
+        assert_eq!(
+            stdout(&run(&["gaps", root, "--include-partial", "--json"])),
+            first
+        );
+    }
+    let rendered = stdout(&run(&["gaps", root, "--include-partial"]));
+    assert_eq!(stdout(&run(&["gaps", root, "--include-partial"])), rendered);
+}
+
+/// The CLI and the HTTP API must give the **same answer**, asserted rather than assumed.
+///
+/// Both call one query in `nerve-store` (ARCHITECTURE.md invariant 3). This compares the whole
+/// payload — states, tallies, freshness, run list, truncation — field by field, after removing
+/// the two keys that are legitimately per-surface: the CLI's envelope and its `root`, which the
+/// API does not repeat because a client already knows which server it is talking to.
+#[cfg(unix)]
+#[test]
+fn the_cli_and_the_api_answer_the_gap_question_identically() {
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+
+    let (_dir, root) = covered_fixture();
+    let root_arg = root.to_str().unwrap().to_string();
+
+    /// Kills the spawned server however this test leaves — including by panicking.
+    ///
+    /// Without this the `kill` at the end of the body is only reached when every assertion
+    /// passes. A failing assertion would leave `nerve serve` running, and because the test
+    /// harness inherits its piped stdout, the orphan holds that pipe open and `cargo test`
+    /// blocks forever collecting output. The suite would hang instead of reporting the failure,
+    /// which is the worst possible way for a regression to present in CI.
+    ///
+    /// Observed, not theorised: an orchestrator mutation probe against the gap query hung the
+    /// whole workspace run for over ten minutes at this exact test until the orphan was killed
+    /// by hand. `crates/nerve-server/tests/common/mod.rs` already guards its `Session` this way.
+    struct Reaper(std::process::Child);
+    impl Drop for Reaper {
+        fn drop(&mut self) {
+            let _ = Command::new("kill")
+                .args(["-TERM", &self.0.id().to_string()])
+                .status();
+            let _ = self.0.wait();
+        }
+    }
+
+    let mut spawned = Command::new(binary())
+        .args(["serve", &root_arg, "--json", "--port", "0"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("nerve serve must start");
+    let mut out = spawned.stdout.take().unwrap();
+    let child = Reaper(spawned);
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 512];
+    let announcement = loop {
+        let read = out.read(&mut chunk).expect("reading serve output");
+        assert!(read > 0, "serve exited without announcing itself");
+        buffer.extend_from_slice(&chunk[..read]);
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&buffer) {
+            break value;
+        }
+    };
+    let address = announcement["address"].as_str().unwrap().to_string();
+    let token = announcement["token"].as_str().unwrap().to_string();
+    assert!(
+        announcement["routes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|route| route == "/api/gaps"),
+        "the endpoint must be advertised"
+    );
+
+    let api = |target: &str| -> serde_json::Value {
+        let mut socket = std::net::TcpStream::connect(&address).expect("connect");
+        socket
+            .write_all(
+                format!(
+                    "GET {target} HTTP/1.1\r\nHost: {address}\r\nX-Nerve-Token: {token}\r\n\
+                     Connection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        let mut response = String::new();
+        socket.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        let body = response.split_once("\r\n\r\n").expect("a body").1;
+        serde_json::from_str(body).expect("the API must answer JSON")
+    };
+
+    for (cli_args, target) in [
+        (vec!["gaps", &root_arg, "--json"], "/api/gaps?limit=50"),
+        (
+            vec!["gaps", &root_arg, "--include-partial", "--json"],
+            "/api/gaps?limit=50&include_partial=1",
+        ),
+        (
+            vec!["gaps", &root_arg, "--limit", "1", "--json"],
+            "/api/gaps?limit=1",
+        ),
+        (
+            vec!["gaps", &root_arg, "--under", "src/math.ts", "--json"],
+            "/api/gaps?limit=50&under=src%2Fmath.ts",
+        ),
+    ] {
+        let mut from_cli = json(&run(&cli_args));
+        let mut from_api = api(target);
+        for key in ["command", "ok", "exit_code", "root"] {
+            from_cli.as_object_mut().unwrap().remove(key);
+        }
+        from_api.as_object_mut().unwrap().remove("ok");
+        assert_eq!(
+            from_cli, from_api,
+            "the CLI and the API disagreed for {target}"
+        );
+    }
+
+    // And the unanswerable state crosses the wire unchanged, which is the one that matters.
+    let (_basic_dir, basic_root) = indexed_fixture("ts-basic");
+    let basic = basic_root.to_str().unwrap();
+    let mut from_cli = json(&run(&["gaps", basic, "--json"]));
+    for key in ["command", "ok", "exit_code", "root"] {
+        from_cli.as_object_mut().unwrap().remove(key);
+    }
+    assert_eq!(from_cli["coverage"], "absent");
+    assert_eq!(from_cli["totals"], serde_json::Value::Null);
+
+    // `Reaper::drop` sends the TERM and reaps, on this path and on every panicking one.
+    drop(child);
+}

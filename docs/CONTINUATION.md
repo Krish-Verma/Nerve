@@ -8,22 +8,22 @@
 
 | | |
 |---|---|
-| **Current HEAD** | `eebb73b` — `feat: Slice 6b — coverage ingestion, and the re-index that was destroying it` |
+| **Current HEAD** | `<7a>` — `feat: Slice 7a — nerve gaps` |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 6b** (`eebb73b`) — Slice 6 is complete |
-| **Next slice** | **Slice 7a** — `nerve gaps`, the question Slice 6's data exists to answer. Not started. |
+| **Last completed slice** | **Slice 7a** — `nerve gaps`, CLI + API |
+| **Next slice** | **Slice 7a-ii** — corrective: the word "Gaps" means two different things across surfaces. Then 7b (`impact`), 7c (`check`/`doctor`). |
 | **Roadmap status** | **INCOMPLETE.** 7–14 and real-world validation not started. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
 
-## Verification state at HEAD `eebb73b`
+## Verification state at HEAD `<7a>`
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace                                  → 692 passed, 0 failed, 2 ignored
+cargo test --workspace                                  → 729 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
 ```
 
@@ -82,10 +82,9 @@ cannot emit. `directnessClass`'s `default` arm no longer renders an unknown dire
 
 | | |
 |---|---|
-| **7a** | `nerve gaps` — "which symbols does no test touch?" The question Slice 6 exists to answer, and it has **no CLI and no API today**; `apps/nerve-web/src/views/Gaps.tsx` is a UI-only view over other endpoints. Must distinguish *no coverage was ever ingested* from *coverage was ingested and this symbol has none* — those are different answers and conflating them is a lie. |
+| **7a-ii** | **Corrective, small.** `nerve gaps` means *coverage* gaps; the SPA's "Gaps" view renders `<Unresolved>` from `/api/unresolved` — Nerve's own knowledge gaps. One word, two meanings, across surfaces. Rename the SPA view to **Unresolved** (label, route, nav) so "Gaps" means one thing. Needs `npm run build` in `apps/nerve-web` (which runs `tools/embed.mjs` to re-embed assets) plus screenshot QA. |
 | 7b | `nerve impact` — reverse dependency closure with evidence and an honest truncation flag. |
 | 7c | `nerve check` (CI exit codes) + `nerve doctor` (diagnostics). |
-| 7 | CLI + query expansion — `impact`, `gaps`, `check`, `doctor` |
 | 8 | MCP — one default investigation tool. **T7 + T8 gate.** |
 | 9 | Python |
 | 10 | Framework rules |
