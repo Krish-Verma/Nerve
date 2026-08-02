@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| **Last slice commit** | Slice 7a-iii — `fix: Slice 7a-iii — the rail counted everything and called it symbols`. A docs commit may sit on top of it; `git log --oneline -3` is authoritative. A commit cannot contain its own hash, so this names the slice, not literally `HEAD`. |
+| **Last slice commit** | `5618642` — `fix: Slice 7a-iii — the rail counted everything and called it symbols`. A docs commit may sit on top of it; `git log --oneline -3` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
 | **Last completed slice** | **Slice 7a-iii** — canonical `symbols_total`; the rail no longer calls every entity a symbol |
