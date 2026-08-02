@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| **Last slice commit** | Slice 7b — `feat: Slice 7b — nerve impact`. `git log --oneline -3` is authoritative; a docs commit records the hash. |
+| **Last slice commit** | `45d0b77` — `feat: Slice 7b — nerve impact, and the caveat that is larger than the answer`. A docs commit may sit on top; `git log --oneline -3` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
 | **Last completed slice** | **Slice 7b** — `nerve impact`, with the unresolved account on every answer |
