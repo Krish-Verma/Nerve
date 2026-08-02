@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| **Current HEAD** | `aaf7feb` — `fix: Slice 7a-ii — "Gaps" meant two different things` |
+| **Last slice commit** | `da4ae72` — `fix: Slice 7a-ii — "Gaps" meant two different things`. A docs commit may sit on top of it; `git log --oneline -3` is authoritative. A commit cannot contain its own hash, so this names the slice commit, not literally `HEAD`. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
 | **Last completed slice** | **Slice 7a-ii** — SPA view renamed Unresolved; new Coverage view |
@@ -18,7 +18,7 @@
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
 
-## Verification state at HEAD `aaf7feb`
+## Verification state at `da4ae72`
 
 ```
 cargo fmt --all -- --check                              → clean
