@@ -8,19 +8,22 @@
 
 | | |
 |---|---|
-| **Current HEAD** | `f98aa2a` — `feat: Slice 5d-ii — supersession from explicit evidence, and nothing else` |
+| **Current HEAD** | `a8a2d5d` — `docs: Slice 6 plan — and the question that gates it` |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 5d-ii** (`f98aa2a`) |
-| **Next slice** | **Slice 5d-iii** — UI vocabulary catch-up (in flight at the time of writing) |
-| **Roadmap status** | **INCOMPLETE.** 5d-iii, 6–14 and real-world validation not started. |
+| **Last completed slice** | **Slice 5d-iii** (`947013c`) |
+| **Next slice** | **Slice 6** — test evidence (coverage only). Plan committed at `a8a2d5d`; **implementation not started**. Answer the plan's §2.1 gating question empirically first. |
+| **Roadmap status** | **INCOMPLETE.** 6–14 and real-world validation not started. |
 
-## Verification state at HEAD `f98aa2a`
+A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
+no repair. See `docs/reports/restart-recovery-report.md`.
+
+## Verification state at HEAD `a8a2d5d`
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace                                  → 596 passed, 0 failed, 2 ignored
+cargo test --workspace                                  → 610 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
 ```
 
@@ -69,12 +72,17 @@ existed**. Nerve's own six ADRs state no supersession and produce **zero** edges
 `**Supersedes:**` fields in `docs/plans/` name prose rather than a target and are recorded
 `document_supersedes_unparsed`.
 
+**5d-iii (`947013c`) — the interface can name what the backend stores.** A test reads the
+TypeScript gloss maps and fails when a Rust vocabulary gains a member, so the two cannot drift
+again. It found **120 real sites** rendering fallback text and one gloss for a status the backend
+cannot emit. `directnessClass`'s `default` arm no longer renders an unknown directness as
+"inferred".
+
 ## Remaining roadmap
 
 | | |
 |---|---|
-| **5d-iii** | UI vocabulary catch-up. Glosses driven from the Rust vocabularies by a test so they cannot drift; `directnessClass`'s `default` arm currently renders an unknown directness as "inferred", which is a false claim rather than a missing label. Requires an `apps/nerve-web` rebuild and asset re-embed. |
-| 6 | Test evidence (**coverage only**) — `TEST_COVERS_SYMBOL`, freshness. **T9 gate.** |
+| **6** | Test evidence (**coverage only**) — `TEST_COVERS_SYMBOL`, freshness. **T9 gate.** Plan at `docs/plans/slice-06-test-evidence.md`; **§2.1 is a gating question to answer empirically before writing the emission path.** |
 | 7 | CLI + query expansion — `impact`, `gaps`, `check`, `doctor` |
 | 8 | MCP — one default investigation tool. **T7 + T8 gate.** |
 | 9 | Python |
