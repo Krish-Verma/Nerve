@@ -150,12 +150,15 @@ pub struct PathReport {
 }
 
 /// One edge as read from the database during the walk.
+///
+/// `pub(crate)` because [`crate::impact`] walks the same adjacency with the same reader rather
+/// than growing a second traversal engine beside this one.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Edge {
-    relation: String,
-    neighbour: String,
-    assertion_id: String,
-    traversed_backwards: bool,
+pub(crate) struct Edge {
+    pub(crate) relation: String,
+    pub(crate) neighbour: String,
+    pub(crate) assertion_id: String,
+    pub(crate) traversed_backwards: bool,
 }
 
 /// A path under construction.
@@ -170,7 +173,7 @@ struct Partial {
 ///
 /// The values are `&'static str` literals returned by [`Relation::as_str`], never user text,
 /// so there is nothing here for a caller to inject through.
-fn relation_clause(relations: &[Relation]) -> String {
+pub(crate) fn relation_clause(relations: &[Relation]) -> String {
     if relations.is_empty() {
         return String::new();
     }
@@ -181,7 +184,13 @@ fn relation_clause(relations: &[Relation]) -> String {
     format!(" AND a.relation IN ({})", names.join(", "))
 }
 
-fn adjacency_sql(query: &PathQuery, backwards: bool) -> String {
+/// Adjacency of one entity, in one direction, as SQL.
+///
+/// `backwards` flips the anchor from `source_entity_id` to `target_entity_id`, which is the
+/// reverse edge served by `idx_assertion_target(target_entity_id, relation)`. That is the whole
+/// of what a reverse dependency closure needs, so [`crate::impact`] builds its statement here
+/// rather than writing a second one that could drift from this one's filters or ordering.
+pub(crate) fn adjacency_sql(query: &PathQuery, backwards: bool) -> String {
     let (anchor, neighbour) = if backwards {
         ("target_entity_id", "source_entity_id")
     } else {
@@ -311,7 +320,8 @@ pub fn find_paths(
     })
 }
 
-fn read_edges(
+/// Every edge adjacent to `anchor` under a prepared [`adjacency_sql`] statement.
+pub(crate) fn read_edges(
     stmt: &mut rusqlite::Statement<'_>,
     anchor: &str,
     traversed_backwards: bool,
@@ -364,14 +374,19 @@ fn hydrate(
     Ok(GraphPath { hops })
 }
 
-struct DerivedState {
-    status: String,
-    strongest_source_type: String,
-    observation_count: i64,
-    is_unresolved: bool,
+/// What `assertion_state` derived for one assertion.
+pub(crate) struct DerivedState {
+    pub(crate) status: String,
+    pub(crate) strongest_source_type: String,
+    pub(crate) observation_count: i64,
+    pub(crate) is_unresolved: bool,
 }
 
-fn assertion_state(conn: &Connection, assertion_id: &str) -> Result<Option<DerivedState>> {
+/// Read the derived row for one assertion, or `None` when it has no observations.
+pub(crate) fn assertion_state(
+    conn: &Connection,
+    assertion_id: &str,
+) -> Result<Option<DerivedState>> {
     let found = conn
         .query_row(
             "SELECT status, strongest_source_type, observation_count, is_unresolved
@@ -390,26 +405,54 @@ fn assertion_state(conn: &Connection, assertion_id: &str) -> Result<Option<Deriv
     Ok(found)
 }
 
+/// The one observation chosen to stand for an assertion, and the hash it recorded.
+pub(crate) struct RepresentativeObservation {
+    /// File the evidence points at.
+    pub(crate) file_path: String,
+    /// First line of the evidence span.
+    pub(crate) start_line: i64,
+    /// Content hash of that file when the observation was made.
+    pub(crate) content_hash: String,
+}
+
+/// Pick one observation to stand for an assertion, deterministically.
+///
+/// The hash comes back with the location because freshness is computed by re-hashing at query
+/// time ([`crate::freshness`]); a caller that has the location but not the hash cannot tell
+/// whether the evidence still describes the file, and would have to read the row a second time.
+pub(crate) fn representative_observation_row(
+    conn: &Connection,
+    assertion_id: &str,
+) -> Result<Option<RepresentativeObservation>> {
+    Ok(conn
+        .query_row(
+            "SELECT file_path, start_line, content_hash FROM observation
+              WHERE assertion_id = ?1
+              ORDER BY file_path, start_line, end_line, observation_id LIMIT 1",
+            params![assertion_id],
+            |row| {
+                Ok(RepresentativeObservation {
+                    file_path: row.get(0)?,
+                    start_line: row.get(1)?,
+                    content_hash: row.get(2)?,
+                })
+            },
+        )
+        .ok())
+}
+
 fn representative_observation(
     conn: &Connection,
     assertion_id: &str,
 ) -> Result<(Option<String>, Option<i64>)> {
-    let found = conn
-        .query_row(
-            "SELECT file_path, start_line FROM observation
-              WHERE assertion_id = ?1
-              ORDER BY file_path, start_line, end_line, observation_id LIMIT 1",
-            params![assertion_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-        )
-        .ok();
-    Ok(match found {
-        Some((path, line)) => (Some(path), Some(line)),
+    Ok(match representative_observation_row(conn, assertion_id)? {
+        Some(observation) => (Some(observation.file_path), Some(observation.start_line)),
         None => (None, None),
     })
 }
 
-fn load_entity(
+/// Load one entity by id, through a per-query cache so a repeated id costs nothing.
+pub(crate) fn load_entity(
     conn: &Connection,
     cache: &mut BTreeMap<String, EntityRef>,
     entity_id: &str,

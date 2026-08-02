@@ -135,6 +135,36 @@ enum Command {
         #[arg(long, default_value_t = 50)]
         limit: usize,
     },
+    /// Report what depends on a symbol, transitively, and what the answer cannot see.
+    ///
+    /// A reverse dependency closure: everything that reaches this symbol through `CALLS`,
+    /// `REFERENCES`, `EXTENDS` or `IMPLEMENTS`, with the evidence for the edge that reached it.
+    /// Containment is deliberately not followed — walking `CONTAINS` from a function reaches its
+    /// file, its directory and the repository, so every symbol would "impact" everything.
+    ///
+    /// The count is never the whole answer. Nerve has no type inference, so a method call on a
+    /// typed receiver is recorded as unresolved rather than guessed at, and the number of
+    /// reference sites in this repository that resolved to nothing is printed with every result —
+    /// including when it is zero. Any of those sites could reach this symbol and this command
+    /// cannot rule them out.
+    ///
+    /// Finding nothing is not a failure, so this exits 0 whatever it finds.
+    Impact {
+        /// Subject selector: entity id, rel/path.ts, rel/path.ts#Name, or a unique name.
+        selector: String,
+        /// Maximum number of hops from the subject.
+        #[arg(long, default_value_t = 6)]
+        max_depth: usize,
+        /// Follow only this relation. Repeatable. Default: CALLS, REFERENCES, EXTENDS, IMPLEMENTS.
+        #[arg(long = "relation")]
+        relations: Vec<String>,
+        /// Maximum rows listed. The tallies stay exact.
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
     /// Find how two entities are connected.
     Path {
         /// Source selector: entity id, rel/path.ts, rel/path.ts#Name, or a unique name.
@@ -333,6 +363,21 @@ fn main() {
                 &path.or(path_flag).unwrap_or_else(|| PathBuf::from(".")),
                 arguments,
             )
+        }
+        Command::Impact {
+            selector,
+            max_depth,
+            relations,
+            limit,
+            path,
+        } => {
+            let arguments = ImpactArguments {
+                selector,
+                max_depth,
+                relations,
+                limit,
+            };
+            run_impact(&output, &path, arguments)
         }
         Command::Path {
             from,
@@ -1483,6 +1528,227 @@ fn run_path(output: &Output, path: &Path, arguments: PathArguments) -> i32 {
                 "file_path": hop.file_path,
                 "start_line": hop.start_line,
             })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+    }));
+
+    exit::SUCCESS
+}
+
+// ---- impact ----------------------------------------------------------------------------------
+
+/// Everything `nerve impact` was asked for, minus the repository.
+struct ImpactArguments {
+    selector: String,
+    max_depth: usize,
+    relations: Vec<String>,
+    limit: usize,
+}
+
+/// A tally rendered as `name N · name N`, or `-` when there is nothing in it.
+fn tally_line<K: std::fmt::Display>(tally: &std::collections::BTreeMap<K, usize>) -> String {
+    if tally.is_empty() {
+        return "-".to_string();
+    }
+    tally
+        .iter()
+        .map(|(key, count)| format!("{key} {count}"))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// Report what depends on a symbol, and state what the answer cannot see.
+///
+/// Exit 0 in every successful case, including the empty one. "Nothing resolved depends on this"
+/// is a finding, not an error (Slice 2b), and it is the finding that most needs the unresolved
+/// caveat attached — which is why the caveat is printed unconditionally, before the exit code is
+/// ever reached, whether or not it has anything to report.
+///
+/// This is not `nerve affected`. That command is refused, not deferred: LCOV carries no per-test
+/// attribution (ADR-0008 §A.2). Nothing here is test attribution, and a test file in an impact
+/// set is there because code depends on code.
+fn run_impact(output: &Output, path: &Path, arguments: ImpactArguments) -> i32 {
+    if arguments.max_depth == 0 || arguments.max_depth > MAX_DEPTH_CEILING {
+        return output.failure(
+            "impact",
+            exit::USAGE,
+            &format!("--max-depth must be between 1 and {MAX_DEPTH_CEILING}"),
+        );
+    }
+    if arguments.limit == 0 {
+        return output.failure("impact", exit::USAGE, "--limit must be at least 1");
+    }
+    let relations = match parse_relations(&arguments.relations) {
+        Ok(relations) => relations,
+        Err(message) => return output.failure("impact", exit::USAGE, &message),
+    };
+
+    let OpenIndex { root, conn, .. } = match open_existing(path) {
+        Ok(opened) => opened,
+        Err(message) => return output.failure("impact", exit::NO_INDEX, &message),
+    };
+    // Freshness is computed by re-reading the repository, so the reader is built from the
+    // repository root and enforces the Slice 1 path rules on every path the database supplies.
+    let prober = match nerve_index::RepositoryProber::new(&root) {
+        Ok(prober) => prober,
+        Err(err) => return output.failure("impact", error_exit_code(&err), &err.to_string()),
+    };
+
+    let subject = match resolve_one(output, "impact", &conn, "selector", &arguments.selector) {
+        Ok(entity) => entity,
+        Err(code) => return code,
+    };
+
+    let query = nerve_store::ImpactQuery {
+        max_depth: arguments.max_depth,
+        limit: arguments.limit,
+        relations,
+    };
+    let report = match nerve_store::impact(&conn, &subject.entity_id, &query, &prober) {
+        Ok(report) => report,
+        Err(err) => return output.failure("impact", exit::INTERNAL, &err.to_string()),
+    };
+    let walked = relation_names(&report.relations);
+
+    output.line(format!("subject  {}", entity_line(&report.subject)));
+    output.line(format!("  relations      {}", walked.join(", ")));
+    output.line(format!("  max-depth      {}", report.max_depth));
+    output.line(format!(
+        "  entities       {} depend on this, transitively",
+        report.totals.entities
+    ));
+    output.line(format!(
+        "  by depth       {}",
+        tally_line(&report.totals.by_depth)
+    ));
+    output.line(format!(
+        "  by relation    {}",
+        tally_line(&report.totals.by_relation)
+    ));
+    output.line(format!(
+        "  by kind        {}",
+        tally_line(&report.totals.by_kind)
+    ));
+    output.line(format!(
+        "  stale          {} reached through evidence that no longer matches its file",
+        report.totals.stale
+    ));
+    output.line(format!("  files re-hashed {}", report.files_probed));
+    output.line(String::new());
+
+    if report.results.is_empty() {
+        output.line(format!(
+            "Nothing in the index depends on this through {} within depth {}.",
+            walked.join(", "),
+            report.max_depth
+        ));
+    }
+    for row in &report.results {
+        output.line(format!(
+            "{:<5} {:<11} {:<10} {:<32} {:<24} {:<14} {}",
+            row.depth,
+            row.relation,
+            row.entity.kind,
+            row.entity.qualified_name(),
+            row.entity.location(),
+            row.strongest_source_type.as_deref().unwrap_or("-"),
+            row.evidence_freshness
+                .map(|freshness| freshness.as_str())
+                .unwrap_or("-")
+        ));
+        output.line(format!(
+            "      {} {} obs at {}{}",
+            row.direction.as_str(),
+            row.observation_count,
+            row.location(),
+            if row.is_unresolved {
+                "  [unresolved]"
+            } else {
+                ""
+            }
+        ));
+    }
+    if report.truncated {
+        output.line(String::new());
+        output.line(format!(
+            "Listed {} of {} dependent entities; raise --limit to see the rest. The tallies \
+             above are exact.",
+            report.results.len(),
+            report.results_total
+        ));
+    }
+
+    // Printed whether or not it has anything to report. A small impact set with no caveat reads
+    // as "safe to change", and on a repository where a third of the reference sites resolve to
+    // nothing that reading is unsupported.
+    output.line(String::new());
+    let account = &report.unresolved;
+    output.line(format!(
+        "  unresolved     {} reference site(s) in this repository resolved to nothing",
+        account.sites
+    ));
+    output.line(format!("                 over {}", walked.join(", ")));
+    if account.is_empty() {
+        output.line("  Every reference site Nerve indexed under those relations resolved, so no");
+        output.line("  failed resolution is hiding a dependency from this answer.");
+    } else {
+        output.line(format!(
+            "                 {} assertion(s), {} distinct target(s) · {}",
+            account.assertions,
+            account.targets,
+            tally_line(&account.by_category)
+        ));
+        output.line("  Any of them could reach this symbol, and this answer cannot rule them out.");
+        output.line("  Nerve has no type inference, so a method call on a typed receiver is");
+        output.line("  recorded as unresolved rather than guessed at.");
+        output.line("  This is not a list of suspects: matching an unresolved name against this");
+        output.line("  symbol's name would be identity by coincidence, which Nerve does not do.");
+    }
+
+    output.object(json!({
+        "command": "impact",
+        "ok": true,
+        "exit_code": exit::SUCCESS,
+        "root": root.display().to_string(),
+        "subject": entity_json(&report.subject),
+        "relations": walked,
+        "max_depth": report.max_depth,
+        "limit": report.limit,
+        "totals": {
+            "entities": report.totals.entities,
+            // An array rather than an object: JSON object keys are strings, and `"10"` sorting
+            // before `"2"` would put the tally in an order no reader expects.
+            "by_depth": report.totals.by_depth.iter().map(|(depth, count)| json!({
+                "depth": depth,
+                "entities": count,
+            })).collect::<Vec<_>>(),
+            "by_relation": report.totals.by_relation,
+            "by_kind": report.totals.by_kind,
+            "stale": report.totals.stale,
+        },
+        "unresolved": {
+            "sites": account.sites,
+            "assertions": account.assertions,
+            "targets": account.targets,
+            "by_category": account.by_category,
+        },
+        "count": report.results.len(),
+        "results_total": report.results_total,
+        "truncated": report.truncated,
+        "files_probed": report.files_probed,
+        "results": report.results.iter().map(|row| json!({
+            "entity": entity_json(&row.entity),
+            "depth": row.depth,
+            "relation": row.relation,
+            "direction": row.direction.as_str(),
+            "reached_entity_id": row.reached_entity_id,
+            "assertion_id": row.assertion_id,
+            "status": row.status,
+            "strongest_source_type": row.strongest_source_type,
+            "observation_count": row.observation_count,
+            "is_unresolved": row.is_unresolved,
+            "file_path": row.file_path,
+            "start_line": row.start_line,
+            "evidence_freshness": row.evidence_freshness.map(|freshness| freshness.as_str()),
         })).collect::<Vec<_>>(),
     }));
 

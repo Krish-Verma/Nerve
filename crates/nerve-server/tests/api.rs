@@ -703,3 +703,179 @@ fn gaps_is_deterministic() {
         assert_eq!(session.json("/api/gaps?include_partial=1"), first);
     }
 }
+
+// ---- impact --------------------------------------------------------------------------------
+
+/// The closure, its exact tallies, and the account of what it cannot see.
+#[test]
+fn impact_reports_the_closure_with_its_tallies_and_its_unresolved_account() {
+    let (_dir, _root, session) = common::served();
+    let value = session.json("/api/impact?subject=add");
+
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["subject"]["name"], "add");
+    assert_eq!(
+        value["relations"],
+        serde_json::json!(["CALLS", "REFERENCES", "EXTENDS", "IMPLEMENTS"]),
+        "the default set, not every relation"
+    );
+    assert_eq!(value["max_depth"], 6);
+
+    let entities = value["totals"]["entities"].as_u64().unwrap();
+    assert!(entities > 0, "{value}");
+    assert_eq!(value["results"].as_array().unwrap().len() as u64, entities);
+    assert_eq!(value["results_total"], entities);
+    assert_eq!(value["truncated"], false);
+
+    // Every row says how it was reached, not merely that it was.
+    for row in value["results"].as_array().unwrap() {
+        assert!(row["depth"].as_u64().unwrap() >= 1, "{row}");
+        assert!(row["relation"].is_string(), "{row}");
+        assert!(row["reached_entity_id"].is_string(), "{row}");
+        assert!(row["assertion_id"].is_string(), "{row}");
+        assert!(row["entity"]["entity_id"].is_string(), "{row}");
+    }
+
+    // The subject is the question, never an answer.
+    let subject_id = value["subject"]["entity_id"].as_str().unwrap();
+    for row in value["results"].as_array().unwrap() {
+        assert_ne!(row["entity"]["entity_id"], subject_id, "{row}");
+    }
+}
+
+/// `unresolved` is an object on every answer, whatever its counts.
+///
+/// A client that received a short `results` array with no accompanying account would read it as
+/// "few things depend on this, safe to change". The zero case is the one that most needs stating,
+/// so the assertion is on presence and shape rather than on a non-zero number.
+#[test]
+fn the_impact_answer_always_carries_an_unresolved_account() {
+    let (_dir, _root, session) = common::served();
+    let value = session.json("/api/impact?subject=add");
+
+    let account = &value["unresolved"];
+    assert!(account.is_object(), "never null, never omitted: {value}");
+    for key in ["sites", "assertions", "targets"] {
+        assert!(
+            account[key].is_u64(),
+            "{key} must be a number even when zero: {account}"
+        );
+    }
+    assert!(account["by_category"].is_object(), "{account}");
+    assert!(
+        account["sites"].as_u64().unwrap() >= account["assertions"].as_u64().unwrap(),
+        "a site count is per-observation and cannot be below the assertion count: {account}"
+    );
+}
+
+/// Containment is not dependency, and the default walk must never say otherwise.
+///
+/// The property is stated on the **relation**, which is where containment would actually leak in:
+/// if every edge walked is one of the four dependency relations, no `CONTAINS` or `DEFINES` edge
+/// was followed, whatever kinds turn up at the ends of them.
+///
+/// It is deliberately **not** stated as "no `module` appears in the results". A `Module` is the
+/// innermost entity enclosing top-level code, so `export const alias = renamed;` at
+/// `src/app.ts:34` produces a genuine `Module REFERENCES …` edge — the module really does depend
+/// on that symbol. Asserting modules away would have been asserting a falsehood about the
+/// extractor. What must never appear is the repository itself, which is the specific absurdity
+/// the exclusion exists to prevent: with `CONTAINS` in the set, every symbol impacts everything.
+#[test]
+fn the_default_impact_walk_does_not_climb_into_containment() {
+    let (_dir, _root, session) = common::served();
+    let value = session.json("/api/impact?subject=add");
+    assert!(
+        !value["results"].as_array().unwrap().is_empty(),
+        "a walk over nothing would satisfy this vacuously: {value}"
+    );
+
+    for row in value["results"].as_array().unwrap() {
+        let relation = row["relation"].as_str().unwrap();
+        assert!(
+            matches!(relation, "CALLS" | "REFERENCES" | "EXTENDS" | "IMPLEMENTS"),
+            "followed {relation}, which is not in the default set: {row}"
+        );
+        let kind = row["entity"]["kind"].as_str().unwrap();
+        assert!(
+            !matches!(kind, "repository" | "directory"),
+            "the walk climbed structure and reached a {kind}: {row}"
+        );
+    }
+}
+
+/// The cap moves the rows and leaves the tallies alone.
+#[test]
+fn impact_truncation_is_honest_about_what_it_cut() {
+    let (_dir, _root, session) = common::served();
+    let full = session.json("/api/impact?subject=add");
+    let total = full["totals"]["entities"].as_u64().unwrap();
+    assert!(total >= 2, "fixture must have something to cut: {full}");
+
+    let capped = session.json("/api/impact?subject=add&limit=1");
+    assert_eq!(capped["results"].as_array().unwrap().len(), 1);
+    assert_eq!(capped["truncated"], true);
+    assert_eq!(capped["limit"], 1);
+    // Exact regardless of the page.
+    assert_eq!(capped["results_total"], total);
+    assert_eq!(capped["totals"]["entities"], total);
+    assert_eq!(capped["unresolved"], full["unresolved"]);
+}
+
+/// Bounds are enforced at the surface, and an unknown relation is refused by name.
+///
+/// An over-large `limit` or `max_depth` is **clamped**, not rejected — the ceiling is the
+/// server's promise about its own response size, not a rule about what a caller may ask for, and
+/// the clamped value is echoed back so the caller can see it was applied. Unparseable input is a
+/// different thing and is refused. This mirrors `/api/gaps`.
+#[test]
+fn impact_bounds_its_arguments_and_refuses_an_unknown_relation() {
+    let (_dir, _root, session) = common::served();
+
+    assert_eq!(session.get("/api/impact").status, 400, "subject required");
+
+    let deep = session.json(&format!(
+        "/api/impact?subject=add&max_depth={}",
+        nerve_server::api::MAX_IMPACT_DEPTH + 1
+    ));
+    assert_eq!(
+        deep["max_depth"],
+        nerve_server::api::MAX_IMPACT_DEPTH as u64,
+        "clamped to the ceiling and echoed back"
+    );
+
+    let wide = session.json(&format!(
+        "/api/impact?subject=add&limit={}",
+        nerve_server::api::MAX_IMPACT_LIMIT + 1
+    ));
+    assert_eq!(wide["limit"], nerve_server::api::MAX_IMPACT_LIMIT as u64);
+
+    for bad in ["limit=abc", "max_depth=abc", "limit=0"] {
+        let response = session.get(&format!("/api/impact?subject=add&{bad}"));
+        assert_eq!(response.status, 400, "{bad}: {}", response.body);
+    }
+
+    let bogus = session.get("/api/impact?subject=add&relation=NOT_A_RELATION");
+    assert_eq!(bogus.status, 400, "{}", bogus.body);
+    let value = bogus.parse_json();
+    assert_eq!(value["error"]["code"], "unknown_relation");
+}
+
+/// A selector matching more than one entity is refused, never guessed at.
+#[test]
+fn an_ambiguous_impact_subject_is_refused_with_its_candidates() {
+    let (_dir, _root, session) = common::served();
+    let response = session.get("/api/impact?subject=area");
+    assert_eq!(response.status, 409, "{}", response.body);
+    let value = response.parse_json();
+    assert_eq!(value["error"]["code"], "ambiguous_selector");
+}
+
+/// The same question, the same answer, every time.
+#[test]
+fn impact_is_deterministic() {
+    let (_dir, _root, session) = common::served();
+    let first = session.json("/api/impact?subject=add");
+    for _ in 0..5 {
+        assert_eq!(session.json("/api/impact?subject=add"), first);
+    }
+}

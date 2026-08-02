@@ -129,6 +129,133 @@ a product decision and is yours.
 
 ---
 
+## Entry 2 — `/api/impact`, a new endpoint
+
+**Slice 7b** · new capability · report: `docs/reports/slice-07b-report.md`
+**Status: ⬜ no UI exists.** This is a new endpoint with no view. Building one is yours.
+
+### What it answers
+
+*"If I change this symbol, what else might break?"* — a reverse dependency closure. Everything
+that reaches the subject through `CALLS`, `REFERENCES`, `EXTENDS` or `IMPLEMENTS`, transitively,
+with the evidence for the edge that reached it.
+
+### The contract
+
+```
+GET /api/impact?subject=<selector>
+```
+
+| parameter | type | default | notes |
+|---|---|---|---|
+| `subject` | selector string | **required** | entity id, `rel/path.ts`, `rel/path.ts#Name`, or a unique name. Missing → `400` |
+| `max_depth` | int ≥ 1 | `6` | **clamped** to 32, and the applied value is echoed back in `max_depth` |
+| `limit` | int ≥ 1 | `50` | **clamped** to 500, echoed back in `limit`. Caps rows only — every tally stays exact |
+| `relation` | repeatable | the four above | from the closed vocabulary. Unknown → `400 unknown_relation` with the allowed list |
+
+**Empty `relation` means the four defaults, NOT every relation.** This is the opposite of
+`/api/path`, where empty means all. Following `CONTAINS` would answer that every symbol impacts
+the repository.
+
+### Response
+
+| field | type | meaning |
+|---|---|---|
+| `subject` | entity | the symbol asked about. Never appears in `results` |
+| `relations` | string[] | the relations actually walked |
+| `max_depth`, `limit` | number | as applied after clamping |
+| `totals.entities` | number | size of the **whole** closure, not the page |
+| `totals.by_depth` | `{depth, entities}[] ` | **an array, not an object** — JSON object keys are strings and `"10"` would sort before `"2"` |
+| `totals.by_relation`, `totals.by_kind` | `Record<string, number>` | exact tallies |
+| `totals.stale` | number | reached through evidence that no longer matches its file |
+| `unresolved` | object | **see below — this is the important one** |
+| `count` / `results_total` / `truncated` | number / number / bool | page size vs closure size, and whether the cap cut |
+| `files_probed` | number | files re-hashed to compute freshness |
+| `results[]` | row[] | `entity`, `depth` (≥1), `relation`, `direction`, `reached_entity_id`, `assertion_id`, `status`, `strongest_source_type`, `observation_count`, `is_unresolved`, `file_path`, `start_line`, `evidence_freshness` |
+
+Rows are sorted nearest-first, then by kind, then qualified name. Deterministic.
+
+### `unresolved` — do not render this as a footnote
+
+```jsonc
+"unresolved": { "sites": 4, "assertions": 4, "targets": 4, "by_category": { "value": 4 } }
+```
+
+**It is always a present object, never `null`, never omitted, including when every count is zero.**
+
+Nerve has no type inference, so a method call on a typed receiver (`shape.area()`) is recorded as
+unresolved rather than guessed at. Slice 2a measured 38.1% of call sites on the resolution corpus
+as unresolved. So a UI that shows *"3 things depend on this"* without the account beside it is
+telling the user it is safe to change something, on evidence that does not support the claim.
+
+- `sites` counts **observations** — individual reference sites. This is the number to show.
+- `assertions` and `targets` are the same fact at coarser grain; `sites ≥ assertions` always.
+- `by_category` splits by `UnresolvedCategory` — a broken Markdown link (`module`) and an
+  unresolvable method call (`value`) are not the same warning.
+- Scope is **repository-wide, restricted to the relations walked** — a hidden edge could attach
+  anywhere, and narrowing it without name matching is not possible.
+
+**Required display language.** When `sites > 0`, something equivalent to: *"N reference sites in
+this repository resolved to nothing. Any of them could reach this symbol and this answer cannot
+rule them out."* When `sites == 0`, say so explicitly — *"every reference site Nerve indexed under
+these relations resolved, so no failed resolution is hiding a dependency from this answer"* — do
+**not** hide the section. The zero case is the one where a silent omission most invites the wrong
+conclusion.
+
+**Do not** present unresolved sites as a list of suspect callers, and do not match their names
+against the subject's. That is identity by coincidence; Nerve does not do it and the API gives you
+no data to do it with.
+
+### States
+
+| state | response | render |
+|---|---|---|
+| nothing depends on it | `totals.entities: 0`, `results: []` | "Nothing in the index depends on this through …" — **plus the unresolved account**, which is exactly when it matters |
+| truncated | `truncated: true`, `results_total > count` | show the page, say how many were cut, note the tallies are exact |
+| stale evidence | row `evidence_freshness` ≠ `"fresh"`, `totals.stale > 0` | mark per row; the edge was recorded against a file that has since changed |
+| unresolved edge | row `is_unresolved: true` | the edge itself points at something Nerve could not name |
+| ambiguous subject | `409 ambiguous_selector` with `detail.candidates[]` | let the user pick. Nerve refuses to guess |
+| unknown subject | `404 selector_not_found` with `detail.suggestions[]` | offer the suggestions |
+
+### Example
+
+`fixtures/ts-basic`, `subject=add`, `limit=1` — abbreviated:
+
+```jsonc
+{
+  "subject": { "entity_id": "fn_5fcd…", "kind": "function", "name": "add",
+               "file_path": "src/math.ts", "start_line": 3 },
+  "relations": ["CALLS", "REFERENCES", "EXTENDS", "IMPLEMENTS"],
+  "max_depth": 6, "limit": 1,
+  "totals": { "entities": 3, "by_depth": [{ "depth": 1, "entities": 3 }],
+              "by_relation": { "CALLS": 3 }, "by_kind": { "function": 3 }, "stale": 0 },
+  "unresolved": { "sites": 4, "assertions": 4, "targets": 4, "by_category": { "value": 4 } },
+  "count": 1, "results_total": 3, "truncated": true, "files_probed": 3,
+  "results": [{ "entity": { "kind": "function", "name": "describe",
+                            "file_path": "src/alias.ts", "start_line": 7 },
+                "depth": 1, "relation": "CALLS", "direction": "outgoing",
+                "status": "SUPPORTED", "strongest_source_type": "AST_RESOLVED",
+                "observation_count": 1, "is_unresolved": false,
+                "evidence_freshness": "fresh" }]
+}
+```
+
+Three dependants, four unresolved sites. The caveat is larger than the answer, and that is the
+honest shape of this repository — not a defect in the response.
+
+### One thing to avoid calling it
+
+This is **not** "affected tests". `nerve affected` is refused, not deferred: LCOV carries no
+per-test attribution (ADR-0008 §A.2). If a test file appears in an impact set it is there because
+code depends on code. Do not label the view or any part of it as test impact.
+
+### Frontend edits the backend made
+
+**None.** No file under `apps/nerve-web/` was touched by Slice 7b. `ROUTES` grew from 10 to 11
+entries in the Rust router; no TypeScript mirror asserts that list, so nothing broke.
+
+---
+
 <!--
   Append new entries below this line, newest last. Each entry should carry:
   endpoint · method · authentication · query parameters · request schema · response schema ·

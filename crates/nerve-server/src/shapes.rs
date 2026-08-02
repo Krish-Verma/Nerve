@@ -10,9 +10,9 @@
 use serde_json::{json, Value};
 
 use nerve_store::{
-    AssertionEvidence, CoverageRunRef, EntityRef, GapReport, GapRow, NeighbourEdge,
-    NeighbourhoodReport, ObservationEvidence, OccurrenceRow, PathHop, PathReport, SearchHit,
-    WhyReport,
+    AssertionEvidence, CoverageRunRef, EntityRef, GapReport, GapRow, ImpactReport, ImpactRow,
+    NeighbourEdge, NeighbourhoodReport, ObservationEvidence, OccurrenceRow, PathHop, PathReport,
+    SearchHit, WhyReport,
 };
 
 /// An entity, with its qualified name and first location resolved.
@@ -227,6 +227,66 @@ pub fn gap_report(report: &GapReport) -> Value {
         "truncated": report.truncated,
         "files_probed": report.files_probed,
         "results": report.results.iter().map(gap_row).collect::<Vec<_>>(),
+    })
+}
+
+/// One entity that depends on the subject, and the edge that reached it.
+pub fn impact_row(row: &ImpactRow) -> Value {
+    json!({
+        "entity": entity(&row.entity),
+        "depth": row.depth,
+        "relation": row.relation,
+        "direction": row.direction.as_str(),
+        "reached_entity_id": row.reached_entity_id,
+        "assertion_id": row.assertion_id,
+        "status": row.status,
+        "strongest_source_type": row.strongest_source_type,
+        "observation_count": row.observation_count,
+        "is_unresolved": row.is_unresolved,
+        "file_path": row.file_path,
+        "start_line": row.start_line,
+        "evidence_freshness": row.evidence_freshness.map(|freshness| freshness.as_str()),
+    })
+}
+
+/// The whole reverse-dependency answer, including the account of what it cannot see.
+///
+/// `unresolved` is a **present object, never null and never omitted**, whatever its counts. A
+/// client that received a small `results` array with no accompanying account would read it as
+/// "few things depend on this, safe to change"; on a repository where a third of the reference
+/// sites resolve to nothing that reading is unsupported, and the zero case is exactly where the
+/// reassurance has to be explicit rather than inferred from silence.
+pub fn impact_report(report: &ImpactReport) -> Value {
+    json!({
+        "subject": entity(&report.subject),
+        "relations": report.relations.iter()
+            .map(|relation| relation.as_str())
+            .collect::<Vec<_>>(),
+        "max_depth": report.max_depth,
+        "limit": report.limit,
+        "totals": {
+            "entities": report.totals.entities,
+            // An array rather than an object: JSON object keys are strings, and `"10"` sorting
+            // before `"2"` would put the tally in an order no reader expects.
+            "by_depth": report.totals.by_depth.iter().map(|(depth, count)| json!({
+                "depth": depth,
+                "entities": count,
+            })).collect::<Vec<_>>(),
+            "by_relation": report.totals.by_relation,
+            "by_kind": report.totals.by_kind,
+            "stale": report.totals.stale,
+        },
+        "unresolved": {
+            "sites": report.unresolved.sites,
+            "assertions": report.unresolved.assertions,
+            "targets": report.unresolved.targets,
+            "by_category": report.unresolved.by_category,
+        },
+        "count": report.results.len(),
+        "results_total": report.results_total,
+        "truncated": report.truncated,
+        "files_probed": report.files_probed,
+        "results": report.results.iter().map(impact_row).collect::<Vec<_>>(),
     })
 }
 

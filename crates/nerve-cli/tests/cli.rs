@@ -1745,3 +1745,245 @@ fn the_cli_and_the_api_report_the_same_symbol_count() {
 
     drop(child);
 }
+
+// ---- impact --------------------------------------------------------------------------------
+
+/// The closure, the exact tallies, and the caveat — from the command line.
+#[test]
+fn impact_reports_the_closure_and_always_states_what_it_cannot_see() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    let path = root.to_str().unwrap();
+
+    let output = run(&["impact", "add", "--path", path]);
+    assert_eq!(code(&output), 0, "{}", stdout(&output));
+    let text = stdout(&output);
+    assert!(text.contains("depend on this, transitively"), "{text}");
+    assert!(
+        text.contains("resolved to nothing"),
+        "the caveat is unconditional: {text}"
+    );
+
+    let value = json(&run(&["impact", "add", "--path", path, "--json"]));
+    require_keys(
+        &value,
+        &[
+            "command",
+            "ok",
+            "exit_code",
+            "root",
+            "subject",
+            "relations",
+            "max_depth",
+            "limit",
+            "totals",
+            "unresolved",
+            "count",
+            "results_total",
+            "truncated",
+            "files_probed",
+            "results",
+        ],
+    );
+    assert_eq!(value["command"], "impact");
+    assert_eq!(value["exit_code"], 0);
+    assert_eq!(
+        value["relations"],
+        serde_json::json!(["CALLS", "REFERENCES", "EXTENDS", "IMPLEMENTS"]),
+        "an empty --relation list means the default set, never every relation"
+    );
+    // `add` is called by three functions in this fixture and by nothing else.
+    assert_eq!(value["totals"]["entities"], 3, "{value}");
+    assert_eq!(value["results_total"], 3);
+    assert_eq!(value["truncated"], false);
+    assert_eq!(value["totals"]["by_relation"]["CALLS"], 3);
+
+    require_keys(
+        &value["unresolved"],
+        &["sites", "assertions", "targets", "by_category"],
+    );
+    assert!(
+        value["unresolved"]["sites"].as_u64().unwrap() > 0,
+        "{value}"
+    );
+}
+
+/// The caveat is printed when it has nothing to report, which is when it matters most.
+///
+/// A short answer with no accompanying account reads as "safe to change". Silence in the zero
+/// case would make the reassurance something the reader has to infer, and inferring it from an
+/// absent line is exactly how the wrong conclusion gets drawn.
+#[test]
+fn the_impact_caveat_appears_even_when_nothing_is_unresolved() {
+    let (dir, root) = named_fixture_copy("ts-basic");
+    // A repository with one file and no unresolvable reference in it.
+    let src = root.join("src");
+    for entry in std::fs::read_dir(&src).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_name() != "math.ts" {
+            let path = entry.path();
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path).unwrap();
+            } else {
+                std::fs::remove_file(&path).unwrap();
+            }
+        }
+    }
+    std::fs::write(
+        src.join("math.ts"),
+        "export function add(a, b) { return a + b; }\n",
+    )
+    .unwrap();
+
+    let path = root.to_str().unwrap();
+    assert_eq!(code(&run(&["init", path])), 0);
+    assert_eq!(code(&run(&["index", path])), 0);
+
+    let output = run(&["impact", "add", "--path", path]);
+    assert_eq!(code(&output), 0, "nothing depending on it is not an error");
+    let text = stdout(&output);
+    assert!(
+        text.contains("resolved to nothing"),
+        "the account is unconditional: {text}"
+    );
+    assert!(
+        text.contains("no\n  failed resolution is hiding a dependency")
+            || text.contains("failed resolution is hiding a dependency"),
+        "the zero case says so in words: {text}"
+    );
+
+    let value = json(&run(&["impact", "add", "--path", path, "--json"]));
+    assert_eq!(value["totals"]["entities"], 0);
+    assert_eq!(value["results"], serde_json::json!([]));
+    assert_eq!(value["unresolved"]["sites"], 0, "{value}");
+    assert!(
+        value["unresolved"].is_object(),
+        "present, not omitted: {value}"
+    );
+    drop(dir);
+}
+
+/// Bad arguments are refused before the database is opened.
+#[test]
+fn impact_refuses_bad_bounds_and_an_ambiguous_selector() {
+    let (_dir, root) = indexed_fixture("ts-resolution");
+    let path = root.to_str().unwrap();
+
+    for bad in [
+        vec!["impact", "add", "--path", path, "--max-depth", "0"],
+        vec!["impact", "add", "--path", path, "--limit", "0"],
+        vec!["impact", "add", "--path", path, "--relation", "NOPE"],
+    ] {
+        let output = run(&bad);
+        assert_eq!(code(&output), 10, "{bad:?} -> {}", stdout(&output));
+    }
+
+    // `area` is a method on two classes in this fixture. Refused, never guessed.
+    let ambiguous = run(&["impact", "area", "--path", path]);
+    assert_eq!(code(&ambiguous), 10, "{}", stdout(&ambiguous));
+    let value = json(&run(&["impact", "area", "--path", path, "--json"]));
+    assert_eq!(value["ok"], false, "{value}");
+}
+
+/// The cap moves the rows; the tallies describe the whole closure regardless.
+#[test]
+fn impact_truncation_reports_what_it_cut() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    let path = root.to_str().unwrap();
+
+    let value = json(&run(&[
+        "impact", "add", "--path", path, "--limit", "1", "--json",
+    ]));
+    assert_eq!(value["count"], 1);
+    assert_eq!(value["truncated"], true);
+    assert_eq!(value["results_total"], 3, "exact whatever the cap cuts");
+    assert_eq!(value["totals"]["entities"], 3);
+    assert!(
+        stdout(&run(&["impact", "add", "--path", path, "--limit", "1"])).contains("raise --limit")
+    );
+}
+
+/// `nerve impact --json` and `/api/impact` must answer identically.
+///
+/// Both call the same `nerve_store::impact`, so this guards ARCHITECTURE.md invariant 3 — a
+/// surface computing its own interpretation of the evidence. The `Reaper` is the same guard, for
+/// the same reason, as the gap and symbol-count parity tests above: an assertion that fails
+/// before the `kill` would orphan `nerve serve`, and the orphan holds the inherited stdout pipe
+/// open until `cargo test` gives up collecting output.
+#[cfg(unix)]
+#[test]
+fn the_cli_and_the_api_answer_the_impact_question_identically() {
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+
+    struct Reaper(std::process::Child);
+    impl Drop for Reaper {
+        fn drop(&mut self) {
+            let _ = Command::new("kill")
+                .args(["-TERM", &self.0.id().to_string()])
+                .status();
+            let _ = self.0.wait();
+        }
+    }
+
+    let (_dir, root) = indexed_fixture("ts-basic");
+    let root_arg = root.to_str().unwrap().to_string();
+
+    let mut spawned = Command::new(binary())
+        .args(["serve", &root_arg, "--json", "--port", "0"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("nerve serve must start");
+    let mut out = spawned.stdout.take().unwrap();
+    let child = Reaper(spawned);
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 512];
+    let announcement = loop {
+        let read = out.read(&mut chunk).expect("reading serve output");
+        assert!(read > 0, "serve exited without announcing itself");
+        buffer.extend_from_slice(&chunk[..read]);
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&buffer) {
+            break value;
+        }
+    };
+    let address = announcement["address"].as_str().unwrap().to_string();
+    let token = announcement["token"].as_str().unwrap().to_string();
+
+    let mut socket = std::net::TcpStream::connect(&address).expect("connect");
+    socket
+        .write_all(
+            format!(
+                "GET /api/impact?subject=add HTTP/1.1\r\nHost: {address}\r\n\
+                 X-Nerve-Token: {token}\r\nConnection: close\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    let mut response = String::new();
+    socket.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let from_api: serde_json::Value =
+        serde_json::from_str(response.split_once("\r\n\r\n").expect("a body").1)
+            .expect("the API must answer JSON");
+
+    let from_cli = json(&run(&["impact", "add", "--path", &root_arg, "--json"]));
+
+    for key in [
+        "relations",
+        "max_depth",
+        "limit",
+        "totals",
+        "unresolved",
+        "count",
+        "results_total",
+        "truncated",
+    ] {
+        assert_eq!(
+            from_cli[key], from_api[key],
+            "the CLI and the API disagreed about {key}"
+        );
+    }
+    assert_eq!(from_cli["subject"], from_api["subject"]);
+    assert_eq!(from_cli["results"], from_api["results"]);
+
+    drop(child);
+}

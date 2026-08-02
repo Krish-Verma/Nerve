@@ -23,6 +23,7 @@ pub mod facts;
 pub mod freshness;
 pub mod gaps;
 pub mod graph;
+pub mod impact;
 pub mod prune;
 pub mod query;
 pub mod schema;
@@ -42,6 +43,10 @@ pub use graph::{
     explain, find_paths, neighbourhood, AssertionEvidence, Direction, EdgeDirection, GraphPath,
     NeighbourEdge, NeighbourNode, NeighbourhoodQuery, NeighbourhoodReport, ObservationEvidence,
     PathHop, PathQuery, PathReport, WhyDirection, WhyQuery, WhyReport,
+};
+pub use impact::{
+    impact, ImpactQuery, ImpactReport, ImpactRow, ImpactTotals, UnresolvedAccount,
+    DEFAULT_RELATIONS as DEFAULT_IMPACT_RELATIONS, UNCATEGORISED as UNCATEGORISED_UNRESOLVED,
 };
 pub use prune::{
     delete_claims_sourced_at, delete_directory_containment, delete_extractor_file_rows,

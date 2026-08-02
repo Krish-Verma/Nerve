@@ -8,22 +8,22 @@
 
 | | |
 |---|---|
-| **Last slice commit** | `5618642` — `fix: Slice 7a-iii — the rail counted everything and called it symbols`. A docs commit may sit on top of it; `git log --oneline -3` is authoritative. |
+| **Last slice commit** | Slice 7b — `feat: Slice 7b — nerve impact`. `git log --oneline -3` is authoritative; a docs commit records the hash. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 7a-iii** — canonical `symbols_total`; the rail no longer calls every entity a symbol |
-| **Next slice** | **Slice 7b** — `nerve impact`: reverse dependency closure with evidence and an honest truncation flag. Then 7c, 8–14, validation. |
-| **Roadmap status** | **INCOMPLETE.** 7b, 7c, 8–14 and real-world validation not started. |
+| **Last completed slice** | **Slice 7b** — `nerve impact`, with the unresolved account on every answer |
+| **Next slice** | **Slice 7c** — `nerve check` (CI exit codes) + `nerve doctor` (diagnostics). Then 8–14, validation. |
+| **Roadmap status** | **INCOMPLETE.** 7c, 8–14 and real-world validation not started. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
 
-## Verification state at the Slice 7a-iii commit
+## Verification state at the Slice 7b commit
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace                                  → 735 passed, 0 failed, 2 ignored
+cargo test --workspace                                  → 771 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
 ```
 
@@ -101,6 +101,31 @@ Orchestrator mutation probe (make `coverage_run` a symbol) failed **16 tests acr
 Note: plain `cargo test --workspace` halts at the first failing target and showed only 3 —
 **`--no-fail-fast` is required for an honest probe**.
 
+## What Slice 7b delivered
+
+**`nerve impact` + `/api/impact`** (the 11th route). BFS reverse closure over `CALLS`,
+`REFERENCES`, `EXTENDS`, `IMPLEMENTS`, reusing `graph::adjacency_sql(query, reverse)` and
+`idx_assertion_target` — no second graph walker. A **global** visited set seeded with the subject,
+so cycles terminate, each entity appears once at its shortest depth, and the subject is never its
+own dependant. Closure expanded fully within `max_depth` before `limit` applies, so tallies
+describe the answer and not the page.
+
+**The unresolved account is a field on every answer, printed and serialized even when zero.**
+Counted in **observations** (a site is an observation; two calls to one unresolved name from one
+function are one assertion but two sites), scoped repository-wide, restricted to the relations
+walked, split by `UnresolvedCategory`. On `ts-basic`, `add` has **3 dependants beside 4 unresolved
+sites** — the caveat is larger than the answer, which is the honest shape of the repository.
+
+**Four exclusions from the default, each reasoned** (`CONTAINS`, `DEFINES`, `IMPORTS`, `COVERS`) —
+see `docs/plans/slice-07b-impact.md`. An empty `--relation` list means the **default set, not every
+relation**, the opposite of `PathQuery`; there is a test for exactly that.
+
+Two mutation probes. Zeroing the account failed 4 tests across store, CLI and API. Admitting
+`CONTAINS` to the default failed 10 — but **not** the API containment test, because reverse
+`CONTAINS` from a *function* subject matches nothing (a function is `DEFINES`'d, not
+`CONTAINS`'d); re-run with `DEFINES`, that test fails as intended. Recorded because a probe that
+passes for the wrong reason is how a never-firing test gets trusted.
+
 ---
 
 ## The interface is frozen (2026-08-02)
@@ -122,7 +147,7 @@ across `types.ts` and `App.tsx:144`) are the model.
 
 | | |
 |---|---|
-| **7b** | **Next.** `nerve impact` — reverse dependency closure with evidence and an honest truncation flag. |
+| **7c** | **Next.** `nerve check` (CI exit codes) + `nerve doctor` (diagnostics). |
 | 7c | `nerve check` (CI exit codes) + `nerve doctor` (diagnostics). |
 | 8 | MCP — one default investigation tool. **T7 + T8 gate.** |
 | 9 | Python |
@@ -185,6 +210,12 @@ recorded in `docs/plans/slice-15-real-world-validation.md`.
 
 ## Environment notes
 
+- **An org monthly spend limit killed the Slice 7b implementation agent mid-slice** (2026-08-02),
+  after the store and CLI but before the API handler and every CLI/API test. Delegation was then
+  unavailable, so the orchestrator finished the slice directly and recorded the deviation in
+  `docs/reports/slice-07b-report.md`. If subagent dispatch starts failing with a spend-limit
+  error, that is the cause; finishing in the orchestrator is the recorded fallback, and the
+  mutation probes carry more weight when the two-party check is unavailable.
 - **Session limits and watchdogs are real here, and have now cost five agents.** One terminated
   mid-slice (4b), one stalled at the 600 s watchdog (5b), one hit a hard session limit (5c), one hit
   a hard session limit mid-verification (5d-i). In every case the partial work was inspected rather

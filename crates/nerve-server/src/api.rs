@@ -36,6 +36,10 @@ pub const MAX_PATH_LIMIT: usize = 25;
 pub const MAX_UNRESOLVED_LIMIT: usize = 500;
 /// Largest page of coverage-gap rows. The tallies are exact whatever this cuts.
 pub const MAX_GAPS_LIMIT: usize = 500;
+/// Largest impact depth. Matches the CLI and path ceilings.
+pub const MAX_IMPACT_DEPTH: usize = 32;
+/// Largest page of impact rows. The tallies are exact whatever this cuts.
+pub const MAX_IMPACT_LIMIT: usize = 500;
 /// How many files the overview will re-hash before it reports a partial sweep.
 pub const FRESHNESS_PROBE_CAP: usize = 5_000;
 
@@ -487,6 +491,38 @@ pub fn gaps(ctx: &Context<'_>, target: &Target) -> Answer {
     value["kind"] = json!(kind.map(|kind| kind.as_str()));
     value["include_partial"] = json!(query.include_partial);
     Ok(value)
+}
+
+/// What depends on a symbol — and, always, the account of what the answer cannot see.
+///
+/// The endpoint's difficulty is not the traversal. It is that a short `results` array reads as
+/// *"few things depend on this, it is safe to change"*, and on a repository where a share of the
+/// reference sites resolve to nothing that reading is unsupported. So `unresolved` is a present
+/// object on every answer, including the one where every count in it is zero: the reassuring case
+/// is exactly the one that has to be stated rather than left to be inferred from silence.
+///
+/// An empty relation list means [`nerve_store::DEFAULT_RELATIONS`], **not** every relation — the
+/// opposite of what empty means to `/api/path`. Falling back to every relation would follow
+/// `CONTAINS` and answer that every symbol impacts the repository.
+///
+/// The query lives in `nerve-store` and is the one `nerve impact` calls, so the two surfaces
+/// cannot drift into different answers (ARCHITECTURE.md invariant 3).
+pub fn impact(ctx: &Context<'_>, target: &Target) -> Answer {
+    let subject = resolve(ctx, target, "subject")?;
+    let query = nerve_store::ImpactQuery {
+        max_depth: target
+            .bounded("max_depth", 6, MAX_IMPACT_DEPTH)
+            .map_err(ApiError::bad_request)?,
+        limit: target
+            .bounded("limit", 50, MAX_IMPACT_LIMIT)
+            .map_err(ApiError::bad_request)?,
+        relations: relations(target)?,
+    };
+    // Freshness is computed by re-reading the repository through the prober, which enforces the
+    // path rules on every path the database hands it.
+    let report = nerve_store::impact(ctx.conn, &subject.entity_id, &query, ctx.prober)
+        .map_err(ApiError::internal)?;
+    Ok(shapes::impact_report(&report))
 }
 
 /// Which files parsed with errors, so what came out of them can be read with suspicion.
