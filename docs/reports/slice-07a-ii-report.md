@@ -46,34 +46,51 @@ Absent case on a repository with no coverage:
 `{"coverage":"absent","answerable":false,"totals":null,"count":0,"symbols_in_scope":24}` —
 `totals` is `null`, not zeroes.
 
-## What was NOT verified — screenshot QA
+## Screenshot QA — performed
 
-**Screenshot QA could not be performed in this session, and is not claimed.** Two browser paths were
-attempted and both failed: the Chrome extension returned `Failed to query tabs: No group with id`
-on three consecutive attempts, and headless Chrome (`--headless=new`, `--dump-dom`,
-`--screenshot`) produced zero bytes and had to be killed on timeout. Playwright is not installed and
-adding it was out of scope.
+The first attempt failed because **two Chrome browsers were connected to the account**, so the tab
+group lookup returned `No group with id`. Selecting one browser fixed it. Verified live at 1512 CSS
+px against two running servers, screenshots reviewed.
 
-The implementing agent reported verifying the states "in a real browser". **That claim is
-unconfirmed** — it could not be reproduced here, and it is recorded as the agent's claim rather than
-as a verified result.
+| Check | Result |
+|---|---|
+| **Absent** | ✅ No table, no zeroes, no symbol list. Chips `coverage absent` · `24 symbols in scope` · *"nothing to tally, so nothing is tallied"*. Headline **"Nerve has not been told what your tests cover."** Body states the distinction explicitly and says the screen shows *"no totals — not even zeroes"*. Command block `$ nerve coverage <lcov-report>` |
+| **Headline** | ✅ *"3 of 9 symbols in scope are not known to be touched by any run — 2 measured and never entered, 1 never measured at all."* |
+| **Tallies** | ✅ uncovered 2 *measured, never entered* · unmeasured 1 *no evidence names the file* · partial 2 *entered, not run through* · covered 4 · stale 3 *over 1 of 2 measured files* — matches the API exactly |
+| **uncovered vs unmeasured** | ✅ Visibly different chips, and a "Two ways of not being covered" panel states both meanings **on the screen**, not in a tooltip |
+| **Rows** | ✅ `untested` unmeasured + *no evidence to date*; `neverRun` uncovered + **stale coverage**; `Shape` uncovered + **fresh coverage** |
+| **unmeasured freshness** | ✅ Renders *no evidence to date* rather than claiming a freshness — matches `coverage_freshness: null` |
+| **partial toggle** | ✅ Panel heading changes from "Symbols with a gap" to **"Gaps, and the partly covered"**, because partial is not a gap. `clamp` *5 of 6 instrumented lines ran*, `Rectangle.perimeter` *1 of 2* — unrounded, each naming its report |
+| **Runs** | ✅ `coverage/lcov.info` · fresh · 2 source files · content hash |
+| **Nav** | ✅ Rail reads **Unresolved** and **Coverage** under "What is missing". The word "Gaps" appears nowhere in the chrome |
+| **Console** | ✅ **0 messages** after a tracked reload — no errors, no CSP violations |
 
-What *was* verified instead: the data contract above against the live server, the built bundle
-containing the new view's strings, the lint, the frontend unit tests, and the full Rust gate.
+Screenshots (not committed — this project does not track them):
+`…/scratchpad/screenshots-7a-ii/{01-coverage-present,02-coverage-absent,03-partial-included}.jpg`
 
-### Manual QA checklist — run before treating this view as reviewed
+### Still not verified — narrow viewport
 
-```bash
-export PATH="$HOME/.cargo/bin:$PATH"
-./target/release/nerve serve <repo-with-coverage> --json --port 0   # open the printed url, then #/coverage
+**Responsive QA at 380 px could not be performed.** `resize_window` reports success but
+`window.innerWidth` stays at 1512, so the Chrome window is ignoring the resize (it appears
+maximized) and every capture is desktop-width. The responsive rule for the new component **does**
+exist — `.cov` rules at lines 1615 and 1620 sit inside the `@media (max-width: 900px)` block in
+`nerve.css` — but that is a code check, not a visual one. Re-check at 380 px before release.
+
+## Defect found during this QA — recorded as 7a-iii, not fixed here
+
+**The rail labels 21 entities as "Symbols" when the repository has 9.** `App.tsx:144` binds the
+"Symbols" badge to `data.entities_total`, which counts every entity kind:
+
+```
+function 4 · method 3 · interface 1 · class 1        → 9 symbols
+file 4 · module 3 · section 1 · repository 1 ·
+document 1 · directory 1 · coverage_run 1            → 12 non-symbols
 ```
 
-1. **Absent** — on a repository with no coverage: no table, no zeroes, no symbol list; the screen
-   says Nerve has not been told what your tests cover and names `nerve coverage <lcov-report>`.
-2. **uncovered vs unmeasured** — visibly different, with both meanings stated on the screen.
-3. **partial** — shows `n of m instrumented lines ran`, unrounded; off by default behind a toggle.
-4. **stale** — per-row chip plus a headline figure; a stale gap is never presented as current.
-5. **runs** — report path, freshness and source-file count are shown.
-6. **Nav** — the rail reads "Unresolved" and "Coverage"; the word "Gaps" appears nowhere.
-7. **Responsive** — check at 380 px and 1600 px.
-8. **Console** — 0 CSP violations, 0 errors.
+It now also counts `coverage_run`, which is emphatically not a symbol. This is **pre-existing from
+Slice 4b**, not introduced here — but this slice made it visible by putting the true symbol count
+("9 symbols in scope") on the same screen as the wrong one ("Symbols 21"). Two numbers, one word,
+one screen.
+
+The fix is a small API addition (`symbols_total` over `EntityKind::is_symbol()`) plus a rail
+rebinding, and it needs its own slice because it changes the `/api/overview` contract.

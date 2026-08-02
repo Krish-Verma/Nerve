@@ -12,7 +12,7 @@
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
 | **Last completed slice** | **Slice 7a-ii** — SPA view renamed Unresolved; new Coverage view |
-| **Next slice** | **Slice 7b** — `nerve impact`. Then 7c (`check`/`doctor`), 8–14, validation. |
+| **Next slice** | **Slice 7a-iii** — corrective: the rail's "Symbols" badge shows `entities_total`. Then 7b (`impact`), 7c, 8–14, validation. |
 | **Roadmap status** | **INCOMPLETE.** 7–14 and real-world validation not started. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
@@ -82,7 +82,8 @@ cannot emit. `directnessClass`'s `default` arm no longer renders an unknown dire
 
 | | |
 |---|---|
-| **7b** | `nerve impact` — reverse dependency closure with evidence and an honest truncation flag. |
+| **7a-iii** | **Corrective, small.** `apps/nerve-web/src/App.tsx:144` binds the "Symbols" rail badge to `data.entities_total`, which counts files, modules, directories, documents, sections, the repository and now `coverage_run`. On the coverage fixture it reads **21** while the Coverage view on the same screen correctly says **9 symbols in scope**. Fix: add `symbols_total` to `/api/overview` derived from `EntityKind::is_symbol()`, bind the rail to it, update the TS mirror, rebuild and re-embed. Pre-existing from Slice 4b. |
+| 7b | `nerve impact` — reverse dependency closure with evidence and an honest truncation flag. |
 | 7c | `nerve check` (CI exit codes) + `nerve doctor` (diagnostics). |
 | 8 | MCP — one default investigation tool. **T7 + T8 gate.** |
 | 9 | Python |
