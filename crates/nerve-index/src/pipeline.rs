@@ -295,8 +295,11 @@ pub struct IndexOutcome {
     pub entities_by_kind: BTreeMap<String, i64>,
     /// Assertion counts by relation, over the whole database.
     pub assertions_by_relation: BTreeMap<String, i64>,
-    /// Total entities.
+    /// Total entities, of every kind.
     pub entities_total: i64,
+    /// Entities that are symbols — functions, methods, classes, interfaces. Always at most
+    /// [`entities_total`](Self::entities_total); see [`nerve_store::StatusReport::symbols_total`].
+    pub symbols_total: i64,
     /// Total assertions.
     pub assertions_total: i64,
     /// Total observations.
@@ -1278,6 +1281,7 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         entities_by_kind: report.entities_by_kind,
         assertions_by_relation: report.assertions_by_relation,
         entities_total: report.entities_total,
+        symbols_total: report.symbols_total,
         assertions_total: report.assertions_total,
         observations_total: report.observations_total,
         unresolved_entities: report.unresolved_entities,

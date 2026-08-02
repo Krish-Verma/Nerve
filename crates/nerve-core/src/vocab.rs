@@ -548,6 +548,58 @@ mod tests {
         assert!(!EntityKind::Section.is_symbol());
     }
 
+    /// Every kind's classification, pinned one by one.
+    ///
+    /// [`EntityKind::is_symbol`] is a `matches!` over four variants, so a kind added to the
+    /// vocabulary is silently classified as *not* a symbol — a default, not a decision. That
+    /// default is load-bearing well beyond the symbol tuple it was written for: it now decides
+    /// which kinds `symbol_kinds_sql` puts in an `IN (…)` clause, and therefore what
+    /// `StatusReport::symbols_total` counts and what the interface prints beside the word
+    /// *symbols*. Listing all twelve, and checking the list is exhaustive over
+    /// [`EntityKind::ALL`], makes a new kind fail here until someone states which it is.
+    #[test]
+    fn every_entity_kind_is_classified_as_a_symbol_or_not() {
+        let pinned: [(EntityKind, bool); 12] = [
+            // Named by a path, a tuple of its own, or a content hash — never by the symbol tuple.
+            (EntityKind::Repository, false),
+            (EntityKind::Directory, false),
+            (EntityKind::File, false),
+            (EntityKind::Module, false),
+            (EntityKind::Document, false),
+            (EntityKind::Section, false),
+            (EntityKind::Unresolved, false),
+            (EntityKind::CoverageRun, false),
+            // The symbol tuple's four kinds, and the whole of what "symbol" means here.
+            (EntityKind::Function, true),
+            (EntityKind::Method, true),
+            (EntityKind::Class, true),
+            (EntityKind::Interface, true),
+        ];
+
+        for (kind, expected) in pinned {
+            assert_eq!(
+                kind.is_symbol(),
+                expected,
+                "{kind} is classified against this list"
+            );
+        }
+
+        let mut listed: Vec<EntityKind> = pinned.iter().map(|(kind, _)| *kind).collect();
+        listed.sort_unstable();
+        let mut all = EntityKind::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a kind was added to the vocabulary without a classification above"
+        );
+
+        assert_eq!(
+            EntityKind::ALL.iter().filter(|k| k.is_symbol()).count(),
+            4,
+            "the symbol tuple names exactly four kinds"
+        );
+    }
+
     #[test]
     fn unresolved_category_round_trips() {
         for category in UnresolvedCategory::ALL {

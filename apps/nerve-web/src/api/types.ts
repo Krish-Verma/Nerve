@@ -85,7 +85,10 @@ export interface Overview {
   state_id: string | null;
   git_commit: string | null;
   database_bytes: number | null;
+  /** Every entity kind, symbols included. Not the number to print beside the word "symbols". */
   entities_total: number;
+  /** Functions, methods, classes and interfaces. Always at most `entities_total`. */
+  symbols_total: number;
   entities_by_kind: Record<string, number>;
   assertions_total: number;
   assertions_by_relation: Record<string, number>;

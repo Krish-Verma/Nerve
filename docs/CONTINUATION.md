@@ -8,22 +8,22 @@
 
 | | |
 |---|---|
-| **Last slice commit** | `da4ae72` — `fix: Slice 7a-ii — "Gaps" meant two different things`. A docs commit may sit on top of it; `git log --oneline -3` is authoritative. A commit cannot contain its own hash, so this names the slice commit, not literally `HEAD`. |
+| **Last slice commit** | Slice 7a-iii — `fix: Slice 7a-iii — the rail counted everything and called it symbols`. A docs commit may sit on top of it; `git log --oneline -3` is authoritative. A commit cannot contain its own hash, so this names the slice, not literally `HEAD`. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 7a-ii** — SPA view renamed Unresolved; new Coverage view |
-| **Next slice** | **Slice 7a-iii** — corrective: the rail's "Symbols" badge shows `entities_total`. Then 7b (`impact`), 7c, 8–14, validation. |
-| **Roadmap status** | **INCOMPLETE.** 7–14 and real-world validation not started. |
+| **Last completed slice** | **Slice 7a-iii** — canonical `symbols_total`; the rail no longer calls every entity a symbol |
+| **Next slice** | **Slice 7b** — `nerve impact`: reverse dependency closure with evidence and an honest truncation flag. Then 7c, 8–14, validation. |
+| **Roadmap status** | **INCOMPLETE.** 7b, 7c, 8–14 and real-world validation not started. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
 
-## Verification state at `da4ae72`
+## Verification state at the Slice 7a-iii commit
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace                                  → 729 passed, 0 failed, 2 ignored
+cargo test --workspace                                  → 735 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
 ```
 
@@ -78,12 +78,51 @@ again. It found **120 real sites** rendering fallback text and one gloss for a s
 cannot emit. `directnessClass`'s `default` arm no longer renders an unknown directness as
 "inferred".
 
+## What Slice 7a-iii delivered
+
+**Canonical `symbols_total`.** The rail printed `entities_total` under the word "Symbols" — every
+repository, directory, file, module, document, section, unresolved reference and, since Slice 6a,
+every ingested coverage report. Now `StatusReport::symbols_total`, derived from
+`EntityKind::is_symbol()`, on `/api/overview`, `status --json`, `index --json` and both text
+outputs, with a test asserting the CLI and the API agree. Verified end to end: ingesting a coverage
+report moves `entities_total` 17 → 18 and leaves `symbols_total` at 8.
+
+**The symbol-kind SQL list had been generated in three separate places** (`select.rs`, `query.rs`,
+`gaps.rs`). Each was individually correct, but a slice whose objective is a *canonical* count
+cannot add a fourth. One `pub(crate) fn symbol_kinds_sql()`, four call sites, per-site reasoning
+kept where it belongs.
+
+**The invariant is asserted over every non-symbol kind, not an example**, and both directions are
+tested — "never increases" alone is satisfied by a count frozen at zero. All twelve kinds are
+pinned individually with an exhaustiveness check, because `is_symbol()` is a `matches!` and a new
+kind would otherwise be classified by default rather than by decision.
+
+Orchestrator mutation probe (make `coverage_run` a symbol) failed **16 tests across 6 targets**.
+Note: plain `cargo test --workspace` halts at the first failing target and showed only 3 —
+**`--no-fail-fast` is required for an honest probe**.
+
+---
+
+## The interface is frozen (2026-08-02)
+
+The user owns `apps/nerve-web/` from this date and is working on it separately. Backend work
+continues.
+
+**Do not** do visual redesign, new views, layout, typography, responsive work, screenshot-driven
+refinement, or any discretionary edit under `apps/nerve-web/`. Do not block a backend slice on
+browser or screenshot QA.
+
+**Do** complete the backend contract, add API and CLI tests, and record every new frontend
+integration requirement in `docs/UI-BACKEND-HANDOFF.md` — endpoint, fields, states, example
+response, display language. A frontend edit is permitted only when the repository would otherwise
+not build, must be minimal, and must be documented there. Slice 7a-iii's two edits (four lines
+across `types.ts` and `App.tsx:144`) are the model.
+
 ## Remaining roadmap
 
 | | |
 |---|---|
-| **7a-iii** | **Corrective, small.** `apps/nerve-web/src/App.tsx:144` binds the "Symbols" rail badge to `data.entities_total`, which counts files, modules, directories, documents, sections, the repository and now `coverage_run`. On the coverage fixture it reads **21** while the Coverage view on the same screen correctly says **9 symbols in scope**. Fix: add `symbols_total` to `/api/overview` derived from `EntityKind::is_symbol()`, bind the rail to it, update the TS mirror, rebuild and re-embed. Pre-existing from Slice 4b. |
-| 7b | `nerve impact` — reverse dependency closure with evidence and an honest truncation flag. |
+| **7b** | **Next.** `nerve impact` — reverse dependency closure with evidence and an honest truncation flag. |
 | 7c | `nerve check` (CI exit codes) + `nerve doctor` (diagnostics). |
 | 8 | MCP — one default investigation tool. **T7 + T8 gate.** |
 | 9 | Python |
@@ -193,3 +232,18 @@ recorded in `docs/plans/slice-15-real-world-validation.md`.
 - The scoped pruner's completeness is checked empirically, not proved.
 - `nerve why` on a single entity has no `--limit`.
 - The scale test is load-sensitive and can fail spuriously; it is `#[ignore]`d and does not gate CI.
+- **`IndexOutcome` is built field-by-field from `StatusReport`** in `pipeline.rs`. Every future
+  `StatusReport` field needs a manual copy there and silently goes missing from `index --json` if
+  forgotten — the same class of omission Slice 7a-iii corrected. Nothing enforces the
+  correspondence. Found during 7a-iii, deliberately left.
+- **The CLI↔API agreement-test boilerplate is duplicated twice** (`gaps`, `overview`) — roughly 35
+  lines of spawn/`Reaper` each. A third such test should hoist it into the shared harness.
+- **`docs/ARCHITECTURE.md` has drifted.** It says `nerve-server` is "deliberately not created yet"
+  (shipped in Slice 4a), its crate table lists 4 of the 5 crates, its pipeline diagram names only
+  the two `ts-js-*` extractors (there are now `fs-structural`, `md-structural` and coverage too),
+  and it promises parallelism "in Slice 3" that was deliberately deferred. Documentation only; no
+  code depends on it. Fix in a docs pass.
+- **The Slice 7a-ii report's fixture counts do not match the committed fixture.** It states 21
+  entities / 9 symbols (`function 4`); `fixtures/ts-coverage` at HEAD yields 18 / 8 (`function 3`).
+  That QA session ran against a tree that is not the committed fixture. The defect it found was
+  real and is fixed; the numbers should not be quoted.

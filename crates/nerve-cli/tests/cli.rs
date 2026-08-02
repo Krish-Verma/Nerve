@@ -282,6 +282,7 @@ fn every_json_output_parses_and_carries_its_required_keys() {
             "unsupported_markdown",
             "unsupported_markdown_by_form",
             "entities_total",
+            "symbols_total",
             "entities_by_kind",
             "assertions_total",
             "assertions_by_relation",
@@ -306,6 +307,16 @@ fn every_json_output_parses_and_carries_its_required_keys() {
     assert_eq!(index["assertions_by_relation"]["CALLS"], 12);
     assert_eq!(index["assertions_by_relation"]["REFERENCES"], 5);
     assert_eq!(index["assertions_by_relation"]["IMPLEMENTS"], 2);
+    // `entities_total` counts every kind; `symbols_total` counts the four the vocabulary calls
+    // symbols. `ts-basic` has 14 functions, 6 methods, 2 classes and 2 interfaces, and also a
+    // repository, a directory, 8 files, 8 modules and 6 unresolved references — so the two are
+    // strictly different, and a surface that prints one where it means the other is wrong here.
+    assert_eq!(index["entities_total"], 48);
+    assert_eq!(index["symbols_total"], 24);
+    assert!(
+        index["symbols_total"].as_u64().unwrap() < index["entities_total"].as_u64().unwrap(),
+        "{index}"
+    );
     assert_eq!(
         index["denied_secrets"].as_array().unwrap(),
         &vec![serde_json::Value::from(".env")]
@@ -327,6 +338,7 @@ fn every_json_output_parses_and_carries_its_required_keys() {
             "state_id",
             "git_commit",
             "entities_total",
+            "symbols_total",
             "entities_by_kind",
             "assertions_total",
             "assertions_by_relation",
@@ -341,6 +353,16 @@ fn every_json_output_parses_and_carries_its_required_keys() {
     );
     assert_eq!(status["command"], "status");
     assert_eq!(status["healthy"], true);
+    // The same two numbers `index --json` reported, read back from the database rather than from
+    // the run that wrote it. Strict, not `<=`: `<=` holds when the two are the same number, which
+    // is exactly the defect.
+    assert_eq!(status["entities_total"], 48);
+    assert_eq!(status["symbols_total"], 24);
+    assert!(
+        status["symbols_total"].as_u64().unwrap() < status["entities_total"].as_u64().unwrap(),
+        "{status}"
+    );
+    assert_eq!(status["symbols_total"], index["symbols_total"]);
     require_keys(
         &status["last_run"],
         &[
@@ -1628,5 +1650,98 @@ fn the_cli_and_the_api_answer_the_gap_question_identically() {
     assert_eq!(from_cli["totals"], serde_json::Value::Null);
 
     // `Reaper::drop` sends the TERM and reaps, on this path and on every panicking one.
+    drop(child);
+}
+
+/// `nerve status --json` and `/api/overview` must report the same symbol count.
+///
+/// Both read `StatusReport` from one query in `nerve-store` (ARCHITECTURE.md invariant 3), so
+/// this is a guard against a surface computing its own answer — which is precisely how the rail
+/// came to print `entities_total` under the heading "Symbols". The fixture is the covered one, so
+/// the database holds a `coverage_run`: a non-symbol entity of the kind that made the defect
+/// visible in the first place, and the reason `symbols_total < entities_total` is asserted
+/// strictly rather than as `<=`.
+///
+/// The `Reaper` is the same guard, for the same reason, as
+/// [`the_cli_and_the_api_answer_the_gap_question_identically`] above: an assertion that fails
+/// before the `kill` would otherwise orphan `nerve serve`, and the orphan holds the inherited
+/// stdout pipe open until `cargo test` gives up collecting output.
+#[cfg(unix)]
+#[test]
+fn the_cli_and_the_api_report_the_same_symbol_count() {
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+
+    struct Reaper(std::process::Child);
+    impl Drop for Reaper {
+        fn drop(&mut self) {
+            let _ = Command::new("kill")
+                .args(["-TERM", &self.0.id().to_string()])
+                .status();
+            let _ = self.0.wait();
+        }
+    }
+
+    let (_dir, root) = covered_fixture();
+    let root_arg = root.to_str().unwrap().to_string();
+
+    let mut spawned = Command::new(binary())
+        .args(["serve", &root_arg, "--json", "--port", "0"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("nerve serve must start");
+    let mut out = spawned.stdout.take().unwrap();
+    let child = Reaper(spawned);
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 512];
+    let announcement = loop {
+        let read = out.read(&mut chunk).expect("reading serve output");
+        assert!(read > 0, "serve exited without announcing itself");
+        buffer.extend_from_slice(&chunk[..read]);
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&buffer) {
+            break value;
+        }
+    };
+    let address = announcement["address"].as_str().unwrap().to_string();
+    let token = announcement["token"].as_str().unwrap().to_string();
+
+    let mut socket = std::net::TcpStream::connect(&address).expect("connect");
+    socket
+        .write_all(
+            format!(
+                "GET /api/overview HTTP/1.1\r\nHost: {address}\r\nX-Nerve-Token: {token}\r\n\
+                 Connection: close\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    let mut response = String::new();
+    socket.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let from_api: serde_json::Value =
+        serde_json::from_str(response.split_once("\r\n\r\n").expect("a body").1)
+            .expect("the API must answer JSON");
+
+    let from_cli = json(&run(&["status", "--path", &root_arg, "--json"]));
+
+    for key in ["symbols_total", "entities_total", "entities_by_kind"] {
+        assert_eq!(
+            from_cli[key], from_api[key],
+            "the CLI and the API disagreed about {key}"
+        );
+    }
+
+    let symbols = from_api["symbols_total"].as_u64().unwrap();
+    let entities = from_api["entities_total"].as_u64().unwrap();
+    assert!(symbols > 0, "the fixture defines symbols");
+    assert!(
+        symbols < entities,
+        "{symbols} symbols of {entities} entities — a coverage_run is not a symbol"
+    );
+    assert_eq!(
+        from_api["entities_by_kind"]["coverage_run"], 1,
+        "the ingested report is in the entity table and must not be counted as a symbol"
+    );
+
     drop(child);
 }

@@ -20,6 +20,25 @@ fn overview_reports_counts_runs_schema_and_freshness() {
     assert_eq!(value["healthy"], true);
     assert!(value["entities_total"].as_u64().unwrap() > 0);
     assert!(value["entities_by_kind"]["module"].as_u64().unwrap() > 0);
+
+    // `symbols_total` is a different number from `entities_total` and the interface prints it
+    // beside the word "Symbols". `<=` alone would have passed on the defect it exists to catch —
+    // the rail bound to `entities_total` — so the strict inequality is the assertion that counts.
+    // The fixture has repositories, directories, files and modules as well as symbols, so on it
+    // the two can never be equal.
+    let entities = value["entities_total"].as_u64().unwrap();
+    let symbols = value["symbols_total"].as_u64().unwrap();
+    assert!(symbols > 0, "the fixture defines symbols");
+    assert!(
+        symbols < entities,
+        "{symbols} symbols of {entities} entities"
+    );
+    let by_kind = &value["entities_by_kind"];
+    let summed: u64 = ["function", "method", "class", "interface"]
+        .iter()
+        .map(|kind| by_kind[kind].as_u64().unwrap_or(0))
+        .sum();
+    assert_eq!(symbols, summed, "{by_kind}");
     assert!(value["assertions_by_relation"]["DEFINES"].as_u64().unwrap() > 0);
     assert!(value["observations_total"].as_u64().unwrap() > 0);
     assert!(value["database_bytes"].as_u64().unwrap() > 0);

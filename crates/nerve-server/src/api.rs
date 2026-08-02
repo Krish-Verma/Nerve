@@ -136,6 +136,7 @@ pub fn overview(ctx: &Context<'_>) -> Answer {
         "git_commit": report.git_commit,
         "database_bytes": nerve_store::database_bytes(ctx.db_path),
         "entities_total": report.entities_total,
+        "symbols_total": report.symbols_total,
         "entities_by_kind": report.entities_by_kind,
         "assertions_total": report.assertions_total,
         "assertions_by_relation": report.assertions_by_relation,

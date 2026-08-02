@@ -58,7 +58,7 @@ use nerve_core::vocab::{EntityKind, Relation};
 
 use crate::error::Result;
 use crate::freshness::{FileProber, Freshness, FreshnessCache};
-use crate::select::{EntityRef, ENTITY_COLUMNS, ENTITY_FROM};
+use crate::select::{symbol_kinds_sql, EntityRef, ENTITY_COLUMNS, ENTITY_FROM};
 
 /// Whether this repository holds any coverage evidence at all.
 ///
@@ -375,14 +375,9 @@ fn coverage_claims(conn: &Connection) -> Result<BTreeMap<String, Vec<CoverageCla
 
 /// Every symbol in scope, with its first occurrence, in a stable order.
 fn symbols_in_scope(conn: &Connection, query: &GapQuery) -> Result<Vec<EntityRef>> {
-    // Built from the closed compile-time vocabulary, never from caller text.
-    let kinds: Vec<String> = EntityKind::ALL
-        .iter()
-        .filter(|kind| kind.is_symbol())
-        .map(|kind| format!("'{}'", kind.as_str()))
-        .collect();
     // A path scope is matched as a prefix on a `/` boundary using `substr`, so that no caller
-    // text is ever interpreted as a `LIKE` wildcard or an escape.
+    // text is ever interpreted as a `LIKE` wildcard or an escape. The kind list is the other
+    // half of the same property: it comes from the closed vocabulary, never from caller text.
     let sql = format!(
         "SELECT {ENTITY_COLUMNS}
          {ENTITY_FROM}
@@ -392,7 +387,7 @@ fn symbols_in_scope(conn: &Connection, query: &GapQuery) -> Result<Vec<EntityRef
                  OR o.file_path = ?2
                  OR substr(o.file_path, 1, length(?2) + 1) = ?2 || '/')
           ORDER BY o.file_path, o.start_line, e.entity_id",
-        kinds.join(", ")
+        symbol_kinds_sql()
     );
     let prefix = query
         .path_prefix

@@ -546,6 +546,8 @@ fn run_index(output: &Output, path: Option<PathBuf>, full: bool) -> i32 {
             for (kind, count) in &outcome.entities_by_kind {
                 output.line(format!("    {kind:<12} {count}"));
             }
+            // `entities` counts every kind; `symbols` only the four the vocabulary calls symbols.
+            output.line(format!("  symbols        {}", outcome.symbols_total));
             output.line(format!("  assertions     {}", outcome.assertions_total));
             for (relation, count) in &outcome.assertions_by_relation {
                 output.line(format!("    {relation:<12} {count}"));
@@ -622,6 +624,7 @@ fn run_index(output: &Output, path: Option<PathBuf>, full: bool) -> i32 {
                 "supersession_cycle_documents": outcome.supersession_cycle_documents,
                 "supersession_contradictions": outcome.supersession_contradictions,
                 "entities_total": outcome.entities_total,
+                "symbols_total": outcome.symbols_total,
                 "entities_by_kind": outcome.entities_by_kind,
                 "assertions_total": outcome.assertions_total,
                 "assertions_by_relation": outcome.assertions_by_relation,
@@ -827,6 +830,9 @@ fn run_status(output: &Output, path: &Path) -> i32 {
     for (kind, count) in &report.entities_by_kind {
         output.line(format!("    {kind:<12} {count}"));
     }
+    // Reported next to `entities` because the two are routinely confused: `entities` counts
+    // every kind, `symbols` only the four the vocabulary calls symbols.
+    output.line(format!("  symbols        {}", report.symbols_total));
     output.line(format!("  assertions     {}", report.assertions_total));
     for (relation, count) in &report.assertions_by_relation {
         output.line(format!("    {relation:<12} {count}"));
@@ -881,6 +887,7 @@ fn run_status(output: &Output, path: &Path) -> i32 {
         "state_id": report.state_id,
         "git_commit": report.git_commit,
         "entities_total": report.entities_total,
+        "symbols_total": report.symbols_total,
         "entities_by_kind": report.entities_by_kind,
         "assertions_total": report.assertions_total,
         "assertions_by_relation": report.assertions_by_relation,

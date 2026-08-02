@@ -4,10 +4,9 @@ use std::collections::BTreeMap;
 
 use rusqlite::{params, Connection};
 
-use nerve_core::vocab::EntityKind;
-
 use crate::error::Result;
 use crate::schema;
+use crate::select::symbol_kinds_sql;
 
 /// Columns of `extractor_run`, in the order every query below reads them.
 const RUN_COLUMNS: &str = "run_id, state_id, extractor_id, extractor_version, started_at,
@@ -49,8 +48,16 @@ pub struct StatusReport {
     pub state_id: Option<String>,
     /// Git HEAD recorded for that state.
     pub git_commit: Option<String>,
-    /// Total entities.
+    /// Total entities, of **every** kind — repositories, directories, files, modules, documents,
+    /// sections, unresolved references and coverage runs as well as symbols.
     pub entities_total: i64,
+    /// Entities that are symbols: functions, methods, classes and interfaces.
+    ///
+    /// Derived from [`EntityKind::is_symbol`](nerve_core::vocab::EntityKind::is_symbol), so it is
+    /// the vocabulary's own answer to "how many symbols does this repository have" and cannot
+    /// drift from it. This is the number to show against the word *symbols*;
+    /// [`entities_total`](Self::entities_total) counts every kind and is always at least as large.
+    pub symbols_total: i64,
     /// Entity counts keyed by kind.
     pub entities_by_kind: BTreeMap<String, i64>,
     /// Total assertions.
@@ -174,6 +181,16 @@ pub fn status(conn: &Connection) -> Result<StatusReport> {
         state_id: last_run.as_ref().map(|r| r.state_id.clone()),
         git_commit,
         entities_total: scalar(conn, "SELECT count(*) FROM entity")?,
+        // The kind list is generated from the closed compile-time vocabulary, never from caller
+        // text, and comes from the one helper so it cannot disagree with the other symbol-only
+        // queries in this crate.
+        symbols_total: scalar(
+            conn,
+            &format!(
+                "SELECT count(*) FROM entity WHERE kind IN ({})",
+                symbol_kinds_sql()
+            ),
+        )?,
         entities_by_kind: grouped(
             conn,
             "SELECT kind, count(*) FROM entity GROUP BY kind ORDER BY kind",
@@ -398,7 +415,8 @@ pub fn unresolved_entities(
 pub struct SymbolSpanRow {
     /// The symbol.
     pub entity_id: String,
-    /// Its kind. Always one for which [`EntityKind::is_symbol`] holds.
+    /// Its kind. Always one for which
+    /// [`EntityKind::is_symbol`](nerve_core::vocab::EntityKind::is_symbol) holds.
     pub kind: String,
     /// Inclusive start byte.
     pub start_byte: i64,
@@ -412,25 +430,18 @@ pub struct SymbolSpanRow {
 
 /// Every **symbol** occurrence recorded in one file, in a stable order.
 ///
-/// The kind filter is generated from [`EntityKind::ALL`] rather than written out, so a kind added
-/// to the vocabulary is included here the moment [`EntityKind::is_symbol`] says it is a symbol,
-/// and there is no second list to fall out of step. Files, modules, documents and sections also
-/// have occurrences in a file; none of them is a symbol, and a coverage edge to a `Module` would
-/// say "the test suite covers this file", which is a different and weaker claim.
+/// Files, modules, documents and sections also have occurrences in a file; none of them is a
+/// symbol, and a coverage edge to a `Module` would say "the test suite covers this file", which
+/// is a different and weaker claim. The kind filter comes from [`symbol_kinds_sql`], so it is
+/// generated from the closed vocabulary rather than written out here.
 pub fn symbol_spans_in_file(conn: &Connection, file_path: &str) -> Result<Vec<SymbolSpanRow>> {
-    let kinds: Vec<String> = EntityKind::ALL
-        .iter()
-        .filter(|kind| kind.is_symbol())
-        .map(|kind| format!("'{}'", kind.as_str()))
-        .collect();
-    // The list is built from a closed compile-time vocabulary, never from caller text.
     let sql = format!(
         "SELECT o.entity_id, e.kind, o.start_byte, o.end_byte, o.start_line, o.end_line
            FROM occurrence o
            JOIN entity e ON e.entity_id = o.entity_id
           WHERE o.file_path = ?1 AND e.kind IN ({})
           ORDER BY o.entity_id, o.start_byte, o.end_byte",
-        kinds.join(", ")
+        symbol_kinds_sql()
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params![file_path], |row| {

@@ -141,7 +141,7 @@ export function App() {
             to={{ view: 'search', q: '', kind: null }}
             current={route.view === 'search' || route.view === 'entity'}
             label="Symbols"
-            note={data ? count(data.entities_total) : undefined}
+            note={data ? count(data.symbols_total) : undefined}
           />
         </div>
 

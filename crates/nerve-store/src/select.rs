@@ -25,13 +25,23 @@ pub const SUGGESTION_LIMIT: usize = 5;
 /// Shortest prefix a suggestion search will fall back to.
 pub const MIN_SUGGESTION_PREFIX: usize = 3;
 
-/// SQL list of the kinds whose `scope_path` names enclosing symbols.
+/// The symbol kinds as a quoted, comma-separated SQL list, for an `IN (…)` clause.
 ///
-/// For every other kind `scope_path` holds a repository path — a module's own file, a file's
-/// parent directory, the importer that failed to resolve — so folding it into a dotted
-/// qualified name would produce a name that does not exist anywhere in the source. The list is
-/// generated from the closed vocabulary so it cannot drift from [`EntityKind::is_symbol`].
-fn symbol_kinds_sql() -> String {
+/// Every kind for which [`EntityKind::is_symbol`] holds, and only those. The list is built from
+/// the closed compile-time vocabulary and **never** from caller text, so it is not an injection
+/// site, and it cannot drift from [`EntityKind::is_symbol`]: a kind added to the vocabulary is
+/// included the moment the vocabulary says it is a symbol, and there is no second list to fall
+/// out of step with.
+///
+/// One helper rather than one copy per question. Four questions in this crate need exactly this
+/// list, for four different reasons, and each call site states its own:
+///
+/// - selector resolution, below — a scope is folded into a dotted qualified name only for a
+///   symbol;
+/// - [`crate::query::symbol_spans_in_file`] — coverage lines are mapped onto symbols only;
+/// - [`crate::gaps`] — the gap question is asked of symbols only;
+/// - [`crate::query::status`] — `symbols_total` counts symbols only.
+pub(crate) fn symbol_kinds_sql() -> String {
     EntityKind::ALL
         .iter()
         .filter(|kind| kind.is_symbol())
@@ -204,6 +214,10 @@ pub fn resolve_selector(conn: &Connection, selector: &str) -> Result<Selection> 
                 params![selector],
             )?,
             SelectorKind::PathQualified => path_qualified(conn, selector)?,
+            // A scope is folded into a dotted qualified name only for a symbol. For every other
+            // kind `scope_path` holds a repository path — a module's own file, a file's parent
+            // directory, the importer that failed to resolve — so folding it in would produce a
+            // name that does not exist anywhere in the source.
             SelectorKind::Name => lookup(
                 conn,
                 &format!(
@@ -259,6 +273,10 @@ fn suggestions(conn: &Connection, selector: &str) -> Result<Vec<SearchHit>> {
     Ok(Vec::new())
 }
 
+/// `<rel_path>#<qualified_name>` — a name, or a folded scope, recorded inside one file.
+///
+/// The scope is folded for symbol kinds only, for the same reason as the `Name` stage above: for
+/// any other kind `scope_path` is a repository path, and `path.name` names nothing in the source.
 fn path_qualified(conn: &Connection, selector: &str) -> Result<Vec<EntityRef>> {
     let Some((rel_path, qualified)) = selector.split_once('#') else {
         return Ok(Vec::new());
@@ -324,13 +342,29 @@ mod tests {
         assert_eq!(orphan.location(), "-");
     }
 
+    /// The one list four queries share must be exactly the vocabulary's own answer.
+    ///
+    /// Scope folding, symbol spans, the gap question and `symbols_total` all read this helper, so
+    /// a drift here is not one wrong query but four — and one of them is a number the interface
+    /// prints beside the word *symbols*. Membership is checked kind by kind, and the whole string
+    /// is compared against an independently built one so that a kind cannot be present twice, or
+    /// quoted differently, or ordered other than as the vocabulary declares it.
     #[test]
-    fn only_symbol_kinds_fold_their_scope_into_a_qualified_name() {
+    fn the_shared_symbol_kind_list_is_exactly_what_the_vocabulary_calls_a_symbol() {
         let list = symbol_kinds_sql();
         for kind in EntityKind::ALL {
             let quoted = format!("'{}'", kind.as_str());
             assert_eq!(list.contains(&quoted), kind.is_symbol(), "{kind} in {list}");
         }
+
+        let expected = EntityKind::ALL
+            .iter()
+            .filter(|kind| kind.is_symbol())
+            .map(|kind| format!("'{}'", kind.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert_eq!(list, expected);
+        assert_eq!(list.matches('\'').count() / 2, 4, "four kinds, quoted once");
     }
 
     #[test]
