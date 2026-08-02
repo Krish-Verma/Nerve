@@ -222,8 +222,9 @@ responsive, because the accept/read pool is separate from the query workers.
 | Query CLI | T2 (query-time reads) | ✅ implemented and attack-verified |
 | Local HTTP API (Slice 4a) | T4, T5, T6 | ✅ implemented and attack-verified |
 | Visual UI (Slice 4b) | T5 rendering rules | ✅ implemented — no `dangerouslySetInnerHTML`/`innerHTML`/`eval` (lint-enforced, mutation-verified), 0 CSP violations across 31 pages |
-| Documents (Slice 5) | T7 | ⬜ required before Slice 5 ships |
-| Test evidence (Slice 6/11) | T9 | ⬜ required before Slice 6 ships |
+| Documents (Slice 5) | T7 | ✅ implemented and attack-verified (Slice 5a) — exhaustive, not a spot check: no observation on a document path carries any source type outside `{DOCUMENT_STATED, FILESYSTEM_OBSERVED}`, mutation-verified. Amended by Slice 5d-i (ADR-0007) |
+| Test evidence — coverage (Slice 6b) | T9 | ✅ implemented and attack-verified — traversal and symlink escape refused and counted with zero content leakage; unindexed file rejected without creating an entity; line outside any symbol counted; every 6a resource bound refuses whole; a file changed since indexing refused rather than mapped through stale extents. **Zero call-shaped relations from the coverage extractor, asserted over `Relation::ALL`** (ADR-0005) |
+| Test evidence — tracing (Slice 11) | T9 | ⬜ required before Slice 11 ships |
 | MCP (Slice 8) | T7, T8 | ⬜ required before Slice 8 ships |
 
 ## 7. Corrective items

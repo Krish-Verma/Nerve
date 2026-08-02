@@ -1,0 +1,99 @@
+{
+  "_": [
+    "Hand-written ground truth for fixtures/ts-coverage, read by",
+    "crates/nerve-index/tests/coverage_precision.rs. Selector: sym:<path>#<scope>.<name>.",
+    "Every entry was read out of coverage/lcov.info and the fixture sources by hand, against the",
+    "symbol line extents the index records. If the implementation disagrees with this file,",
+    "tighten the implementation.",
+    "A symbol with no covered line has no entry, because it must have no edge: absence is the",
+    "answer to the gap question and a NOT_COVERED edge would be a negative claim in a",
+    "positive-evidence store. Those symbols are listed under `no_edge` so that the absence is",
+    "asserted rather than merely unstated.",
+    "`covered` counts DA: lines inside the symbol's extent with a non-zero hit count;",
+    "`instrumented` counts DA: lines inside it whatever their hit count. `degree` is `covered`",
+    "when the two are equal and `partial` otherwise, and `partial` is never rounded."
+  ],
+
+  "covers": [
+    {
+      "symbol": "sym:src/math.ts#add",
+      "degree": "covered",
+      "covered": 2,
+      "instrumented": 2,
+      "lines": [1, 2],
+      "note": "extent 1-3; DA:1,1 and DA:2,3 are both inside it and both ran. Line 3 is a closing brace and is not instrumented, which is why `covered` is judged against instrumented lines rather than against the extent"
+    },
+    {
+      "symbol": "sym:src/math.ts#clamp",
+      "degree": "partial",
+      "covered": 5,
+      "instrumented": 6,
+      "lines": [5, 6, 7, 9, 10, 12],
+      "note": "DA:7,0 — the `return low` branch never ran. One unexecuted instrumented line is enough to make the symbol partial, and partial is a recorded value"
+    },
+    {
+      "symbol": "sym:src/shapes.ts#Rectangle",
+      "degree": "covered",
+      "covered": 1,
+      "instrumented": 1,
+      "lines": [3],
+      "note": "only the class declaration line is instrumented and inside the class but outside every method; lines 4-15 belong to the innermost symbol that covers them, which is never the class"
+    },
+    {
+      "symbol": "sym:src/shapes.ts#Rectangle.constructor",
+      "degree": "covered",
+      "covered": 2,
+      "instrumented": 2,
+      "lines": [4, 7],
+      "note": "extent 4-7, nested inside Rectangle's extent 3-16; innermost_covering picks the constructor because its byte span is the shorter one"
+    },
+    {
+      "symbol": "sym:src/shapes.ts#Rectangle.area",
+      "degree": "covered",
+      "covered": 1,
+      "instrumented": 1,
+      "lines": [10],
+      "note": "extent 9-11"
+    },
+    {
+      "symbol": "sym:src/shapes.ts#Rectangle.perimeter",
+      "degree": "partial",
+      "covered": 1,
+      "instrumented": 2,
+      "lines": [13, 14],
+      "note": "the method definition line ran when the class was defined; DA:14,0 says the body never did. Entered is not executed, and the row says so"
+    }
+  ],
+
+  "no_edge": [
+    {
+      "symbol": "sym:src/math.ts#neverRun",
+      "note": "DA:15,0 and DA:16,0 — instrumented and never executed. No edge at all, in either direction"
+    },
+    {
+      "symbol": "sym:src/shapes.ts#Shape",
+      "note": "an interface the report never mentions. Absence in the report is absence in the graph"
+    }
+  ],
+
+  "unattributed_lines": [
+    {
+      "file": "src/shapes.ts",
+      "line": 1,
+      "note": "the `import` statement executes and is instrumented, and it is inside no symbol. Counted under line-outside-any-symbol rather than attached to the class below it"
+    }
+  ],
+
+  "totals": {
+    "files_in_report": 2,
+    "files_ingested": 2,
+    "files_refused": 0,
+    "symbols_covered": 6,
+    "symbols_fully_covered": 4,
+    "symbols_partially_covered": 2,
+    "covered_lines": 12,
+    "uncovered_lines": 4,
+    "line_outside_any_symbol": 1,
+    "parser_refusals": 0
+  }
+}

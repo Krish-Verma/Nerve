@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 
 use rusqlite::{params, Connection};
 
+use nerve_core::vocab::EntityKind;
+
 use crate::error::Result;
 use crate::schema;
 
@@ -389,6 +391,83 @@ pub fn unresolved_entities(
         out.push(row?);
     }
     Ok(out)
+}
+
+/// Where one symbol was recorded to live, as the index recorded it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymbolSpanRow {
+    /// The symbol.
+    pub entity_id: String,
+    /// Its kind. Always one for which [`EntityKind::is_symbol`] holds.
+    pub kind: String,
+    /// Inclusive start byte.
+    pub start_byte: i64,
+    /// Exclusive end byte.
+    pub end_byte: i64,
+    /// 1-based first line.
+    pub start_line: i64,
+    /// 1-based last line.
+    pub end_line: i64,
+}
+
+/// Every **symbol** occurrence recorded in one file, in a stable order.
+///
+/// The kind filter is generated from [`EntityKind::ALL`] rather than written out, so a kind added
+/// to the vocabulary is included here the moment [`EntityKind::is_symbol`] says it is a symbol,
+/// and there is no second list to fall out of step. Files, modules, documents and sections also
+/// have occurrences in a file; none of them is a symbol, and a coverage edge to a `Module` would
+/// say "the test suite covers this file", which is a different and weaker claim.
+pub fn symbol_spans_in_file(conn: &Connection, file_path: &str) -> Result<Vec<SymbolSpanRow>> {
+    let kinds: Vec<String> = EntityKind::ALL
+        .iter()
+        .filter(|kind| kind.is_symbol())
+        .map(|kind| format!("'{}'", kind.as_str()))
+        .collect();
+    // The list is built from a closed compile-time vocabulary, never from caller text.
+    let sql = format!(
+        "SELECT o.entity_id, e.kind, o.start_byte, o.end_byte, o.start_line, o.end_line
+           FROM occurrence o
+           JOIN entity e ON e.entity_id = o.entity_id
+          WHERE o.file_path = ?1 AND e.kind IN ({})
+          ORDER BY o.entity_id, o.start_byte, o.end_byte",
+        kinds.join(", ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![file_path], |row| {
+        Ok(SymbolSpanRow {
+            entity_id: row.get(0)?,
+            kind: row.get(1)?,
+            start_byte: row.get(2)?,
+            end_byte: row.get(3)?,
+            start_line: row.get(4)?,
+            end_line: row.get(5)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// The content hash every occurrence in `file_path` was recorded at.
+///
+/// `None` when the file has no occurrences — it was never indexed — and `None` when its
+/// occurrences disagree, which means the rows did not come from one index run and nothing here
+/// may pick a winner between them.
+pub fn indexed_content_hash(conn: &Connection, file_path: &str) -> Result<Option<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT content_hash FROM occurrence WHERE file_path = ?1 ORDER BY content_hash",
+    )?;
+    let rows = stmt.query_map(params![file_path], |row| row.get::<_, String>(0))?;
+    let mut hashes = Vec::new();
+    for row in rows {
+        hashes.push(row?);
+    }
+    match hashes.len() {
+        1 => Ok(hashes.pop()),
+        _ => Ok(None),
+    }
 }
 
 /// Whether any occurrence was recorded at `file_path`.

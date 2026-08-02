@@ -1864,3 +1864,56 @@ fn a_single_file_edit_costs_a_fraction_of_a_full_index() {
         TARGET_RATIO * 100.0
     );
 }
+
+/// Every extractor an index run writes must be one it also withdraws.
+///
+/// Slice 6b split the withdrawal in two: a **re-extracted** file loses only the evidence
+/// [`nerve_index::INDEX_EXTRACTOR_IDS`] names, while a **removed** file loses everything. That
+/// split is what stops an ordinary post-edit `nerve index` from destroying coverage, which is
+/// ingested by a separate command and never replaced by an index run.
+///
+/// It also creates a silent failure mode. `INDEX_EXTRACTOR_IDS` is a hand-maintained list, and a
+/// future slice that adds an extractor without adding it here would leave that extractor's
+/// observations un-withdrawn on every re-extraction — stale evidence surviving an edit forever,
+/// with nothing failing to say so.
+///
+/// So the list is checked against what an index run *actually wrote*, not against a second list
+/// someone would have to remember to update. `md-docs` is used because it contains both TypeScript
+/// and Markdown, so all four extractors fire on one tree.
+#[test]
+fn every_extractor_an_index_run_writes_is_one_it_also_withdraws() {
+    let ((_dir, root), _outcome) = common::indexed_named_fixture("md-docs");
+    let conn = open_db(&root);
+
+    let mut written: BTreeSet<String> = BTreeSet::new();
+    let mut statement = conn
+        .prepare("SELECT DISTINCT extractor_id FROM observation ORDER BY 1")
+        .unwrap();
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap();
+    for row in rows {
+        written.insert(row.unwrap());
+    }
+
+    let withdrawn: BTreeSet<String> = nerve_index::INDEX_EXTRACTOR_IDS
+        .iter()
+        .map(|id| (*id).to_string())
+        .collect();
+
+    let unwithdrawn: Vec<&String> = written.difference(&withdrawn).collect();
+    assert!(
+        unwithdrawn.is_empty(),
+        "an index run wrote observations from {unwithdrawn:?}, which INDEX_EXTRACTOR_IDS does not \
+         name. Re-extracting a file will not withdraw them, so an edit will leave stale evidence \
+         behind. Add them to INDEX_EXTRACTOR_IDS in crates/nerve-index/src/pipeline.rs."
+    );
+
+    // The fixture must keep exercising every extractor, or the check above passes vacuously for
+    // whichever one stopped firing.
+    assert_eq!(
+        written, withdrawn,
+        "md-docs no longer exercises every extractor in INDEX_EXTRACTOR_IDS, so this test would \
+         stop protecting the ones that went missing"
+    );
+}

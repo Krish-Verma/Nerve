@@ -116,6 +116,19 @@ use crate::lang::{path_is_document, FileKind, Language, MARKDOWN_LANGUAGE};
 use crate::refs::{self, RefTarget, ReferenceExtraction};
 use crate::resolve;
 
+/// Every extractor `nerve index` runs, and therefore every extractor whose evidence it may
+/// withdraw when it re-extracts a file.
+///
+/// `coverage` is deliberately absent: it is ingested by a separate, explicitly invoked command
+/// (`docs/plans/slice-06-test-evidence.md` §A.4), and an index run neither produces nor replaces
+/// it. The list is used exactly once, at the withdrawal in [`index_repository_with`].
+pub const INDEX_EXTRACTOR_IDS: [&str; 4] = [
+    fsstruct::EXTRACTOR_ID,
+    EXTRACTOR_ID,
+    refs::EXTRACTOR_ID,
+    docs::EXTRACTOR_ID,
+];
+
 /// Terminal status of an index run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunStatus {
@@ -995,10 +1008,28 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         //    `touched` accumulates what this transaction disturbs, which is what bounds the
         //    derivation and pruning below. Deletions must record it as they go: afterwards the
         //    rows that would say so are gone.
+        //    Two withdrawals, not one, and the difference is load-bearing. A file that is about
+        //    to be **re-extracted** loses only the evidence *these* extractors are about to
+        //    replace; a file that has **vanished** loses everything recorded against it, because
+        //    evidence about a file that no longer exists is evidence about nothing. Since Slice
+        //    6b that distinction has teeth: `coverage` observations cite the covered file's path,
+        //    so withdrawing them here would make an ordinary post-edit `nerve index` destroy
+        //    every coverage edge — exactly what `docs/plans/slice-06-test-evidence.md` §A.4 made
+        //    ingestion a standalone command to prevent. An edited file's coverage stays, and
+        //    `observation.content_hash` makes it visibly stale.
         let mut touched = nerve_store::TouchedRows::default();
-        let mut superseded: BTreeSet<String> = target_paths.clone();
-        superseded.extend(changes.removed.iter().cloned());
-        let mut removals = nerve_store::delete_file_rows(&tx, &superseded, &mut touched)?;
+        let removed_paths: BTreeSet<String> = changes.removed.iter().cloned().collect();
+        let mut removals = nerve_store::delete_extractor_file_rows(
+            &tx,
+            &target_paths,
+            &INDEX_EXTRACTOR_IDS,
+            &mut touched,
+        )?;
+        removals.add(nerve_store::delete_file_rows(
+            &tx,
+            &removed_paths,
+            &mut touched,
+        )?);
         rows_written += removals.observations + removals.occurrences;
 
         // Directory containment is the one part of the graph no file path owns, and it is

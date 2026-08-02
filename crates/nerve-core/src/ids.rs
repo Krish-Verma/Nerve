@@ -142,6 +142,26 @@ pub fn section_id(
     prefixed(EntityKind::Section, &fields)
 }
 
+/// `("coverage_run", project_id, rel_path, content_hash)`
+///
+/// A coverage run is one report file, and its identity is the path it was read from **plus the
+/// bytes it contained** (ADR-0008). The content hash is in the tuple deliberately, and it is the
+/// one identity in Nerve that carries content: a report is not a durable artifact whose meaning
+/// survives an edit the way a function's does — it is a measurement, and re-running the suite
+/// produces a *different* measurement that happens to live at the same path. Excluding the hash
+/// would let a new run silently inherit the old run's edges.
+pub fn coverage_run_id(project_id: &str, rel_path: &str, content_hash: &str) -> String {
+    prefixed(
+        EntityKind::CoverageRun,
+        &[
+            EntityKind::CoverageRun.as_str(),
+            project_id,
+            rel_path,
+            content_hash,
+        ],
+    )
+}
+
 /// `("<kind>", project_id, module_rel_path, scope_path, name, disambiguator)`
 ///
 /// Valid only for [`EntityKind::is_symbol`] kinds.
@@ -261,6 +281,7 @@ mod tests {
             ),
             (document_id(PID, "docs/README.md"), "doc"),
             (section_id(PID, "docs/README.md", &["Title"], 0), "sect"),
+            (coverage_run_id(PID, "coverage/lcov.info", "abc"), "cov"),
         ];
         for (id, prefix) in cases {
             assert!(id.starts_with(&format!("{prefix}_")), "{id} lacks {prefix}");
@@ -370,6 +391,26 @@ mod tests {
             module_id(PID, "docs/README.md")[4..]
         );
         assert_ne!(document_id(PID, "docs/a.md"), document_id(PID, "docs/b.md"));
+    }
+
+    /// Two runs of the same suite land at the same path. They are different measurements, and
+    /// the new one must not inherit the old one's edges.
+    #[test]
+    fn a_coverage_run_is_identified_by_its_path_and_its_bytes() {
+        let base = coverage_run_id(PID, "coverage/lcov.info", "h1");
+        for other in [
+            coverage_run_id("other", "coverage/lcov.info", "h1"),
+            coverage_run_id(PID, "coverage/other.info", "h1"),
+            coverage_run_id(PID, "coverage/lcov.info", "h2"),
+        ] {
+            assert_ne!(base, other);
+        }
+        assert_eq!(base, coverage_run_id(PID, "coverage/lcov.info", "h1"));
+        // Four fields, so the tuple cannot be forged by moving text across a separator.
+        assert_ne!(
+            coverage_run_id(PID, "coverage/lcov.info", "h1"),
+            coverage_run_id(PID, "coverage/lcov.infoh1", "")
+        );
     }
 
     #[test]

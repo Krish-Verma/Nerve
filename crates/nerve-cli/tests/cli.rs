@@ -1074,3 +1074,147 @@ fn serve_prints_a_usable_url_and_stops_on_a_signal() {
     assert!(std::net::TcpStream::connect(&address).is_err());
     assert_eq!(code(&run(&["index", root.to_str().unwrap()])), 0);
 }
+
+// ---- coverage ---------------------------------------------------------------------------------
+
+/// The whole workflow a user runs: index, hand Nerve a report, ask why a symbol is covered.
+#[test]
+fn coverage_ingests_the_named_report_and_why_reports_it() {
+    let (_dir, root) = indexed_fixture("ts-coverage");
+    let root = root.to_str().unwrap();
+
+    let ingest = run(&["coverage", "coverage/lcov.info", root]);
+    assert_eq!(code(&ingest), 0, "{}", stdout(&ingest));
+    let rendered = stdout(&ingest);
+    assert!(
+        rendered.contains("6 covered (4 fully, 2 partially)"),
+        "{rendered}"
+    );
+    // The product language says "the test suite", never "this test" (ADR-0008).
+    assert!(
+        rendered.contains("Coverage is not a call graph"),
+        "{rendered}"
+    );
+
+    let value = json(&run(&["coverage", "coverage/lcov.info", root, "--json"]));
+    require_keys(
+        &value,
+        &[
+            "command",
+            "ok",
+            "exit_code",
+            "root",
+            "report_path",
+            "report_content_hash",
+            "coverage_run_entity_id",
+            "state_id",
+            "status",
+            "files_in_report",
+            "files_ingested",
+            "files_refused",
+            "symbols_covered",
+            "symbols_fully_covered",
+            "symbols_partially_covered",
+            "covered_lines",
+            "uncovered_lines",
+            "refused",
+            "refused_total",
+            "rows_written",
+            "duration_ms",
+            "per_test_attribution",
+        ],
+    );
+    assert_eq!(value["command"], "coverage");
+    assert_eq!(value["status"], "complete");
+    assert_eq!(value["symbols_covered"], 6);
+    assert_eq!(value["symbols_partially_covered"], 2);
+    assert_eq!(value["files_ingested"], 2);
+    assert_eq!(
+        value["per_test_attribution"], false,
+        "LCOV carries none, and the output says so rather than leaving it to be assumed"
+    );
+    assert!(value["coverage_run_entity_id"]
+        .as_str()
+        .unwrap()
+        .starts_with("cov_"));
+
+    // `nerve why` on a covered symbol reports the edge, its evidence profile and its freshness.
+    let why = json(&run(&[
+        "why",
+        "src/math.ts#clamp",
+        "--relation",
+        "COVERS",
+        "--path",
+        root,
+        "--json",
+    ]));
+    assert_eq!(why["count"], 1);
+    let assertion = &why["assertions"][0];
+    assert_eq!(assertion["relation"], "COVERS");
+    assert_eq!(assertion["source"]["kind"], "coverage_run");
+    assert_eq!(assertion["target"]["name"], "clamp");
+    let observation = &assertion["observations"][0];
+    assert_eq!(observation["evidence_source_type"], "TEST_COVERAGE");
+    assert_eq!(observation["directness"], "INFERRED");
+    assert_eq!(observation["extractor_id"], "coverage");
+    assert_eq!(observation["freshness"], "fresh");
+    assert_eq!(observation["details"]["coverage"], "partial");
+    assert_eq!(observation["file_path"], "src/math.ts");
+}
+
+/// Coverage needs an index, and says which step is missing rather than failing obscurely.
+#[test]
+fn coverage_without_an_index_exits_two() {
+    let (_dir, root) = named_fixture_copy("ts-coverage");
+    let root = root.to_str().unwrap();
+
+    let uninitialized = run(&["coverage", "coverage/lcov.info", root]);
+    assert_eq!(code(&uninitialized), 2);
+    assert!(String::from_utf8_lossy(&uninitialized.stderr).contains("nerve init"));
+
+    assert_eq!(code(&run(&["init", root])), 0);
+    let unindexed = run(&["coverage", "coverage/lcov.info", root]);
+    assert_eq!(code(&unindexed), 2);
+    assert!(String::from_utf8_lossy(&unindexed.stderr).contains("nerve index"));
+}
+
+/// A report outside the repository is a wrong argument, not an internal failure.
+#[test]
+fn coverage_refuses_a_report_outside_the_repository_with_exit_ten() {
+    let (dir, root) = indexed_fixture("ts-coverage");
+    std::fs::write(
+        dir.path().join("outside.info"),
+        "SF:src/math.ts\nDA:1,1\nend_of_record\n",
+    )
+    .unwrap();
+    let root = root.to_str().unwrap();
+
+    for named in ["../outside.info", "/etc/passwd"] {
+        let refused = run(&["coverage", named, root]);
+        assert_eq!(code(&refused), 10, "{named}: {}", stdout(&refused));
+    }
+}
+
+/// A report Nerve could only partly believe exits 3, exactly as a partial index does.
+#[test]
+fn a_partly_refused_report_exits_three() {
+    let (_dir, root) = indexed_fixture("ts-coverage");
+    std::fs::write(
+        root.join("coverage/lcov.info"),
+        "TN:\nSF:src/math.ts\nDA:1,1\nend_of_record\n\
+         TN:\nSF:../../../../etc/passwd\nDA:1,1\nend_of_record\n",
+    )
+    .unwrap();
+    let root = root.to_str().unwrap();
+
+    let partial = run(&["coverage", "coverage/lcov.info", root]);
+    assert_eq!(code(&partial), 3, "{}", stdout(&partial));
+
+    let value = json(&run(&["coverage", "coverage/lcov.info", root, "--json"]));
+    assert_eq!(value["status"], "partial");
+    assert_eq!(value["exit_code"], 3);
+    assert_eq!(value["files_refused"], 1);
+    assert_eq!(value["refused"]["path-refused"], 1);
+    // The refused path is counted and never echoed.
+    assert!(!serde_json::to_string(&value).unwrap().contains("passwd"));
+}

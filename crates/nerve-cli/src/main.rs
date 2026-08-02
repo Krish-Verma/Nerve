@@ -60,6 +60,25 @@ enum Command {
         #[arg(long)]
         full: bool,
     },
+    /// Ingest one LCOV coverage report into an existing index.
+    ///
+    /// Reads only the report you name. Nerve runs no tests, spawns no process and looks for no
+    /// report of its own — a coverage report is something another tool produced, and an index
+    /// that changed meaning because a test run left a file behind would be an index nobody could
+    /// reason about.
+    ///
+    /// This is a separate command rather than a flag on `nerve index` on purpose: were it a flag,
+    /// the ordinary post-edit `nerve index` — run without it, as it always is — would silently
+    /// destroy every coverage edge in the repository.
+    ///
+    /// Editing a covered file does not delete its coverage. It makes it *stale*, which
+    /// `nerve why` reports, and which is strictly more informative than silence.
+    Coverage {
+        /// Path to the LCOV report. Must be inside the repository.
+        report: PathBuf,
+        /// Repository root. Defaults to the current directory.
+        path: Option<PathBuf>,
+    },
     /// Report index counts, freshness and schema version.
     Status {
         /// Repository root. Defaults to the current directory.
@@ -254,6 +273,7 @@ fn main() {
     let code = match cli.command {
         Command::Init { path } => run_init(&output, path),
         Command::Index { path, full } => run_index(&output, path, full),
+        Command::Coverage { report, path } => run_coverage(&output, path, report),
         Command::Status { path, path_flag } => run_status(
             &output,
             &path.or(path_flag).unwrap_or_else(|| PathBuf::from(".")),
@@ -320,8 +340,17 @@ fn main() {
 fn error_exit_code(err: &IndexError) -> i32 {
     match err {
         IndexError::NotADirectory(_) => exit::USAGE,
+        IndexError::NotAFile(_) => exit::USAGE,
         IndexError::NotInitialized(_) => exit::NO_INDEX,
+        IndexError::NotIndexed(_) => exit::NO_INDEX,
         IndexError::Config { .. } => exit::NO_INDEX,
+        // A path the guard refused is a wrong argument, not an internal failure. `nerve coverage`
+        // is the first command that takes a repository path as an argument and can therefore be
+        // handed one that escapes the root; reporting that as exit 70 would tell a script that
+        // Nerve broke when in fact the script asked for something Nerve refuses.
+        IndexError::PathEscapesRoot(_)
+        | IndexError::NonUtf8Path(_)
+        | IndexError::ControlCharacterInPath(_) => exit::USAGE,
         _ => exit::INTERNAL,
     }
 }
@@ -555,6 +584,117 @@ fn run_index(output: &Output, path: Option<PathBuf>, full: bool) -> i32 {
             code
         }
         Err(err) => output.failure("index", error_exit_code(&err), &err.to_string()),
+    }
+}
+
+/// Ingest one LCOV report the user named into an existing index.
+///
+/// Exit codes follow `nerve index`: 0 when every record in the report was believed, 3 when part
+/// of it was refused — a path outside the repository, a file Nerve never indexed, a file whose
+/// bytes have moved since it was, or anything the parser declined. Lines that map to no symbol
+/// are *not* a partial ingestion: that is the documented lossiness of mapping lines onto symbols,
+/// it is reported as a number, and treating it as a failure would make every real repository
+/// exit 3 forever.
+fn run_coverage(output: &Output, path: Option<PathBuf>, report: PathBuf) -> i32 {
+    let root = path.unwrap_or_else(|| PathBuf::from("."));
+    match nerve_index::ingest_coverage(&root, &report) {
+        Ok(outcome) => {
+            let partial = outcome.status == nerve_index::RunStatus::Partial;
+            let code = if partial {
+                exit::PARTIAL_INDEX
+            } else {
+                exit::SUCCESS
+            };
+
+            output.line(format!("Ingested coverage from {}", outcome.report_path));
+            output.line(format!("  root           {}", outcome.root.display()));
+            output.line(format!(
+                "  report_hash    {}",
+                outcome.report_content_hash.as_deref().unwrap_or("(unread)")
+            ));
+            output.line(format!(
+                "  coverage_run   {}",
+                outcome
+                    .coverage_run_entity_id
+                    .as_deref()
+                    .unwrap_or("(none written)")
+            ));
+            output.line(format!("  state_id       {}", outcome.state_id));
+            output.line(format!(
+                "  files          {} in report, {} ingested, {} refused",
+                outcome.files_in_report, outcome.files_ingested, outcome.files_refused
+            ));
+            // `partial` is a recorded value, never rounded, so it is reported as its own number
+            // rather than folded into a percentage.
+            output.line(format!(
+                "  symbols        {} covered ({} fully, {} partially)",
+                outcome.symbols_covered,
+                outcome.symbols_fully_covered,
+                outcome.symbols_partially_covered
+            ));
+            output.line(format!(
+                "  lines          {} covered, {} instrumented and unexecuted",
+                outcome.covered_lines, outcome.uncovered_lines
+            ));
+            output.line(format!(
+                "  refused        {} in total",
+                outcome.refused_total()
+            ));
+            for (form, count) in &outcome.refused {
+                output.line(format!("    {form:<28} {count}"));
+            }
+            output.line(format!(
+                "  superseded     {} observations, {} occurrences, {} assertions, {} entities",
+                outcome.observations_removed,
+                outcome.occurrences_removed,
+                outcome.assertions_removed,
+                outcome.entities_removed
+            ));
+            output.line(format!(
+                "  wrote          {} database rows",
+                outcome.rows_written
+            ));
+            output.line(format!("  duration_ms    {}", outcome.duration_ms));
+            output.line(String::new());
+            output.line(
+                "  Coverage is not a call graph. The source of every edge is the coverage run,",
+            );
+            output.line(
+                "  not a test: LCOV carries no per-test attribution, so \"which tests would my",
+            );
+            output.line("  change affect?\" is not answerable from this report.");
+
+            output.object(json!({
+                "command": "coverage",
+                "ok": true,
+                "exit_code": code,
+                "root": outcome.root.display().to_string(),
+                "report_path": outcome.report_path,
+                "report_content_hash": outcome.report_content_hash,
+                "coverage_run_entity_id": outcome.coverage_run_entity_id,
+                "state_id": outcome.state_id,
+                "status": outcome.status.as_str(),
+                "files_in_report": outcome.files_in_report,
+                "files_ingested": outcome.files_ingested,
+                "files_refused": outcome.files_refused,
+                "symbols_covered": outcome.symbols_covered,
+                "symbols_fully_covered": outcome.symbols_fully_covered,
+                "symbols_partially_covered": outcome.symbols_partially_covered,
+                "covered_lines": outcome.covered_lines,
+                "uncovered_lines": outcome.uncovered_lines,
+                "refused": outcome.refused,
+                "refused_total": outcome.refused_total(),
+                "rows_written": outcome.rows_written,
+                "observations_removed": outcome.observations_removed,
+                "occurrences_removed": outcome.occurrences_removed,
+                "assertions_removed": outcome.assertions_removed,
+                "entities_removed": outcome.entities_removed,
+                "duration_ms": outcome.duration_ms,
+                "per_test_attribution": false,
+            }));
+            code
+        }
+        Err(err) => output.failure("coverage", error_exit_code(&err), &err.to_string()),
     }
 }
 

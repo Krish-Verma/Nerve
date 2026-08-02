@@ -130,6 +130,145 @@ pub fn delete_file_rows(
     Ok(counts)
 }
 
+/// [`delete_file_rows`], restricted to the observations **these extractors** recorded.
+///
+/// Used for a file that is about to be **re-extracted**, where [`delete_file_rows`] is used for
+/// one that has vanished. The distinction exists because not every observation about a file is
+/// written by the run that is re-reading it: since Slice 6b a `coverage` observation records the
+/// covered file's path and its content hash at ingestion time, and `nerve index` neither produces
+/// nor replaces it. Withdrawing it would make an ordinary post-edit re-index destroy every
+/// coverage edge in the repository — the outcome
+/// `docs/plans/slice-06-test-evidence.md` §A.4 made `nerve coverage` a standalone command to
+/// avoid, arriving by a different route. The edited file's coverage is instead left standing and
+/// made **visibly stale**, which is what `observation.content_hash` is for.
+///
+/// Occurrences at the path are deleted unconditionally, exactly as they are for a vanished file:
+/// an occurrence is a span, the re-extraction is about to rewrite every span in the file, and no
+/// occurrence at a *source* path belongs to anything but the extractors doing the rewriting.
+///
+/// Passing every extractor id that writes about the path is therefore identical to
+/// [`delete_file_rows`]; that equivalence is asserted by test.
+pub fn delete_extractor_file_rows(
+    conn: &Connection,
+    file_paths: &BTreeSet<String>,
+    extractor_ids: &[&str],
+    touched: &mut TouchedRows,
+) -> Result<RemovalCounts> {
+    let mut counts = RemovalCounts::default();
+    if file_paths.is_empty() || extractor_ids.is_empty() {
+        return Ok(counts);
+    }
+
+    // One `?` per extractor id, so the ids are bound values and never interpolated text.
+    let placeholders = (2..extractor_ids.len() + 2)
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let doomed_sql = format!(
+        "SELECT DISTINCT assertion_id FROM observation
+          WHERE file_path = ?1 AND extractor_id IN ({placeholders})"
+    );
+    let delete_sql = format!(
+        "DELETE FROM observation WHERE file_path = ?1 AND extractor_id IN ({placeholders})"
+    );
+
+    let mut doomed_assertions = conn.prepare(&doomed_sql)?;
+    let mut doomed_entities =
+        conn.prepare("SELECT DISTINCT entity_id FROM occurrence WHERE file_path = ?1")?;
+    let mut observations = conn.prepare(&delete_sql)?;
+    let mut occurrences = conn.prepare("DELETE FROM occurrence WHERE file_path = ?1")?;
+
+    for path in file_paths {
+        let mut arguments: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(extractor_ids.len() + 1);
+        arguments.push(path);
+        for extractor_id in extractor_ids {
+            arguments.push(extractor_id);
+        }
+        {
+            let rows =
+                doomed_assertions.query_map(arguments.as_slice(), |row| row.get::<_, String>(0))?;
+            for row in rows {
+                touched.assertions.insert(row?);
+            }
+        }
+        collect_into(&mut doomed_entities, path, &mut touched.entities)?;
+        counts.observations += observations.execute(arguments.as_slice())?;
+        counts.occurrences += occurrences.execute(params![path])?;
+    }
+    Ok(counts)
+}
+
+/// Withdraw the claims one extractor made **from one artifact**, that artifact being where the
+/// source entity of each claim occurs.
+///
+/// This is how re-reading an artifact replaces what it previously said, for an extractor whose
+/// claims are anchored to a source entity rather than to the file each observation cites.
+/// `coverage` is the first such extractor: a `CoverageRun` occurs at the report it was read from,
+/// while its observations cite the *covered* files, so neither [`delete_file_rows`] nor
+/// [`delete_extractor_file_rows`] can find them from the report's path.
+///
+/// The source entities' occurrences at `artifact_path` go too, so that a run nothing supports any
+/// more is left for [`prune_orphans_scoped`] to remove rather than lingering with a location and
+/// no claims.
+pub fn delete_claims_sourced_at(
+    conn: &Connection,
+    extractor_id: &str,
+    artifact_path: &str,
+    touched: &mut TouchedRows,
+) -> Result<RemovalCounts> {
+    let mut doomed: BTreeSet<String> = BTreeSet::new();
+    let mut sources: BTreeSet<String> = BTreeSet::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT o.assertion_id, a.source_entity_id
+               FROM observation o
+               JOIN assertion a ON a.assertion_id = o.assertion_id
+              WHERE o.extractor_id = ?1
+                AND a.source_entity_id IN
+                    (SELECT entity_id FROM occurrence WHERE file_path = ?2)",
+        )?;
+        let rows = stmt.query_map(params![extractor_id, artifact_path], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (assertion_id, source_entity_id) = row?;
+            doomed.insert(assertion_id);
+            sources.insert(source_entity_id);
+        }
+    }
+    if doomed.is_empty() {
+        return Ok(RemovalCounts::default());
+    }
+
+    // Only this extractor's evidence goes. Another extractor observing the same claim keeps its
+    // own row, and the claim with it — withdrawing a contribution is not withdrawing a consensus.
+    let mut observations = 0usize;
+    {
+        let mut stmt =
+            conn.prepare("DELETE FROM observation WHERE assertion_id = ?1 AND extractor_id = ?2")?;
+        for assertion_id in &doomed {
+            touched.assertions.insert(assertion_id.clone());
+            observations += stmt.execute(params![assertion_id, extractor_id])?;
+        }
+    }
+    let mut occurrences = 0usize;
+    {
+        let mut stmt =
+            conn.prepare("DELETE FROM occurrence WHERE entity_id = ?1 AND file_path = ?2")?;
+        for entity_id in &sources {
+            touched.entities.insert(entity_id.clone());
+            occurrences += stmt.execute(params![entity_id, artifact_path])?;
+        }
+    }
+
+    Ok(RemovalCounts {
+        observations,
+        occurrences,
+        assertions: 0,
+        entities: 0,
+    })
+}
+
 fn collect_into(
     stmt: &mut rusqlite::Statement<'_>,
     path: &str,

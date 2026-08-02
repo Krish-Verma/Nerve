@@ -21,9 +21,26 @@ pub enum IndexError {
     #[error("not a directory: {0}")]
     NotADirectory(PathBuf),
 
+    /// The requested path exists but is not an ordinary file.
+    ///
+    /// The mirror of [`IndexError::NotADirectory`], for the commands whose argument is a file.
+    /// Distinguished from an I/O failure so that pointing `nerve coverage` at a directory is
+    /// reported as a wrong argument rather than as an internal fault.
+    #[error("not a file: {0}")]
+    NotAFile(PathBuf),
+
     /// `nerve init` has not been run for this tree.
     #[error("no Nerve index at {0}; run `nerve init` first")]
     NotInitialized(PathBuf),
+
+    /// The tree is initialized but has never been indexed, so there is no graph to attach to.
+    ///
+    /// Distinct from [`IndexError::NotInitialized`] because the remedy is different: `init` has
+    /// already happened and what is missing is an `index`. Coverage ingestion is the first
+    /// command that needs an existing graph rather than merely an existing database — it resolves
+    /// every path in the report against what was indexed and refuses anything else.
+    #[error("no indexed graph at {0}; run `nerve index` first")]
+    NotIndexed(PathBuf),
 
     /// A path escaped the repository root and was refused.
     #[error("path escapes repository root: {0}")]
