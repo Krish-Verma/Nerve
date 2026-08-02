@@ -8,22 +8,22 @@
 
 | | |
 |---|---|
-| **Current HEAD** | `a8a2d5d` — `docs: Slice 6 plan — and the question that gates it` |
+| **Current HEAD** | `eebb73b` — `feat: Slice 6b — coverage ingestion, and the re-index that was destroying it` |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 5d-iii** (`947013c`) |
-| **Next slice** | **Slice 6** — test evidence (coverage only). Plan committed at `a8a2d5d`; **implementation not started**. Answer the plan's §2.1 gating question empirically first. |
-| **Roadmap status** | **INCOMPLETE.** 6–14 and real-world validation not started. |
+| **Last completed slice** | **Slice 6b** (`eebb73b`) — Slice 6 is complete |
+| **Next slice** | **Slice 7a** — `nerve gaps`, the question Slice 6's data exists to answer. Not started. |
+| **Roadmap status** | **INCOMPLETE.** 7–14 and real-world validation not started. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
 
-## Verification state at HEAD `a8a2d5d`
+## Verification state at HEAD `eebb73b`
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace                                  → 610 passed, 0 failed, 2 ignored
+cargo test --workspace                                  → 692 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
 ```
 
@@ -82,7 +82,9 @@ cannot emit. `directnessClass`'s `default` arm no longer renders an unknown dire
 
 | | |
 |---|---|
-| **6b** | Coverage **ingestion + product surface** — `nerve coverage`, line→symbol mapping via `innermost_covering`, freshness, **T9 gate**, full-vs-incremental equivalence. 6a (vocabulary + parser) is done; the §2.1 gating question is **answered** — see the Addendum to `docs/plans/slice-06-test-evidence.md` and ADR-0008. |
+| **7a** | `nerve gaps` — "which symbols does no test touch?" The question Slice 6 exists to answer, and it has **no CLI and no API today**; `apps/nerve-web/src/views/Gaps.tsx` is a UI-only view over other endpoints. Must distinguish *no coverage was ever ingested* from *coverage was ingested and this symbol has none* — those are different answers and conflating them is a lie. |
+| 7b | `nerve impact` — reverse dependency closure with evidence and an honest truncation flag. |
+| 7c | `nerve check` (CI exit codes) + `nerve doctor` (diagnostics). |
 | 7 | CLI + query expansion — `impact`, `gaps`, `check`, `doctor` |
 | 8 | MCP — one default investigation tool. **T7 + T8 gate.** |
 | 9 | Python |
@@ -98,6 +100,15 @@ cannot emit. `directnessClass`'s `default` arm no longer renders an unknown dire
 ## Decisions already made — do not relitigate
 
 - **No remote, no push, no publication.** Explicitly deferred by the user. Do not add a remote.
+- **`nerve affected` is not built, because it cannot be built honestly.** Slice 6a measured it: LCOV
+  emits an empty `TN:`, one report describes one whole run, and concatenating per-test reports does
+  not recover attribution. "Which tests would my change affect?" is unanswerable from an aggregate
+  report, and the only way to ship the command would be to attribute the whole report to every
+  discovered test file — asserting that every test covers every covered symbol. The command is
+  **refused**, not deferred. Revisit only if a per-test format is ingested (Slice 11 tracing may
+  provide one). See ADR-0008 §A.2.
+- **The relation is `COVERS` from a `CoverageRun`**, never `TEST_COVERS_SYMBOL` and never from a
+  test. ADR-0008 reverses ADR-0005's explicit prohibition on the evidence; do not reverse it back.
 - **Slice splits**: 2a/2b, 4a/4b, 5a/5b/5c, 5d-i/ii/iii. A slice bundling two surfaces has now cost
   **five** agents. **Keep slices small.**
 - **Relation names are endpoint-kind-agnostic.** Kinds live in `entity.kind` and are never
