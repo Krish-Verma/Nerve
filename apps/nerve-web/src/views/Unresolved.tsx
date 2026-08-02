@@ -1,5 +1,5 @@
 /**
- * Gaps — what Nerve could not resolve, and which files it could not fully parse.
+ * Unresolved — what Nerve could not resolve, and which files it could not fully parse.
  *
  * This screen exists because the alternative is worse. A tool that silently drops what it cannot
  * work out produces a graph that looks complete and is not, and the reader has no way to tell.
@@ -8,6 +8,12 @@
  * It is deliberately not styled as a warning. Most of these are statements about the language —
  * a method call on an untyped receiver is unresolvable by reading syntax, full stop — and dressing
  * them in alarm colours would train the reader to ignore the ones that matter.
+ *
+ * It was called "Gaps" until Slice 7a-ii, which was one word doing two jobs: `nerve gaps` answers
+ * *"which symbols does no test touch?"*, and this screen answers *"what could Nerve not work
+ * out?"*. Those are different questions with different evidence behind them, and a reader who
+ * asked one and was shown the other would have no way of knowing. The coverage question now has
+ * its own screen; this one is named after what it actually reads.
  */
 
 import { useMemo, useState } from 'react';
@@ -33,7 +39,7 @@ function importerOf(meta: unknown): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-export function Gaps() {
+export function Unresolved() {
   const [offset, setOffset] = useState(0);
   const [reason, setReason] = useState<string | null>(null);
 
@@ -44,11 +50,12 @@ export function Gaps() {
   return (
     <div className="view">
       <div className="head">
-        <h1 className="head__title">Gaps</h1>
+        <h1 className="head__title">Unresolved</h1>
         <p className="head__sub">
           References Nerve recorded and could not connect to a declaration, and files it could only
           parse in part. Both are kept rather than discarded, so the graph never looks more complete
-          than it is.
+          than it is. These are Nerve&apos;s own gaps in knowledge, not your repository&apos;s gaps
+          in testing — for those, see Coverage.
         </p>
       </div>
 
@@ -58,7 +65,7 @@ export function Gaps() {
         ) : unresolved.state.status === 'error' ? (
           <Failure error={unresolved.state.error} onRetry={unresolved.reload} />
         ) : (
-          <Unresolved
+          <References
             report={unresolved.state.data}
             offset={offset}
             onOffset={setOffset}
@@ -77,7 +84,7 @@ export function Gaps() {
   );
 }
 
-function Unresolved({
+function References({
   report,
   offset,
   onOffset,

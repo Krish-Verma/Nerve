@@ -19,10 +19,11 @@ import { count } from './format';
 import { useApi } from './hooks';
 import { href, useRoute, type Route } from './routing';
 import { Omnibox } from './ui/Omnibox';
+import { Coverage } from './views/Coverage';
 import { Entity } from './views/Entity';
-import { Gaps } from './views/Gaps';
 import { Overview } from './views/Overview';
 import { Search } from './views/Search';
+import { Unresolved } from './views/Unresolved';
 
 function basename(path: string | null | undefined): string {
   if (!path) return 'this repository';
@@ -144,13 +145,23 @@ export function App() {
           />
         </div>
 
+        {/*
+          Two entries, not one, and the split is the point. "Unresolved" is what *Nerve* could not
+          work out; "Coverage" is what the repository's tests are not known to touch. Both were
+          once called Gaps, which meant a reader could ask one question and be answered the other.
+        */}
         <div className="rail__group">
           <div className="rail__label micro">what is missing</div>
           <RailLink
-            to={{ view: 'gaps' }}
-            current={route.view === 'gaps'}
-            label="Gaps"
+            to={{ view: 'unresolved' }}
+            current={route.view === 'unresolved'}
+            label="Unresolved"
             note={data ? count(data.unresolved_entities) : undefined}
+          />
+          <RailLink
+            to={{ view: 'coverage' }}
+            current={route.view === 'coverage'}
+            label="Coverage"
           />
         </div>
 
@@ -175,8 +186,10 @@ export function App() {
           <Search q={route.q} kind={route.kind} />
         ) : route.view === 'entity' ? (
           <Entity id={route.id} tab={route.tab} options={route.options} />
+        ) : route.view === 'coverage' ? (
+          <Coverage />
         ) : (
-          <Gaps />
+          <Unresolved />
         )}
       </main>
     </div>

@@ -786,6 +786,63 @@ body {
   max-width: 78ch;
 }
 
+/* ---- coverage rows ----------------------------------------------------------------------- */
+
+/*
+  The same shape as the unresolved list, and deliberately so: the name leads, the location sits to
+  the right, and what the evidence actually claims gets a row of its own, because "no coverage
+  evidence names this file" is a clause and will not fit in a column sized for a word.
+
+  One difference, and it is the rule about colour doing its job. `.gap__name` is drawn in the hue
+  that means "unresolved", because on that screen the name *is* the thing in doubt. Here the symbol
+  is perfectly well known and it is the coverage claim that carries the state, so the name is bone
+  and the hue lives on the chip.
+*/
+.cov {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 16px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.cov:last-child {
+  border-bottom: none;
+}
+
+.cov:hover {
+  background: var(--ink-raise);
+}
+
+.cov__name {
+  font-size: 13px;
+  color: var(--bone);
+  min-width: 0;
+}
+
+.cov__meta {
+  font-size: 11px;
+  color: var(--bone-4);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.cov__claim {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cov__gloss {
+  font-family: var(--sans);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--bone-3);
+}
+
 /* ---- relation groups --------------------------------------------------------------------- */
 
 .relgroup {
@@ -1554,11 +1611,13 @@ a.claim__party:hover {
     never wraps, so it took the whole line and squeezed the name to one character per line —
     `ADR-0010` set vertically. One column, name first, path under it.
   */
-  .gap {
+  .gap,
+  .cov {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .gap__meta {
+  .gap__meta,
+  .cov__meta {
     text-align: left;
     white-space: normal;
     overflow-wrap: anywhere;

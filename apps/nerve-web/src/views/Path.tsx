@@ -159,7 +159,7 @@ function Result({ report, maxDepth }: { report: PathReport; maxDepth: number }) 
             ) : null}
           </div>
           <p className="prose">
-            Check <a className="link" href={href({ view: 'gaps' })}>Gaps</a> for references that were
+            Check <a className="link" href={href({ view: 'unresolved' })}>Unresolved</a> for references that were
             recorded but never connected — a broken chain there is the usual reason a route is
             missing.
           </p>

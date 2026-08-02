@@ -139,7 +139,7 @@ function Relations({ id, detail }: { id: string; detail: EntityDetail }) {
       <Panel title="Relations">
         <Empty
           title="Nothing connects to this"
-          body="No assertion in the index has this entity at either end. That can mean it is genuinely isolated, or that the file it lives in was only partly parsed — check Gaps."
+          body="No assertion in the index has this entity at either end. That can mean it is genuinely isolated, or that the file it lives in was only partly parsed — check Unresolved."
         />
       </Panel>
     );

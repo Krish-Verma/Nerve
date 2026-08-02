@@ -17,7 +17,14 @@ and copies it into `crates/nerve-server/assets/`, where `include_bytes!` compile
 | Entity · Neighbourhood | `#/entity/<id>/graph` | What does one, two, three hops out look like? |
 | Entity · Neighbourhood | `#/entity/<id>/graph?to=…` | How are these two connected? |
 | Entity · Source | `#/entity/<id>/source` | What does the file actually say? |
-| Gaps | `#/gaps` | What could Nerve **not** work out? |
+| Unresolved | `#/unresolved` | What could Nerve **not** work out? |
+| Coverage | `#/coverage` | What are the tests not known to touch — and has anything measured them? |
+
+Those last two were one screen called "Gaps" until Slice 7a-ii, which was one word answering two
+questions. `nerve gaps` reports **coverage** gaps; the screen labelled Gaps reported **Nerve's own**
+gaps in knowledge. A reader could ask one and be shown the other and never know. The Coverage screen
+leads with the state most repositories are actually in — no coverage has been ingested, so the
+question is unanswerable — rather than drawing an empty table that reads as "nothing is uncovered".
 
 The **evidence inspector is the centrepiece**. An assertion is written as a sentence, and each
 observation behind it hangs off a spine carrying the extractor's id and version, the evidence

@@ -110,6 +110,30 @@ export function kindGloss(kind: string): string {
 }
 
 /**
+ * What the ingested coverage evidence says about one symbol.
+ *
+ * The two values that both mean "not covered" are deliberately kept apart, and the difference is
+ * the whole reason this table is written out rather than reduced to a red dot. `uncovered` is a
+ * measurement: a run instrumented the file and nothing inside this symbol ran. `unmeasured` is
+ * silence: no coverage evidence names the file at all, so the symbol may be excluded from
+ * instrumentation, may never be loaded by the suite, or may not be reachable — Nerve does not
+ * know which. Rendering the second as the first would claim a measurement nobody took.
+ */
+const COVERAGE_STATE: Record<string, string> = {
+  covered: 'Every instrumented line inside this symbol executed during an ingested coverage run.',
+  partial:
+    'Some instrumented lines inside this symbol ran and some did not. A line that ran proves the symbol was entered, not that it ran through, so this is counted as neither covered nor a gap.',
+  uncovered:
+    'A coverage run measured the file this symbol is in, and no line inside the symbol ran. The absence is a measurement.',
+  unmeasured:
+    'No coverage evidence names the file this symbol is in. The absence is silence rather than a measurement: the file may be excluded from instrumentation, or never loaded by the suite at all.',
+};
+
+export function coverageState(value: string): string {
+  return COVERAGE_STATE[value] ?? 'This build has no description for that coverage state.';
+}
+
+/**
  * What an unresolved entity was standing in for.
  *
  * The category is part of the entity's identity, not decoration: an unresolvable import named

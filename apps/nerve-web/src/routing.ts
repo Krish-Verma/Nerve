@@ -13,11 +13,20 @@ export type EntityTab = 'relations' | 'evidence' | 'graph' | 'source';
 
 export const ENTITY_TABS: readonly EntityTab[] = ['relations', 'evidence', 'graph', 'source'];
 
+/**
+ * The screens.
+ *
+ * `unresolved` and `coverage` are deliberately two routes rather than one "gaps" route. They are
+ * different questions with different evidence behind them — what Nerve could not work out, and
+ * what the tests are not known to touch — and a single word covering both is how a reader ends up
+ * reading one answer as the other. There is no `#/gaps` any more, in either sense.
+ */
 export type Route =
   | { view: 'overview' }
   | { view: 'search'; q: string; kind: string | null }
   | { view: 'entity'; id: string; tab: EntityTab; options: Record<string, string> }
-  | { view: 'gaps' };
+  | { view: 'unresolved' }
+  | { view: 'coverage' };
 
 function parse(hash: string): Route {
   const raw = hash.startsWith('#') ? hash.slice(1) : hash;
@@ -39,8 +48,10 @@ function parse(hash: string): Route {
       });
       return { view: 'entity', id, tab, options };
     }
-    case 'gaps':
-      return { view: 'gaps' };
+    case 'unresolved':
+      return { view: 'unresolved' };
+    case 'coverage':
+      return { view: 'coverage' };
     default:
       return { view: 'overview' };
   }
@@ -64,8 +75,10 @@ export function href(route: Route): string {
       const base = `#/entity/${encodeURIComponent(route.id)}/${route.tab}`;
       return text ? `${base}?${text}` : base;
     }
-    case 'gaps':
-      return '#/gaps';
+    case 'unresolved':
+      return '#/unresolved';
+    case 'coverage':
+      return '#/coverage';
   }
 }
 

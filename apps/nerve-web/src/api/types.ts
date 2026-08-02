@@ -256,6 +256,69 @@ export interface PartialParseReport {
   results: PartialParseRow[];
 }
 
+/** One coverage run a gap answer is relative to. */
+export interface CoverageRunRef {
+  entity_id: string;
+  /** Repository-relative path of the report that was ingested. */
+  report_path: string | null;
+  report_content_hash: string | null;
+  /** Whether the report file still hashes to what was ingested. `null` when it cannot be checked. */
+  freshness: string | null;
+  /** How many source files the report described, as recorded at ingestion. */
+  source_files_in_report: number | null;
+}
+
+/** The exact tally over every symbol in scope. Present only when coverage evidence exists. */
+export interface GapTotals {
+  covered: number;
+  partial: number;
+  uncovered: number;
+  unmeasured: number;
+  /** `uncovered + unmeasured`. `partial` is never counted here. */
+  gaps: number;
+  stale: number;
+  measured_files: number;
+  stale_files: number;
+}
+
+/** One symbol and what coverage says about it. `state` is a `SymbolCoverage` member. */
+export interface GapRow {
+  entity: Entity;
+  state: string;
+  /** `null` for `unmeasured`: there is no evidence to be fresh or stale about. */
+  coverage_freshness: string | null;
+  covered_lines: number | null;
+  instrumented_lines: number | null;
+  covered_by: string[];
+}
+
+/**
+ * The whole gap answer, including the state that says it cannot be answered.
+ *
+ * `totals` is `null` — not a row of zeroes — when no coverage was ever ingested, and this app must
+ * never coerce it: reading `uncovered: 0` off a tally that was never computed states the opposite
+ * of the truth. `coverage: "absent"` means the question is unanswerable here, and `results` is
+ * empty for the same reason rather than because nothing is missing.
+ */
+export interface GapReport {
+  /** `absent` or `present`. */
+  coverage: string;
+  answerable: boolean;
+  runs: CoverageRunRef[];
+  symbols_in_scope: number;
+  totals: GapTotals | null;
+  /** The row cap the server applied. The tallies are exact regardless. */
+  limit: number;
+  count: number;
+  results_total: number;
+  truncated: boolean;
+  files_probed: number;
+  results: GapRow[];
+  under: string | null;
+  kind: string | null;
+  include_partial: boolean;
+}
+
 export interface SourceSnippet {
   path: string;
   start_line: number;

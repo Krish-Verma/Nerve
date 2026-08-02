@@ -8,17 +8,17 @@
 
 | | |
 |---|---|
-| **Current HEAD** | `<7a>` — `feat: Slice 7a — nerve gaps` |
+| **Current HEAD** | `aaf7feb` — `fix: Slice 7a-ii — "Gaps" meant two different things` |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 7a** — `nerve gaps`, CLI + API |
-| **Next slice** | **Slice 7a-ii** — corrective: the word "Gaps" means two different things across surfaces. Then 7b (`impact`), 7c (`check`/`doctor`). |
+| **Last completed slice** | **Slice 7a-ii** — SPA view renamed Unresolved; new Coverage view |
+| **Next slice** | **Slice 7b** — `nerve impact`. Then 7c (`check`/`doctor`), 8–14, validation. |
 | **Roadmap status** | **INCOMPLETE.** 7–14 and real-world validation not started. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
 
-## Verification state at HEAD `<7a>`
+## Verification state at HEAD `aaf7feb`
 
 ```
 cargo fmt --all -- --check                              → clean
@@ -82,8 +82,7 @@ cannot emit. `directnessClass`'s `default` arm no longer renders an unknown dire
 
 | | |
 |---|---|
-| **7a-ii** | **Corrective, small.** `nerve gaps` means *coverage* gaps; the SPA's "Gaps" view renders `<Unresolved>` from `/api/unresolved` — Nerve's own knowledge gaps. One word, two meanings, across surfaces. Rename the SPA view to **Unresolved** (label, route, nav) so "Gaps" means one thing. Needs `npm run build` in `apps/nerve-web` (which runs `tools/embed.mjs` to re-embed assets) plus screenshot QA. |
-| 7b | `nerve impact` — reverse dependency closure with evidence and an honest truncation flag. |
+| **7b** | `nerve impact` — reverse dependency closure with evidence and an honest truncation flag. |
 | 7c | `nerve check` (CI exit codes) + `nerve doctor` (diagnostics). |
 | 8 | MCP — one default investigation tool. **T7 + T8 gate.** |
 | 9 | Python |
