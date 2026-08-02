@@ -101,6 +101,8 @@ const KIND_GLOSS: Record<string, string> = {
   section: 'A heading and everything under it, up to the next heading of the same level or higher.',
   unresolved:
     'A reference Nerve recorded but could not connect to a declaration. It is kept, not discarded.',
+  coverage_run:
+    'One coverage report Nerve was told to read, identified by its path and its contents. It stands for the whole test run, not for any single test — the report records no test names.',
 };
 
 export function kindGloss(kind: string): string {

@@ -111,6 +111,10 @@ const RELATION_VERB: Record<string, [string, string]> = {
   // Stored one way only — `A SUPERSEDES B` means A replaces B — so the incoming reading is a
   // query over the same edge rather than a second edge pointing the other way.
   SUPERSEDES: ['supersedes', 'is superseded by'],
+  // From a coverage run to a symbol: the run executed at least one line inside it. Never from a
+  // test — the report carries no test names — and never a call, however it reads. Two symbols
+  // running during one test says nothing about who invoked whom.
+  COVERS: ['covers', 'is covered by'],
 };
 
 /** How to read a relation from the subject's side. */

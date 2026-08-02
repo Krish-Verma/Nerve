@@ -33,11 +33,22 @@ pub enum EntityKind {
     Section,
     /// A reference target that could not be resolved. A value, never an omission.
     Unresolved,
+    /// One coverage report, identified by its repository-relative path and its content hash.
+    ///
+    /// **Not a test.** LCOV carries no per-test attribution — its `TN:` field is empty and one
+    /// report describes one whole run — so the only endpoint the evidence supports is the run
+    /// that produced the report. See `docs/decisions/ADR-0008-coverage-evidence.md`.
+    CoverageRun,
 }
 
 impl EntityKind {
     /// Every kind, in declaration order.
-    pub const ALL: [EntityKind; 11] = [
+    ///
+    /// Appended to, never inserted into. Nothing on disk encodes a position — `entity.kind` is
+    /// `TEXT` — but `apps/nerve-web/src/api/types.ts` mirrors this array *in order* and
+    /// `crates/nerve-server/tests/ui_vocabulary.rs` asserts the two match exactly, so the order
+    /// is a contract with the interface even though it is not one with the database.
+    pub const ALL: [EntityKind; 12] = [
         EntityKind::Repository,
         EntityKind::Directory,
         EntityKind::File,
@@ -49,6 +60,8 @@ impl EntityKind {
         EntityKind::Document,
         EntityKind::Section,
         EntityKind::Unresolved,
+        // Appended in Slice 6a.
+        EntityKind::CoverageRun,
     ];
 
     /// Canonical lower-case name, used in the database and in canonical tuples.
@@ -65,6 +78,7 @@ impl EntityKind {
             EntityKind::Document => "document",
             EntityKind::Section => "section",
             EntityKind::Unresolved => "unresolved",
+            EntityKind::CoverageRun => "coverage_run",
         }
     }
 
@@ -82,6 +96,7 @@ impl EntityKind {
             EntityKind::Document => "doc",
             EntityKind::Section => "sect",
             EntityKind::Unresolved => "unres",
+            EntityKind::CoverageRun => "cov",
         }
     }
 
@@ -136,11 +151,27 @@ pub enum Relation {
     Implements,
     /// One document supersedes another. Declared in Slice 5a, emitted in Slice 5b.
     Supersedes,
+    /// A coverage run executed at least one line inside a symbol.
+    ///
+    /// **Never a call relationship** (ADR-0005). Two symbols executing during one run says
+    /// nothing about who invoked whom, and this relation must never be relabelled, aliased or
+    /// presented as `CALLS`.
+    ///
+    /// Named `COVERS` rather than `TEST_COVERS_SYMBOL` for the reasons in
+    /// `docs/decisions/ADR-0008-coverage-evidence.md`: this vocabulary names relationships, never
+    /// their endpoints' kinds, and the source endpoint is a [`EntityKind::CoverageRun`] rather
+    /// than a test, so a name containing `TEST_` would assert an attribution LCOV does not carry.
+    ///
+    /// Declared in Slice 6a, emitted in Slice 6b.
+    Covers,
 }
 
 impl Relation {
     /// Every relation, in declaration order.
-    pub const ALL: [Relation; 9] = [
+    ///
+    /// Appended to, never inserted into — `apps/nerve-web/src/api/types.ts` mirrors this array in
+    /// order and `crates/nerve-server/tests/ui_vocabulary.rs` asserts the two match exactly.
+    pub const ALL: [Relation; 10] = [
         Relation::Contains,
         Relation::Defines,
         Relation::Imports,
@@ -150,6 +181,8 @@ impl Relation {
         Relation::Extends,
         Relation::Implements,
         Relation::Supersedes,
+        // Appended in Slice 6a.
+        Relation::Covers,
     ];
 
     /// The relations Slice 1 is permitted to emit.
@@ -172,6 +205,7 @@ impl Relation {
             Relation::Extends => "EXTENDS",
             Relation::Implements => "IMPLEMENTS",
             Relation::Supersedes => "SUPERSEDES",
+            Relation::Covers => "COVERS",
         }
     }
 }
@@ -476,9 +510,33 @@ mod tests {
             prefixes,
             vec![
                 "repo", "dir", "file", "mod", "fn", "meth", "class", "iface", "doc", "sect",
-                "unres"
+                "unres", "cov"
             ]
         );
+    }
+
+    /// The two Slice 6a additions, named for exactly what the evidence supports.
+    ///
+    /// `COVERS` is spelled without either endpoint's kind, because the vocabulary never puts a
+    /// kind in a relation name and because LCOV carries no per-test attribution to justify the
+    /// `TEST_` the roadmap originally proposed (ADR-0008). `CoverageRun` is not a symbol kind:
+    /// it is named by its report path and content hash, not by the symbol tuple.
+    #[test]
+    fn the_coverage_vocabulary_states_only_what_the_evidence_carries() {
+        assert_eq!(Relation::Covers.as_str(), "COVERS");
+        assert_eq!("COVERS".parse::<Relation>().unwrap(), Relation::Covers);
+        assert!("TEST_COVERS_SYMBOL".parse::<Relation>().is_err());
+
+        assert_eq!(EntityKind::CoverageRun.as_str(), "coverage_run");
+        assert_eq!(
+            "coverage_run".parse::<EntityKind>().unwrap(),
+            EntityKind::CoverageRun
+        );
+        assert!(!EntityKind::CoverageRun.is_symbol());
+
+        // Coverage is not a call graph (ADR-0005). The two are separate members of a closed
+        // vocabulary, and neither parses as the other.
+        assert_ne!(Relation::Covers, Relation::Calls);
     }
 
     /// A document and a section are named by their own tuples, not by the symbol tuple. If

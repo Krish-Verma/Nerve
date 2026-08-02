@@ -1,6 +1,14 @@
 # ADR-0005 — Coverage is not a call graph
 
 **Status:** Accepted · **Date:** 2026-07-31 · **Applies from:** Slice 6
+**Amended by:** [ADR-0008](./ADR-0008-coverage-evidence.md) — **relation name only.** This ADR
+wrote the relation as `TEST_COVERS_SYMBOL`, from a test to a symbol. Slice 6a measured what the
+common formats actually emit and found that LCOV carries **no per-test attribution**: its `TN:`
+field is empty, one report describes one whole run, and concatenating per-test reports does not
+recover it. The source endpoint is therefore a `CoverageRun`, not a test, and the relation is named
+`COVERS`. **The argument below is unchanged and stands in full** — nothing about the finding
+weakens it, and Slice 6b enforces it with a test asserting the coverage extractor emits **zero**
+call-shaped relations, which is stronger than a name ever was.
 
 ## Context
 
@@ -31,8 +39,12 @@ more convincing when wrong.
 1. Coverage supports exactly one relation:
 
    ```
-   Test T  TEST_COVERS_SYMBOL  Symbol S     evidence_source_type = TEST_COVERAGE
+   CoverageRun R  COVERS  Symbol S     evidence_source_type = TEST_COVERAGE
    ```
+
+   Written `Test T  TEST_COVERS_SYMBOL  Symbol S` when this ADR was accepted. The endpoint and the
+   name were corrected by ADR-0008 once the formats were measured; the *count* — exactly one
+   relation, and it is not a call — is what this ADR decides, and that is unchanged.
 
 2. The following evidence source types are kept **permanently distinct** and must never be
    collapsed, aliased, or presented interchangeably in the schema, CLI, API, or UI:
@@ -76,5 +88,9 @@ The second question requires call tracing and belongs to Roadmap slice 11.
 
 ## Enforcement
 
-The relation name in the schema is `TEST_COVERS_SYMBOL`, not `COVERS` and not `CALLS`.
-Any pull request that maps coverage data onto a call relation must be rejected.
+The relation name in the schema is `COVERS` (ADR-0008), and it is **not** `CALLS`, not
+`TEST_OBSERVED_CALL`, and not any other call-shaped relation. Any pull request that maps coverage
+data onto a call relation must be rejected.
+
+The name is a reminder; the control is a test. Slice 6b asserts exhaustively that the coverage
+extractor produces zero call-shaped relations.

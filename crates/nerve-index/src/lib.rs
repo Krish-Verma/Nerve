@@ -4,8 +4,9 @@
 //! `ts-js-structural`, `ts-js-reference` and `md-structural` extractors, lexical binding,
 //! export closure, specifier
 //! resolution, a hand-written Markdown block scanner, the `init` / `index` application entry
-//! points, and the query-time file prober that gives `nerve why` its freshness answer without
-//! loosening any of those path rules.
+//! points, the query-time file prober that gives `nerve why` its freshness answer without
+//! loosening any of those path rules, and a standalone LCOV reader for the `coverage` extractor
+//! (Slice 6a: the parser only — nothing in this crate ingests a report yet).
 //!
 //! This crate emits **observations only**. It cannot write `assertion_state`: that table is
 //! rebuilt by [`nerve_store::rebuild_assertion_state`] as a pure function of what was
@@ -16,6 +17,7 @@
 
 pub mod bind;
 pub mod config;
+pub mod coverage;
 pub mod discover;
 pub mod docref;
 pub mod docs;
@@ -37,6 +39,10 @@ pub mod resolve;
 
 pub use bind::{Binding, BindingTable, ThisResolution};
 pub use config::Config;
+pub use coverage::{
+    parse_lcov, CoverageCounters, CoverageReport, FileCoverage, LineHit,
+    EXTRACTOR_ID as COVERAGE_EXTRACTOR_ID, EXTRACTOR_VERSION as COVERAGE_EXTRACTOR_VERSION,
+};
 pub use discover::{discover, DiscoveredFile, DiscoveryReport};
 pub use docs::{
     extract_document, AdrFacts, AdrStatus, DocumentExtraction, SectionDef,

@@ -290,6 +290,7 @@ export const ENTITY_KINDS = [
   'document',
   'section',
   'unresolved',
+  'coverage_run',
 ] as const;
 
 export const RELATIONS = [
@@ -302,4 +303,5 @@ export const RELATIONS = [
   'EXTENDS',
   'IMPLEMENTS',
   'SUPERSEDES',
+  'COVERS',
 ] as const;

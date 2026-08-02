@@ -137,8 +137,10 @@ parameters and inlining only closed-vocabulary literals holds.
 A coverage report is a file in the repository and therefore attacker-controlled. It must not be
 able to assert arbitrary edges.
 
-**Required controls:** coverage may only produce `TEST_COVERS_SYMBOL` — never a call edge
-(ADR-0005). Paths inside a coverage report are resolved through the same path guard. A report
+**Required controls:** coverage may only produce `COVERS` — never a call edge (ADR-0005; named
+`COVERS` rather than `TEST_COVERS_SYMBOL` per ADR-0008, because LCOV carries no per-test
+attribution and the source endpoint is a `CoverageRun`). Paths inside a coverage report are
+resolved through the same path guard. A report
 naming a file outside the root, or a symbol that does not exist, is **rejected and counted**, not
 silently trusted.
 

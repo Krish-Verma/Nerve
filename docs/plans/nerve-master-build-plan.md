@@ -2,6 +2,16 @@
 
 **Date:** 2026-07-31 · **Supersedes:** `docs/plans/2026-07-31-claude-architecture-plan.md` (partially — see §2)
 
+> **Amended 2026-08-01 (Slice 6a).** Where this plan writes the coverage relation as
+> `Test T — TEST_COVERS_SYMBOL → Symbol S` (§ the relation table, and §6 of the slice list), that
+> spelling is **superseded**. Slice 6a measured what LCOV actually carries: its `TN:` field is
+> empty, one report describes one whole run, and per-test attribution is unrecoverable even by
+> concatenating per-test reports. The relation ships as **`COVERS`**, from a **`CoverageRun`**
+> rather than from a test, because a `TEST_` in the name would assert an endpoint the evidence
+> cannot support. The invariant this plan cared about — coverage is never a call graph — is
+> unchanged and is now enforced by a test rather than by a name. See
+> `docs/decisions/ADR-0008-coverage-evidence.md`.
+
 ---
 
 ## 1. Product thesis

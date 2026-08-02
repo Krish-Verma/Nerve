@@ -54,8 +54,11 @@ There is a test that asserts the indexing path performs no network I/O. Keep it 
 - No generic `confidence: float`. Use structured evidence profiles
   (source type, directness, extractor id+version, measured precision, match quality,
   freshness, repository state, environment). See `docs/decisions/ADR-0003-evidence-model.md`.
-- **Coverage is not a call graph.** `TEST_COVERS_SYMBOL` must never be relabelled as a call
-  relationship. See `docs/decisions/ADR-0005-coverage-is-not-calls.md`.
+- **Coverage is not a call graph.** `COVERS` — from a `CoverageRun`, never from a test — must never
+  be relabelled as a call relationship. See `docs/decisions/ADR-0005-coverage-is-not-calls.md` for
+  the invariant and `docs/decisions/ADR-0008-coverage-evidence.md` for why the relation is named
+  `COVERS` rather than `TEST_COVERS_SYMBOL` (LCOV carries no per-test attribution, so a `TEST_`
+  in the name would assert an endpoint the evidence cannot support).
 - Unresolved references are recorded explicitly, never silently discarded.
 - Identity is never established by fuzzy name matching alone.
 

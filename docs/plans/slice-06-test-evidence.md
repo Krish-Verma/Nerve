@@ -144,6 +144,105 @@ changed and removed.
 11. Fixture precision measured and gated; framed as a regression gate, not an accuracy claim.
 12. No new dependency. Full gate green.
 
+---
+
+# Addendum — §2.1 answered empirically, 2026-08-01
+
+Run by the orchestrator before any implementation, on Node v24.15.0, using the runtime's **built-in**
+coverage and LCOV reporter so that no dependency and no network are involved. Two source files, two
+test files, each test exercising exactly one source file.
+
+## A.1 The evidence
+
+**Probe 1 — one run over both test files** (`node --test --experimental-test-coverage
+--test-reporter=lcov`):
+
+```
+TN:
+SF:src/alpha.js
+FN:1,alphaCovered
+FNDA:1,alphaCovered
+DA:1,1 … DA:6,0 DA:7,0
+end_of_record
+SF:src/beta.js
+…
+end_of_record
+```
+
+`TN:` — LCOV's *test name* field — is **empty**. There is exactly one record set per source file for
+the whole run, and every `DA:` line carries a hit count with no test dimension. Two tests went in;
+one undifferentiated report came out.
+
+**Probe 2 — one run over `test/alpha.test.js` alone:** `src/beta.js` is **absent** from the report
+entirely (`grep -c "SF:src/beta.js"` → `0`). So the only attribution that exists is *per run*, and
+obtaining per-test attribution would require N separate runs of N tests.
+
+**Probe 3 — can the merge workaround recover it?** Concatenating the two single-test reports gives:
+
+```
+TN:<empty>   SF:src/alpha.js
+TN:<empty>   SF:src/beta.js
+```
+
+Both records' test-name field is blank. **Even the concatenation workaround fails**, because the
+reporter never populates `TN:`. A consumer reading that file cannot tell which test produced which
+record.
+
+## A.2 The finding
+
+**Aggregate. There is no per-test attribution to read.** §2.1's second branch applies, and the
+design follows the finding:
+
+- The source endpoint is **the coverage run**, a `CoverageRun` entity identified by the report's
+  repository-relative path and content hash, with a real occurrence at that real path.
+- No `Test` entity is an endpoint of a coverage edge. This is **structural, not a convention**: it is
+  impossible to state "test X covers symbol Y" because no such endpoint exists to state it with.
+- Product language says *"the test suite covers this symbol"*, never *"this test covers it"*.
+- **Affected-test analysis is unsupported**, and the report must name the exact input that would
+  support it: one coverage report per test, produced by N separate runs, with the test's identity
+  carried outside the report (the format cannot carry it).
+
+## A.3 The relation is named `COVERS`, not `TEST_COVERS_SYMBOL`
+
+The roadmap, `CLAUDE.md` §3 and the master brief all spell it `TEST_COVERS_SYMBOL`. That spelling is
+rejected, for two reasons, the second of which is the load-bearing one.
+
+1. **It breaks a recorded convention.** Nerve's relation vocabulary is endpoint-kind-agnostic:
+   `CONTAINS`, `DEFINES`, `IMPORTS`, `EXPORTS`, `CALLS`, `REFERENCES`, `EXTENDS`, `IMPLEMENTS`,
+   `SUPERSEDES`. Kinds live in `entity.kind` and are never duplicated into a relation name — a
+   decision already made in Slice 5a, where the briefed `DOCUMENT_CONTAINS_SECTION` was rejected for
+   exactly this reason and shipped as `CONTAINS`. `TEST_COVERS_SYMBOL` names *both* endpoints.
+
+2. **It asserts an endpoint the evidence cannot support.** After §A.2 the source is a coverage run,
+   not a test. A relation called `TEST_COVERS_…` would state, in the vocabulary itself, a per-test
+   attribution that the format does not carry. That is the same defect class Slice 5d-i corrected
+   when filesystem containment was labelled `AST_DIRECT`: a name claiming evidence that does not
+   exist. Shipping it would be a regression against the reason this project exists.
+
+`COVERS`, from a `CoverageRun` to a symbol, states exactly what is known and nothing more.
+
+**The invariant `CLAUDE.md` protects is untouched.** Its requirement is that coverage must never be
+relabelled as a call relationship, and that is enforced harder here than the name ever did: a test
+asserts the coverage extractor produces **zero** call-shaped relations, exhaustively. `CLAUDE.md`
+§3, `docs/decisions/ADR-0005-coverage-is-not-calls.md` and the roadmap row are updated in the same
+commit so no contradictory spelling is left silently authoritative. ADR-0008 records this.
+
+## A.4 Two deviations from §3.4, with reasons
+
+**Ingestion is a standalone `nerve coverage` command, not a flag on `nerve index`.** A flag would
+mean that the ordinary post-edit `nerve index` — run without it, as it always is — silently
+destroys every coverage edge. Making ingestion its own explicitly-invoked verb also makes "no
+auto-discovery" structural rather than a promise.
+
+**A source-file edit does not delete the coverage edges naming that file.** §3.4 proposed
+invalidating them. That is superseded by §3.2, which is the better mechanism and already exists:
+the observation records the covered file's content hash at ingestion, and `nerve why` re-hashes at
+query time, so an edited file makes its coverage **visibly stale** — strictly more informative than
+deleting it, which would destroy the evidence that coverage was ever ingested and leave silence in
+its place. Edges whose symbol genuinely no longer exists are removed by the existing orphan pruner,
+which needs no coverage-specific logic. Equivalence is therefore stated as: a full index followed by
+ingestion and an incremental index followed by ingestion are byte-identical.
+
 ## 5. Non-goals
 
 No test execution. No call tracing (Slice 11). No affected-test analysis unless §2.1 finds real

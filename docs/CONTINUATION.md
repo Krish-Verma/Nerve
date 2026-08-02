@@ -82,7 +82,7 @@ cannot emit. `directnessClass`'s `default` arm no longer renders an unknown dire
 
 | | |
 |---|---|
-| **6** | Test evidence (**coverage only**) — `TEST_COVERS_SYMBOL`, freshness. **T9 gate.** Plan at `docs/plans/slice-06-test-evidence.md`; **§2.1 is a gating question to answer empirically before writing the emission path.** |
+| **6b** | Coverage **ingestion + product surface** — `nerve coverage`, line→symbol mapping via `innermost_covering`, freshness, **T9 gate**, full-vs-incremental equivalence. 6a (vocabulary + parser) is done; the §2.1 gating question is **answered** — see the Addendum to `docs/plans/slice-06-test-evidence.md` and ADR-0008. |
 | 7 | CLI + query expansion — `impact`, `gaps`, `check`, `doctor` |
 | 8 | MCP — one default investigation tool. **T7 + T8 gate.** |
 | 9 | Python |
