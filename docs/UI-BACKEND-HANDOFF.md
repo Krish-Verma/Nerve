@@ -373,3 +373,73 @@ Deferred deliberately; normalisation is its own design question.
   empty state · unsupported state · stale state · error states · pagination · limits ·
   example response · user-facing interpretation.
 -->
+
+## Entry 4 — Slice 10a: endpoints, and one changed default
+
+`4e4239a`. Backend surface only; no frontend product work was done.
+
+### One new entity kind
+
+| | |
+|---|---|
+| `kind` | `endpoint` |
+| `name` | the canonical address, e.g. `GET /users/{user_id}` — **this is what FTS5 indexes**, so `nerve search users` now returns routes |
+| `scope_path` | the module that declares it |
+| `is_symbol` | **false.** It does not move `symbols_total` |
+| addressable by path | **no.** `api/routes.py` names the module, never the routes inside it |
+
+`meta` carries `endpoint_kind` (closed vocabulary, one member today: `http_route`), `framework`
+(`fastapi` \| `flask`), `method`, `path`, `rule_id`, and `declarations_in_module`.
+
+**`path` is the DECLARED path, not the deployed one.** No prefix from `APIRouter(prefix=…)` or a
+blueprint registration is composed in. If the interface ever shows this next to a real URL, it must
+not imply they are the same string.
+
+### One new relation
+
+`SERVED_BY`, from the endpoint to its handler. Gloss added to `RELATION_VERB` as
+`['is served by', 'serves']`.
+
+**Recommended wording.** A registration proves a table entry, not an execution. It does **not** mean
+the route is reachable in production, that middleware permits access, that dynamic configuration has
+not replaced it, or that two matching path strings are one deployed endpoint. Every observation
+carries a `proves` field saying so; prefer quoting it to inventing a phrase. **Never render
+`SERVED_BY` as a call** — the same rule ADR-0005 sets for `COVERS`.
+
+### The one changed field
+
+`relations_effective` on `/api/impact`, `nerve impact --json`, and the `nerve_impact` MCP tool now
+contains **five** relations by default where it contained four:
+
+```json
+["CALLS", "REFERENCES", "EXTENDS", "IMPLEMENTS", "SERVED_BY"]
+```
+
+Any interface that hard-codes four, or renders a fixed-width legend, needs the fifth. This is the
+change that closes the measured defect: without it a live route handler and dead code produce
+identical impact answers.
+
+### Empty and ambiguous states
+
+| state | meaning |
+|---|---|
+| no `endpoint` entities at all | either the repository declares no routes, or its framework has no rule yet. **These are not distinguishable from the API today** — a known gap, and the interface should not say "no routes" |
+| `declarations_in_module > 1` | the same method and path declared more than once in one module. **Both edges are kept**; Nerve does not choose. Render as ambiguity, not as a duplicate to hide |
+| handler is a `method` | the target is a `Method`, not a `Function`. Both are valid |
+
+### Not yet available
+
+TypeScript/JavaScript routes (Express) are **Slice 10b**. Until then a TS/JS repository yields zero
+endpoints, and that absence means "no rule yet", not "no routes".
+
+### Frontend edits the backend made
+
+**10 added lines**, all of them vocabulary entries that `crates/nerve-server/tests/ui_vocabulary.rs`
+requires in order to pass:
+
+- `apps/nerve-web/src/api/types.ts` — `'endpoint'` in `ENTITY_KINDS`, `'SERVED_BY'` in `RELATIONS`
+- `apps/nerve-web/src/vocab.ts` — `endpoint` gloss in `KIND_GLOSS`
+- `apps/nerve-web/src/format.ts` — `SERVED_BY` verb pair in `RELATION_VERB`
+
+No styling, no layout, no navigation, no views. There is **no Endpoints view** — building one is the
+user's call.
