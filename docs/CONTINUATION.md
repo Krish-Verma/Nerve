@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| **Last slice commit** | **Slice 11a-i** — the hostile-fixture gaps closed. `git log --oneline -3` is authoritative. |
+| **Last slice commit** | **Slice 11a-i** (`871aef3`) — the hostile-fixture gaps closed. Since then: the acceptance package, the T9 restatement, UI Entry 5, the validation-plan extension, and the 11b and 12a plans. `git log --oneline -10` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
 | **Last completed slice** | **Slice 11a + 11a-i** — trace ingestion, with every hostile artifact's declared refusal now asserted per artifact. **Row 11 is not complete: 11b, the reference Python tracer, is not built.** |
@@ -17,6 +17,31 @@
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
+
+## What exists now that did not before, and where it is
+
+| | |
+|---|---|
+| `scripts/final_acceptance.sh` | **Runnable.** Last result **34 passed, 0 failed, 1 skipped**. Distinguishes `PASS` / `FAIL` / `REFUSED` / `NOT BUILT` / `SKIPPED`, and **fails if `nerve affected` or `nerve trace-tests` ever exists** so a boundary cannot be crossed quietly |
+| `docs/FINAL-ACCEPTANCE.md` | What the script gates, what it cannot, and the two refusals with their decisions named |
+| `docs/plans/slice-11b-python-tracer.md` | 11b's spec. A **pytest plugin**, not a bare tracer — `sys.monitoring` reports code objects and cannot know which test is running |
+| `docs/plans/slice-12a-git-object-access.md` | 12a's design. `.git` becomes untrusted input; four bounds, and the inflate is bounded **as it streams** |
+| `docs/plans/slice-15-real-world-validation.md` | Extended past its TypeScript-only corpus. Python repositories, `jedi` as oracle, and the endpoint oracle's awkward property: **it must execute repository code, which Nerve refuses to do**, and the gap between the two *is* the measurement |
+| `docs/THREAT-MODEL.md` | T9 **restated** for traces rather than extended — its control *"coverage may only produce `COVERS` — never a call edge"* cannot cover a trace, which legitimately produces one. T10's dependency count corrected 100 → 101 |
+| `docs/UI-BACKEND-HANDOFF.md` Entry 5 | Traces. Four ways a view can be wrong while looking reasonable |
+
+### Verified by hand this session, on the release binary
+
+- **Slice 10a's defect is closed end to end.** On `fixtures/py-framework`: 18 endpoints;
+  `nerve impact read_user` reports `SERVED_BY 1`, so a live handler is distinguishable from dead code;
+  `nerve search users` finds all four `/users` routes. Both halves of the measured 10a defect.
+- **The trace conflict path.** A legitimate import writes 18 rows and exits 0; the same artifact again
+  writes **0** rows and exits 0; a replayed `run_id` reports `run-id-conflict 1`, exits **3**, leaves the
+  six legitimate edges unchanged, and the collision is visible **in the evidence** — one `run_id`
+  against two artifact hashes, both paths named.
+- **Nerve does not index Rust**, which the acceptance script learned the hard way. Its own Rust source
+  cannot be a self-test subject for a symbol query; `apps/nerve-web` is what lets this repository index
+  itself at all.
 
 ## Verification state at the Slice 11a-i commit
 
