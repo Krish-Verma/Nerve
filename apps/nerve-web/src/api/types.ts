@@ -374,4 +374,6 @@ export const RELATIONS = [
   'COVERS',
   // Appended in Slice 10a.
   'SERVED_BY',
+  // Appended in Slice 11a.
+  'TEST_OBSERVED_CALL',
 ] as const;

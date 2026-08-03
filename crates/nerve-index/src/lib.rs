@@ -18,6 +18,12 @@
 //! onto symbols and writes. It is driven by its own command rather than by `index`, so that an
 //! ordinary re-index cannot destroy evidence it has no way to reproduce.
 //!
+//! The `test-trace` extractor is split the same way and for the same reasons: [`trace`] is a pure
+//! reader of the `nerve-trace/v1` artifact and [`trace_ingest`] resolves frames onto symbols and
+//! writes. **Nerve does not run the test suite** — the user runs their own tests under their own
+//! tracer and Nerve reads the artifact, so `crates/nerve-cli/tests/no_subprocess.rs` keeps passing
+//! untouched and `nerve trace-tests` does not exist.
+//!
 //! This crate emits **observations only**. It cannot write `assertion_state`: that table is
 //! rebuilt by [`nerve_store::rebuild_assertion_state`] as a pure function of what was
 //! observed.
@@ -53,6 +59,8 @@ pub mod pystruct;
 pub mod pysurface;
 pub mod refs;
 pub mod resolve;
+pub mod trace;
+pub mod trace_ingest;
 pub mod tsframework;
 
 pub use bind::{Binding, BindingTable, ThisResolution};
@@ -119,6 +127,11 @@ pub use refs::{
     extract_references, RefTarget, ReferenceExtraction, ReferenceSite, UnresolvedReason,
     EXTRACTOR_ID as REFERENCE_EXTRACTOR_ID, EXTRACTOR_VERSION as REFERENCE_EXTRACTOR_VERSION,
 };
+pub use trace::{
+    parse_trace, CompletionState, SourceMapState, TraceArtifact, TraceCounters, TraceHeader,
+    TraceRecord, EXTRACTOR_ID as TRACE_EXTRACTOR_ID, EXTRACTOR_VERSION as TRACE_EXTRACTOR_VERSION,
+};
+pub use trace_ingest::{ingest_trace, TraceBinding, TraceOutcome};
 pub use tsframework::{
     extract_framework as extract_ts_framework, TsEndpoint, TsFrameworkExtraction,
     DECLARED_RELATIONS as TS_FRAMEWORK_RELATIONS, EXTRACTOR_ID as TS_FRAMEWORK_EXTRACTOR_ID,

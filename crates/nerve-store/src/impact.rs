@@ -85,6 +85,16 @@
 //!   What appears in the closure is still a **declaration**, never a proof of reachability. See
 //!   [`nerve_core::vocab::Relation::ServedBy`] for the list of things a registration does not
 //!   prove, which the CLI restates when an endpoint is in the answer.
+//! - **`TEST_OBSERVED_CALL` is excluded**, and this is the opposite decision to `SERVED_BY` rather
+//!   than an oversight (`docs/plans/slice-11a-trace-ingestion.md` §8). A route registration is a
+//!   **static declaration in the source**: it is present on every run, and reading it twice gives
+//!   the same answer. A trace observation is **existential**: it says one run, in one environment,
+//!   took this edge, and says nothing about the next run. `nerve impact`'s default answers *"what
+//!   does the source say depends on this?"*, so folding single-run evidence into it silently
+//!   changes what the answer means — the failure mode the `COVERS` note above describes, arrived at
+//!   from the other side. It remains available explicitly via `--relation TEST_OBSERVED_CALL`, and
+//!   that is where its value lies: Python's measured **42.3%** unresolved call rate is exactly the
+//!   gap a trace can fill, and a user who asks for it gets it **because they asked**.
 //!
 //! This is **not** `nerve affected`. That command is refused, not deferred (ADR-0008 §A.2: LCOV
 //! carries no per-test attribution). If a test file appears in an impact set it is because code
@@ -115,8 +125,9 @@ use crate::select::EntityRef;
 
 /// The relations a reverse impact closure follows unless the caller names others.
 ///
-/// See the module documentation for why `CONTAINS`, `DEFINES`, `IMPORTS` and `COVERS` are not
-/// here, and why `SERVED_BY` is. Changing this array changes what `nerve impact` means.
+/// See the module documentation for why `CONTAINS`, `DEFINES`, `IMPORTS`, `COVERS` and
+/// `TEST_OBSERVED_CALL` are not here, and why `SERVED_BY` is. Changing this array changes what
+/// `nerve impact` means.
 pub const DEFAULT_RELATIONS: [Relation; 5] = [
     Relation::Calls,
     Relation::References,
@@ -495,7 +506,7 @@ pub fn impact(
 mod tests {
     use super::*;
 
-    /// The five the walk follows, and the six it must not.
+    /// The five the walk follows, and the seven it must not.
     ///
     /// This is the difference between an answer and a truism. With `CONTAINS` in the set every
     /// symbol reaches its module, its file, its directory and the repository, so every symbol
@@ -526,6 +537,9 @@ mod tests {
             Relation::Covers,
             Relation::Exports,
             Relation::Supersedes,
+            // Appended in Slice 11a. Existential single-run evidence, not a statement the source
+            // makes, so it would change what the default answer means. See the module header.
+            Relation::TestObservedCall,
         ] {
             assert!(
                 !DEFAULT_RELATIONS.contains(&refused),
@@ -540,7 +554,7 @@ mod tests {
         // Every member of the closed vocabulary is accounted for, so a relation added later
         // cannot be silently absent from both lists.
         assert_eq!(
-            DEFAULT_RELATIONS.len() + 6,
+            DEFAULT_RELATIONS.len() + 7,
             Relation::ALL.len(),
             "a relation was added to the vocabulary without a decision about `nerve impact`"
         );

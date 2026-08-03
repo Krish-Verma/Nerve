@@ -269,6 +269,42 @@ pub fn delete_claims_sourced_at(
     })
 }
 
+/// Withdraw exactly the observations one extractor recorded at the given identities.
+///
+/// The narrowest withdrawal in this module, and the one an **accumulating** extractor needs. The
+/// other two are keyed on a file or on an artifact, which are both statements about where evidence
+/// came from. This one is keyed on the identity `idx_observation_identity` gives a row, because the
+/// caller has already read that row, computed the union of what it said and what a new artifact
+/// says, and needs the superseded copy gone so its restatement can be inserted.
+///
+/// It deletes nothing else: another extractor's row for the same assertion stays, and so does this
+/// extractor's row at a different location. Occurrences and entities are untouched — an
+/// accumulating extractor creates no entity of its own, so there is none to retire.
+pub fn delete_observations_at(
+    conn: &Connection,
+    extractor_id: &str,
+    keys: &[crate::query::ObservationKey],
+    touched: &mut TouchedRows,
+) -> Result<usize> {
+    let mut stmt = conn.prepare(
+        "DELETE FROM observation
+           WHERE extractor_id = ?1 AND assertion_id = ?2
+             AND file_path = ?3 AND start_line = ?4 AND end_line = ?5",
+    )?;
+    let mut removed = 0usize;
+    for key in keys {
+        removed += stmt.execute(params![
+            extractor_id,
+            key.assertion_id,
+            key.file_path,
+            key.start_line,
+            key.end_line
+        ])?;
+        touched.assertions.insert(key.assertion_id.clone());
+    }
+    Ok(removed)
+}
+
 fn collect_into(
     stmt: &mut rusqlite::Statement<'_>,
     path: &str,

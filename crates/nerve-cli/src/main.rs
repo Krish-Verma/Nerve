@@ -80,6 +80,19 @@ enum Command {
         /// Repository root. Defaults to the current directory.
         path: Option<PathBuf>,
     },
+    /// Read a test-call-trace artifact your own tracer produced.
+    ///
+    /// **Nerve does not run your tests.** There is no `nerve trace-tests`, and its absence is a
+    /// design position rather than a gap: `crates/nerve-cli/tests/no_subprocess.rs` forbids process
+    /// creation in Nerve's product code, and running a test suite would need an exception to it. You
+    /// run your suite under the tracer, in your own environment, with your own secrets; Nerve reads
+    /// the artifact afterwards and spawns nothing.
+    ///
+    /// A trace is **existential evidence**: it says one run took an edge, not that every run does.
+    /// `TEST_OBSERVED_CALL` is therefore not in `nerve impact`'s default relation set, and is asked
+    /// for explicitly with `--relation TEST_OBSERVED_CALL`.
+    #[command(subcommand)]
+    Trace(TraceCommand),
     /// Report index counts, freshness and schema version.
     Status {
         /// Repository root. Defaults to the current directory.
@@ -295,6 +308,30 @@ enum Command {
     },
 }
 
+/// `nerve trace` subcommands.
+///
+/// One member, and the shape is deliberate. A bare `nerve trace <artifact>` would leave no room for
+/// the verbs a trace surface plausibly grows — listing the runs a repository has ingested, or
+/// withdrawing one — and, more importantly, `import` names what the command does. `nerve trace-tests`
+/// is refused, not deferred: see the `Trace` variant's help.
+#[derive(Debug, Subcommand)]
+enum TraceCommand {
+    /// Read one `nerve-trace/v1` artifact into an existing index.
+    ///
+    /// Reads only the artifact you name. Nerve runs no tests, spawns no process and looks for no
+    /// artifact of its own — a trace is something your tracer produced, and an index that changed
+    /// meaning because a test run left a file behind would be an index nobody could reason about.
+    ///
+    /// Editing a traced file does not delete its trace evidence. It makes it *stale*, which
+    /// `nerve why` reports, and which is strictly more informative than silence.
+    Import {
+        /// Path to the artifact. Must be inside the repository.
+        artifact: PathBuf,
+        /// Repository root. Defaults to the current directory.
+        path: Option<PathBuf>,
+    },
+}
+
 /// `--direction` values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum DirectionArg {
@@ -402,6 +439,9 @@ fn main() {
         Command::Init { path } => run_init(&output, path),
         Command::Index { path, full } => run_index(&output, path, full),
         Command::Coverage { report, path } => run_coverage(&output, path, report),
+        Command::Trace(TraceCommand::Import { artifact, path }) => {
+            run_trace_import(&output, path, artifact)
+        }
         Command::Status { path, path_flag } => run_status(
             &output,
             &path.or(path_flag).unwrap_or_else(|| PathBuf::from(".")),
@@ -878,6 +918,132 @@ fn run_coverage(output: &Output, path: Option<PathBuf>, report: PathBuf) -> i32 
             code
         }
         Err(err) => output.failure("coverage", error_exit_code(&err), &err.to_string()),
+    }
+}
+
+/// Read one trace artifact the user named into an existing index.
+///
+/// Exit codes follow `nerve coverage`: 0 when the whole artifact was believed and the traced run
+/// itself finished, 3 when anything was refused **or** the run did not finish. The second half is the
+/// point — a partial run is a partial answer, and a script that only checked for refusals would
+/// treat an interrupted suite's trace as a complete one.
+fn run_trace_import(output: &Output, path: Option<PathBuf>, artifact: PathBuf) -> i32 {
+    let root = path.unwrap_or_else(|| PathBuf::from("."));
+    match nerve_index::ingest_trace(&root, &artifact) {
+        Ok(outcome) => {
+            let partial = outcome.status == nerve_index::RunStatus::Partial;
+            let code = if partial {
+                exit::PARTIAL_INDEX
+            } else {
+                exit::SUCCESS
+            };
+
+            output.line(format!("Imported trace from {}", outcome.artifact_path));
+            output.line(format!("  root           {}", outcome.root.display()));
+            output.line(format!(
+                "  artifact_hash  {}",
+                outcome
+                    .artifact_content_hash
+                    .as_deref()
+                    .unwrap_or("(unread)")
+            ));
+            output.line(format!(
+                "  run_id         {}",
+                outcome.run_id.as_deref().unwrap_or("(no usable header)")
+            ));
+            output.line(format!("  state_id       {}", outcome.state_id));
+            // Three values, never two: `unverified` is not `bound` and is not `stale`.
+            output.line(format!(
+                "  binding        {}",
+                outcome
+                    .binding
+                    .map(|binding| binding.as_str())
+                    .unwrap_or("(refused)")
+            ));
+            output.line(format!(
+                "  run            {}{}",
+                outcome
+                    .completion_state
+                    .map(|state| state.as_str())
+                    .unwrap_or("(unknown)"),
+                outcome
+                    .partial_reason
+                    .as_deref()
+                    .map(|reason| format!(" — {reason}"))
+                    .unwrap_or_default()
+            ));
+            output.line(format!(
+                "  records        {} in artifact, {} accepted, {} unsupported",
+                outcome.records_in_artifact, outcome.records_accepted, outcome.records_unsupported
+            ));
+            output.line(format!(
+                "  edges          {} observed over {} call site(s), {} restated",
+                outcome.edges_observed, outcome.observations_written, outcome.observations_merged
+            ));
+            output.line(format!(
+                "  refused        {} in total",
+                outcome.refused_total()
+            ));
+            for (form, count) in &outcome.refused {
+                output.line(format!("    {form:<28} {count}"));
+            }
+            output.line(format!(
+                "  limitations    {} record(s) the producer could not model",
+                outcome.limitations_total()
+            ));
+            for (form, count) in &outcome.limitations {
+                output.line(format!("    {form:<28} {count}"));
+            }
+            if !outcome.declared_limitations.is_empty() {
+                output.line(format!(
+                    "  declared       {}",
+                    outcome.declared_limitations.join(", ")
+                ));
+            }
+            output.line(format!(
+                "  wrote          {} database rows",
+                outcome.rows_written
+            ));
+            output.line(format!("  duration_ms    {}", outcome.duration_ms));
+            output.line(String::new());
+            output
+                .line("  A trace is existential evidence: it says this run took these edges, not");
+            output.line("  that every run does, and absence of an edge is absence of observation.");
+            output
+                .line("  The endpoints are the two frames of each call — never the test, which is");
+            output.line("  recorded on the evidence instead. Nerve ran no tests to produce this.");
+
+            output.object(json!({
+                "command": "trace import",
+                "ok": true,
+                "exit_code": code,
+                "root": outcome.root.display().to_string(),
+                "artifact_path": outcome.artifact_path,
+                "artifact_content_hash": outcome.artifact_content_hash,
+                "state_id": outcome.state_id,
+                "run_id": outcome.run_id,
+                "repository_binding": outcome.binding.map(|binding| binding.as_str()),
+                "completion_state": outcome.completion_state.map(|state| state.as_str()),
+                "partial_reason": outcome.partial_reason,
+                "declared_limitations": outcome.declared_limitations,
+                "status": outcome.status.as_str(),
+                "records_in_artifact": outcome.records_in_artifact,
+                "records_accepted": outcome.records_accepted,
+                "records_unsupported": outcome.records_unsupported,
+                "edges_observed": outcome.edges_observed,
+                "observations_written": outcome.observations_written,
+                "observations_merged": outcome.observations_merged,
+                "refused": outcome.refused,
+                "refused_total": outcome.refused_total(),
+                "limitations": outcome.limitations,
+                "limitations_total": outcome.limitations_total(),
+                "rows_written": outcome.rows_written,
+                "duration_ms": outcome.duration_ms,
+                "runs_tests": false,
+            }));
+            code
+        }
+        Err(err) => output.failure("trace import", error_exit_code(&err), &err.to_string()),
     }
 }
 

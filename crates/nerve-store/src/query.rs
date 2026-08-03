@@ -496,6 +496,119 @@ pub fn path_is_indexed(conn: &Connection, file_path: &str) -> Result<bool> {
     Ok(found != 0)
 }
 
+/// The recorded description of one repository state.
+///
+/// `git_commit` is `None` when the tree had no readable `.git/HEAD` at index time, and
+/// `content_merkle` is always present because the column is `NOT NULL`. Read rather than inferred:
+/// `nerve_index`'s pipeline currently sets `state_id` equal to the content merkle, and an ingestion
+/// that compared an artifact's declared merkle against `state_id` would be resting a correctness
+/// check on an equality that lives in another crate and may not survive it.
+pub fn repository_state(
+    conn: &Connection,
+    state_id: &str,
+) -> Result<Option<crate::write::RepositoryStateRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT state_id, repo_id, kind, git_commit, content_merkle
+           FROM repository_state WHERE state_id = ?1",
+    )?;
+    let mut rows = stmt.query_map(params![state_id], |row| {
+        Ok(crate::write::RepositoryStateRow {
+            state_id: row.get(0)?,
+            repo_id: row.get(1)?,
+            kind: row.get(2)?,
+            git_commit: row.get(3)?,
+            content_merkle: row.get(4)?,
+        })
+    })?;
+    match rows.next() {
+        Some(row) => Ok(Some(row?)),
+        None => Ok(None),
+    }
+}
+
+/// The identity `idx_observation_identity` gives one observation, minus the extractor.
+///
+/// Every column of the uniqueness index that an accumulating extractor controls per row. Two
+/// observations agreeing on all four are **the same row** as far as the schema is concerned, which
+/// is why an extractor whose evidence accumulates has to be able to name them.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ObservationKey {
+    /// Assertion the observation supports.
+    pub assertion_id: String,
+    /// Path the observation cites.
+    pub file_path: String,
+    /// First line it cites.
+    pub start_line: i64,
+    /// Last line it cites.
+    pub end_line: i64,
+}
+
+/// One observation's key plus the two columns the store never interprets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservationPayload {
+    /// Which observation this is.
+    pub key: ObservationKey,
+    /// `observation.environment` verbatim.
+    pub environment: Option<String>,
+    /// `observation.details` verbatim.
+    pub details: Option<String>,
+}
+
+/// Chunk size for an `IN (…)` list. Well inside SQLite's default 999-parameter ceiling.
+const IN_CHUNK: usize = 400;
+
+/// What one extractor has already recorded about each of `assertion_ids`.
+///
+/// For an extractor whose evidence **accumulates** — a second artifact adds to what a first one
+/// said, rather than replacing it — a new import must be able to read what is stored before it
+/// writes. `idx_observation_identity` keys on `(assertion, extractor, version, source type, path,
+/// lines)` and carries **no** column for `environment`, so a second run observing the same call at
+/// the same site is the same row: writing it with `INSERT OR IGNORE` would drop the second run's
+/// identity silently. Reading first is what lets the caller restate the union instead.
+///
+/// Returns nothing for an empty list, and never scans the table: the lookup goes through
+/// `idx_observation_assertion`.
+pub fn observations_for_assertions(
+    conn: &Connection,
+    extractor_id: &str,
+    assertion_ids: &[String],
+) -> Result<Vec<ObservationPayload>> {
+    let mut out = Vec::new();
+    for chunk in assertion_ids.chunks(IN_CHUNK) {
+        let placeholders = (0..chunk.len())
+            .map(|index| format!("?{}", index + 2))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT assertion_id, file_path, start_line, end_line, environment, details
+               FROM observation
+              WHERE extractor_id = ?1 AND assertion_id IN ({placeholders})
+              ORDER BY assertion_id, file_path, start_line, end_line"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut arguments: Vec<&dyn rusqlite::ToSql> = vec![&extractor_id];
+        for assertion_id in chunk {
+            arguments.push(assertion_id);
+        }
+        let rows = stmt.query_map(arguments.as_slice(), |row| {
+            Ok(ObservationPayload {
+                key: ObservationKey {
+                    assertion_id: row.get(0)?,
+                    file_path: row.get(1)?,
+                    start_line: row.get(2)?,
+                    end_line: row.get(3)?,
+                },
+                environment: row.get(4)?,
+                details: row.get(5)?,
+            })
+        })?;
+        for row in rows {
+            out.push(row?);
+        }
+    }
+    Ok(out)
+}
+
 /// One search result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchHit {

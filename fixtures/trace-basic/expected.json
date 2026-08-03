@@ -1,0 +1,279 @@
+{
+  "_format": [
+    "Slice 11a trace-ingestion ground truth, read by crates/nerve-index/tests/trace.rs.",
+    "Written BEFORE trace.rs and trace_ingest.rs existed, per the discipline that has already won",
+    "disagreements in 5d-ii, 9a and 9b. Where the implementation and this file disagree, this file",
+    "is the claim to argue against — not the thing to edit.",
+    "",
+    "Every line number below was read out of trace/*.jsonl by hand and checked against the symbol",
+    "extents the index actually records, which are listed under `extents` so the reading is",
+    "auditable without running anything."
+  ],
+
+  "_endpoints": [
+    "An assertion is `caller_symbol TEST_OBSERVED_CALL callee_symbol`. The TEST IS NEVER AN",
+    "ENDPOINT: for the stack test_basic -> parse -> tokenize the tracer records two call events,",
+    "and naming test_basic as the source of the second would assert a call test_basic never made.",
+    "Which test observed an edge lives on the observation, in `environment.runs[].tests` and in",
+    "`details.by_test`."
+  ],
+
+  "extents": {
+    "src/lex.py": {
+      "tokenize": [4, 6],
+      "classify": [9, 13],
+      "unobserved": [16, 18],
+      "_module_body": "lines 1-3 and 7-8 and 14-15 are inside no symbol"
+    },
+    "src/parse.py": {
+      "parse": [8, 11],
+      "reload_lex": [14, 18],
+      "Parser": [21, 26],
+      "Parser.parse_all": [24, 26],
+      "_module_body": "lines 1-7 are inside no symbol; line 5 is the module-level tokenize() call",
+      "_nesting": "line 26 is inside both Parser (bytes 437-641) and parse_all (bytes 535-641); the innermost rule must pick parse_all, whose byte span is shorter"
+    },
+    "tests/test_parse.py": {
+      "test_basic": [6, 8],
+      "test_method": [11, 13],
+      "test_lazy_import": [16, 18],
+      "test_partial": [21, 23]
+    }
+  },
+
+  "bound": {
+    "_": "trace/bound.jsonl, with __CONTENT_MERKLE__ replaced by the merkle the index recorded. 23 records: 8 accepted, 2 refused at the repository layer, 1 unresolved by the producer, 12 declaring an unsupported form.",
+    "repository_binding": "bound",
+    "completion_state": "complete",
+    "run_id": "run-bound-1",
+
+    "edges": [
+      {
+        "caller": "sym:tests/test_parse.py#test_basic",
+        "callee": "sym:src/parse.py#parse",
+        "site": ["tests/test_parse.py", 8],
+        "observed_count": 1,
+        "records": 1,
+        "by_test": { "tests/test_parse.py::test_basic": 1 },
+        "note": "depth 1, from the test body"
+      },
+      {
+        "caller": "sym:src/parse.py#parse",
+        "callee": "sym:src/lex.py#tokenize",
+        "site": ["src/parse.py", 10],
+        "observed_count": 3,
+        "records": 2,
+        "by_test": {
+          "tests/test_parse.py::test_basic": 1,
+          "tests/test_parse.py::test_method": 2
+        },
+        "note": "DEPTH 2 AND DEPTH 3. The source is `parse`, never a test. Two tests reach the same call site, so the schema's observation identity makes them ONE observation whose environment names both — see the disagreement recorded in the README."
+      },
+      {
+        "caller": "sym:src/parse.py#parse",
+        "callee": "sym:src/lex.py#classify",
+        "site": ["src/parse.py", 11],
+        "observed_count": 4,
+        "records": 2,
+        "by_test": {
+          "tests/test_parse.py::test_basic": 2,
+          "tests/test_parse.py::test_method": 2
+        },
+        "note": "depth 2 and depth 3, one call site, two tests"
+      },
+      {
+        "caller": "sym:tests/test_parse.py#test_method",
+        "callee": "sym:src/parse.py#Parser.parse_all",
+        "site": ["tests/test_parse.py", 13],
+        "observed_count": 1,
+        "records": 1,
+        "by_test": { "tests/test_parse.py::test_method": 1 },
+        "note": "callee_line 24 is inside both Parser and parse_all; the innermost must win, so the callee is the METHOD and not the class"
+      },
+      {
+        "caller": "sym:src/parse.py#Parser.parse_all",
+        "callee": "sym:src/parse.py#parse",
+        "site": ["src/parse.py", 26],
+        "observed_count": 2,
+        "records": 1,
+        "by_test": { "tests/test_parse.py::test_method": 1 },
+        "note": "depth 2, both endpoints in one file; caller_line 26 is inside Parser too and must resolve to parse_all"
+      },
+      {
+        "caller": "sym:tests/test_parse.py#test_lazy_import",
+        "callee": "sym:src/parse.py#reload_lex",
+        "site": ["tests/test_parse.py", 18],
+        "observed_count": 1,
+        "records": 1,
+        "by_test": { "tests/test_parse.py::test_lazy_import": 1 },
+        "note": "the record carrying the unknown key `depth`. It is ACCEPTED and the unknown key counted, so this edge existing is the proof that an unknown record key costs one datum and not the record."
+      }
+    ],
+
+    "no_edge": [
+      {
+        "symbol": "sym:src/lex.py#unobserved",
+        "note": "no record names it. Absence of observation is not absence of a call, and it gets no edge in either direction."
+      },
+      {
+        "symbol": "sym:tests/test_parse.py#test_partial",
+        "note": "named only by two `crashed-test`/`interrupted-run` limitation records, which state no located frame. A limitation is not an edge."
+      },
+      {
+        "pair": "sym:tests/test_parse.py#test_basic -> sym:src/lex.py#tokenize",
+        "note": "THE DEFECT THE PLAN CORRECTS. The tracer saw test_basic -> parse -> tokenize. There must be no edge from the test to tokenize, at any depth, ever."
+      },
+      {
+        "pair": "sym:tests/test_parse.py#test_basic -> sym:src/lex.py#classify",
+        "note": "same, one frame further down"
+      },
+      {
+        "pair": "sym:tests/test_parse.py#test_method -> sym:src/parse.py#parse",
+        "note": "same again: test_method reaches parse through parse_all, so parse_all is the caller"
+      }
+    ],
+
+    "refused_records": [
+      {
+        "form": "callee-outside-any-symbol",
+        "count": 1,
+        "record": "caller src/parse.py:16 (inside reload_lex) -> callee src/lex.py:1 (the lex module body)",
+        "note": "a resolved caller reaching a frame no symbol contains. Refused and counted; the import continues."
+      },
+      {
+        "form": "caller-outside-any-symbol",
+        "count": 1,
+        "record": "caller src/parse.py:5 (module-level DEFAULTS = tokenize(...)) -> callee src/lex.py:4",
+        "note": "the caller is checked first, so this record produces exactly one refusal even though it is the module body on one side only."
+      },
+      {
+        "form": "producer-unresolved-frame",
+        "count": 1,
+        "record": "resolution: \"unresolved\", every location null",
+        "note": "the producer says it could not locate the frame. Counted, never guessed at."
+      },
+      {
+        "form": "record-unknown-key",
+        "count": 1,
+        "record": "the `depth` key on the test_lazy_import record",
+        "note": "ignored and counted; the record is still believed (contract policy: unknown HEADER keys reject, unknown RECORD keys are ignored)."
+      }
+    ],
+
+    "limitations": {
+      "_": "One record per member of the closed limitation vocabulary, so every counted form has a producing case in this fixture. That is the 10a lesson: a tally member with no producer is untested.",
+      "native-frames": 1,
+      "threads": 1,
+      "async-continuations": 1,
+      "multiprocessing-children": 1,
+      "dynamic-imports": 1,
+      "generated-code": 1,
+      "framework-wrappers": 1,
+      "sampling-gap": 1,
+      "crashed-test": 1,
+      "interrupted-run": 1,
+      "parallel-tests-shared-process": 1,
+      "profiler-contention": 1
+    },
+
+    "declared_limitations": ["async-continuations", "native-frames", "threads"],
+
+    "totals": {
+      "records_in_artifact": 23,
+      "records_accepted": 8,
+      "records_unsupported": 12,
+      "edges_observed": 6,
+      "observations_written": 6,
+      "refused_total": 4,
+      "limitations_total": 12,
+      "callers_resolved_to_symbols": 5,
+      "callees_resolved_to_symbols": 4
+    }
+  },
+
+  "partial": {
+    "_": "trace/partial.jsonl. completed_at is null and completion_state is `partial`, which is legal; the contradiction the contract rejects is `complete` with a null completed_at.",
+    "repository_binding": "bound",
+    "completion_state": "partial",
+    "run_id": "run-partial-1",
+    "partial_reason_present": true,
+    "edges": [
+      {
+        "caller": "sym:tests/test_parse.py#test_partial",
+        "callee": "sym:src/parse.py#parse",
+        "site": ["tests/test_parse.py", 23],
+        "observed_count": 1
+      },
+      {
+        "caller": "sym:src/parse.py#parse",
+        "callee": "sym:src/lex.py#tokenize",
+        "site": ["src/parse.py", 10],
+        "observed_count": 1
+      }
+    ],
+    "totals": {
+      "records_in_artifact": 2,
+      "records_accepted": 2,
+      "edges_observed": 2,
+      "observations_written": 2,
+      "refused_total": 0,
+      "limitations_total": 0
+    },
+    "note": "every observation this artifact writes must say `partial`, in environment and in details. A partial run must never read as a complete one."
+  },
+
+  "unverified": {
+    "_": "trace/unverified.jsonl. Both state fields null: nothing could be checked.",
+    "repository_binding": "unverified",
+    "completion_state": "complete",
+    "run_id": "run-unverified-1",
+    "edges": [
+      {
+        "caller": "sym:tests/test_parse.py#test_basic",
+        "callee": "sym:src/parse.py#parse",
+        "site": ["tests/test_parse.py", 8],
+        "observed_count": 1
+      }
+    ],
+    "note": "`unverified` is a distinct third value and is NEVER reported as `bound`. Absence of verification is not verification of absence."
+  },
+
+  "stale": {
+    "_": "trace/stale.jsonl. A well-formed content merkle of 64 zeros, which matches no tree.",
+    "repository_binding": "stale",
+    "completion_state": "complete",
+    "run_id": "run-stale-1",
+    "edges": [
+      {
+        "caller": "sym:tests/test_parse.py#test_basic",
+        "callee": "sym:src/parse.py#parse",
+        "site": ["tests/test_parse.py", 8],
+        "observed_count": 1
+      }
+    ],
+    "note": "reported, NOT refused (plan section 5). The artifact is about this repository — repository_root_name matches — so its evidence is kept and labelled."
+  },
+
+  "merged": {
+    "_": "bound.jsonl then partial.jsonl into one index. The two runs share one call site: src/parse.py:10 -> src/lex.py:4.",
+    "edges_total": 7,
+    "shared_site": {
+      "caller": "sym:src/parse.py#parse",
+      "callee": "sym:src/lex.py#tokenize",
+      "site": ["src/parse.py", 10],
+      "runs": ["run-bound-1", "run-partial-1"],
+      "observed_count": 4,
+      "completion_state": "partial",
+      "note": "the merged completion state is the WEAKEST of the contributing runs. One contributor did not finish, so the row must not read `complete`; environment.runs[] keeps each run's own state exactly."
+    }
+  },
+
+  "vocabulary": {
+    "relation": "TEST_OBSERVED_CALL",
+    "evidence_source_type": "TEST_CALL_TRACE",
+    "directness": "RESOLVED",
+    "extractor_id": "test-trace",
+    "extractor_version": "1.0.0",
+    "note": "RESOLVED, not DIRECT and not INFERRED. The artifact states the call outright — unlike coverage, where a rule concludes it — but it names a file and a line, so only the ENDPOINTS need resolving. That is exactly what Directness::Resolved means, and it is the value AST_RESOLVED uses."
+  }
+}

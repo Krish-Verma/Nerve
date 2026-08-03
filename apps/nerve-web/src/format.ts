@@ -119,6 +119,10 @@ const RELATION_VERB: Record<string, [string, string]> = {
   // it says the registration exists, not that the route runs, is permitted, or still points here at
   // runtime. Never a call, however much a request reaching a handler sounds like one.
   SERVED_BY: ['is served by', 'serves'],
+  // Between the two frames of a call a tracer watched happen while a test was running. Never from
+  // the test — the test is named on the evidence, not on the edge — and never a claim that the call
+  // always happens: one run took this edge, and another run may not.
+  TEST_OBSERVED_CALL: ['was observed calling', 'was observed called by'],
 };
 
 /** How to read a relation from the subject's side. */

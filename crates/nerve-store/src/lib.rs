@@ -52,13 +52,15 @@ pub use impact::{
 };
 pub use prune::{
     delete_claims_sourced_at, delete_directory_containment, delete_extractor_file_rows,
-    delete_file_rows, prune_orphans, prune_orphans_scoped, RemovalCounts, TouchedRows,
+    delete_file_rows, delete_observations_at, prune_orphans, prune_orphans_scoped, RemovalCounts,
+    TouchedRows,
 };
 pub use query::{
-    entity_relation_counts, importers_of, indexed_content_hash, occurrences_of, path_is_indexed,
-    repository, search_entities, status, symbol_spans_in_file, unresolved_entities,
-    EntityRelationCounts, ExtractorRunSummary, OccurrenceRow, RepositoryInfo, SearchHit,
-    StatusReport, SymbolSpanRow, UnresolvedEntity,
+    entity_relation_counts, importers_of, indexed_content_hash, observations_for_assertions,
+    occurrences_of, path_is_indexed, repository, repository_state, search_entities, status,
+    symbol_spans_in_file, unresolved_entities, EntityRelationCounts, ExtractorRunSummary,
+    ObservationKey, ObservationPayload, OccurrenceRow, RepositoryInfo, SearchHit, StatusReport,
+    SymbolSpanRow, UnresolvedEntity,
 };
 pub use schema::{migrate, schema_version, SCHEMA_VERSION};
 pub use select::{

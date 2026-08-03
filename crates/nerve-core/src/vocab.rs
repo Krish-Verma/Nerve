@@ -303,6 +303,30 @@ pub enum Relation {
     ///
     /// Declared and emitted in Slice 10a.
     ServedBy,
+    /// A tracer observed one symbol call another while a test was executing.
+    ///
+    /// `Function|Method TEST_OBSERVED_CALL Function|Method`. **The endpoints are the two frames of
+    /// the call, never the test.** For a stack `test_x → parse → lex` a tracer records two call
+    /// events, and naming the test as the source of the second would assert a call `test_x` never
+    /// made. Which test observed the edge is provenance and lives on the observation
+    /// (`docs/plans/slice-11a-trace-ingestion.md` §2.1), which is where ADR-0003 puts provenance.
+    ///
+    /// **Existential, never universal.** It says one run, in one environment, took this edge. It
+    /// does not say the edge is always taken, and the absence of it is absence of observation
+    /// rather than absence of a call — the same rule this project applies to coverage and gaps.
+    ///
+    /// **Not `CALLS`, and never relabelled as it.** [`Relation::Calls`] is what the source says;
+    /// this is what one execution did. The two are separate members of a closed vocabulary because
+    /// a trace can hold an edge no source statement resolves (Python's measured 42.3% unresolved
+    /// call rate) and the source can state an edge no run ever took.
+    ///
+    /// **Not `COVERS`.** Coverage says lines inside a symbol executed and has no attribution for
+    /// who invoked whom (ADR-0005, ADR-0008); a trace states the caller outright. A `COVERS`
+    /// observation may never become one of these, and a test asserts it over
+    /// [`Relation::ALL`].
+    ///
+    /// Declared and emitted in Slice 11a.
+    TestObservedCall,
 }
 
 impl Relation {
@@ -310,7 +334,7 @@ impl Relation {
     ///
     /// Appended to, never inserted into — `apps/nerve-web/src/api/types.ts` mirrors this array in
     /// order and `crates/nerve-server/tests/ui_vocabulary.rs` asserts the two match exactly.
-    pub const ALL: [Relation; 11] = [
+    pub const ALL: [Relation; 12] = [
         Relation::Contains,
         Relation::Defines,
         Relation::Imports,
@@ -324,6 +348,8 @@ impl Relation {
         Relation::Covers,
         // Appended in Slice 10a.
         Relation::ServedBy,
+        // Appended in Slice 11a.
+        Relation::TestObservedCall,
     ];
 
     /// The relations Slice 1 is permitted to emit.
@@ -348,6 +374,7 @@ impl Relation {
             Relation::Supersedes => "SUPERSEDES",
             Relation::Covers => "COVERS",
             Relation::ServedBy => "SERVED_BY",
+            Relation::TestObservedCall => "TEST_OBSERVED_CALL",
         }
     }
 }
@@ -734,6 +761,49 @@ mod tests {
         // Coverage is not a call graph (ADR-0005). The two are separate members of a closed
         // vocabulary, and neither parses as the other.
         assert_ne!(Relation::Covers, Relation::Calls);
+    }
+
+    /// The Slice 11a addition, named for exactly what one execution carries.
+    ///
+    /// `TEST_OBSERVED_CALL` is the whole of the vocabulary change: a trace run is provenance rather
+    /// than an endpoint, so — unlike `COVERS` — it needs no `EntityKind` of its own. The names that
+    /// would over-claim are refused: `TRACED_CALL` and `RUNTIME_CALL` drop the fact that a *test*
+    /// was executing, `OBSERVED_CALL` drops it too, and `TEST_CALLS` would read as a call the test
+    /// itself made, which is false for every frame below the test body.
+    #[test]
+    fn the_trace_vocabulary_states_only_what_one_execution_carries() {
+        assert_eq!(Relation::TestObservedCall.as_str(), "TEST_OBSERVED_CALL");
+        assert_eq!(
+            "TEST_OBSERVED_CALL".parse::<Relation>().unwrap(),
+            Relation::TestObservedCall
+        );
+        for over_claim in [
+            "TRACED_CALL",
+            "RUNTIME_CALL",
+            "OBSERVED_CALL",
+            "TEST_CALLS",
+            "RUNTIME_OBSERVED_CALL",
+            "FRAMEWORK_INFERRED_CALL",
+        ] {
+            assert!(
+                over_claim.parse::<Relation>().is_err(),
+                "{over_claim:?} parsed as a Relation without a rule that emits it"
+            );
+        }
+        // Three separate members of one closed vocabulary. What the source says, what a run
+        // executed, and what a run observed calling what are three different claims.
+        assert_ne!(Relation::TestObservedCall, Relation::Calls);
+        assert_ne!(Relation::TestObservedCall, Relation::Covers);
+
+        // Appended, and the appending is the point: `ALL` is mirrored by index in
+        // `apps/nerve-web/src/api/types.ts`.
+        assert_eq!(Relation::ALL.len(), 12);
+        assert_eq!(Relation::ALL[11], Relation::TestObservedCall);
+
+        // Its source type has existed since Slice 1 and Slice 11a is its first emitter; no member
+        // was added on that axis and no ordinal moved.
+        assert_eq!(EvidenceSourceType::TestCallTrace.ordinal(), 6);
+        assert_eq!(EvidenceSourceType::ALL.len(), 12);
     }
 
     /// A document and a section are named by their own tuples, not by the symbol tuple. If
