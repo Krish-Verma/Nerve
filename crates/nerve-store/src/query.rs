@@ -609,6 +609,38 @@ pub fn observations_for_assertions(
     Ok(out)
 }
 
+/// Every distinct `observation.environment` one extractor has written.
+///
+/// [`observations_for_assertions`] answers *what is recorded about these call sites*, which is the
+/// wrong question for a fact about the **run**. Whether a `run_id` has been seen before is a property
+/// of the repository, not of an edge: an artifact replaying another run's identity on an edge no
+/// earlier artifact mentioned touches no shared assertion, so a site-scoped read cannot see it. That
+/// is the gap this exists to close, and it is why the scope here is the extractor rather than a list.
+///
+/// `DISTINCT` because one run writes the same environment text at every site it observed, so the row
+/// count is the number of sites while the answer only needs the number of distinct run sets.
+///
+/// **Cost, stated rather than hidden:** `observation` has no index on `extractor_id`, so this scans
+/// the table. It is one query per explicit import — not per record — and adding an index would be a
+/// schema migration, which is a larger change than the question needs. If a profile ever shows this
+/// mattering, the index is the fix.
+///
+/// The store does not interpret the text. Its shape belongs to whichever extractor wrote it.
+pub fn environments_for_extractor(conn: &Connection, extractor_id: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT environment
+           FROM observation
+          WHERE extractor_id = ?1 AND environment IS NOT NULL
+          ORDER BY environment",
+    )?;
+    let rows = stmt.query_map([extractor_id], |row| row.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
 /// One search result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchHit {

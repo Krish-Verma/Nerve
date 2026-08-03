@@ -61,6 +61,102 @@ fn import(root: &Path, artifact: &str) -> nerve_index::TraceOutcome {
     nerve_index::ingest_trace(root, Path::new(artifact)).unwrap()
 }
 
+/// The placeholders `fixtures/trace-hostile` declares, each expanded from the bound it attacks.
+///
+/// Deriving the payload from the constant is the whole point: tightening a bound cannot leave its own
+/// attack testing nothing, because the attack is one byte past whatever the bound currently says.
+const HOSTILE_TOKENS: [(&str, usize); 3] = [
+    // A whole line of padding, so the artifact exceeds the ceiling however small the rest of it is.
+    (
+        "__PAD_ARTIFACT__",
+        nerve_index::trace::MAX_ARTIFACT_BYTES + 1,
+    ),
+    // Inside a JSON string on one record line, so that line alone exceeds the record ceiling.
+    ("__PAD_RECORD__", nerve_index::trace::MAX_RECORD_BYTES + 1),
+    // Inside `test_id`, so the *field* exceeds its bound while the line stays well inside the record
+    // bound — otherwise this would test `record-too-large` a second time and `string-too-long` never.
+    ("__PAD_STRING__", nerve_index::trace::MAX_STRING_BYTES + 1),
+];
+
+/// Bytes that are not valid UTF-8 in any position.
+const INVALID_UTF8: [u8; 3] = [0xff, 0xfe, 0x80];
+
+fn replace_bytes(haystack: &[u8], needle: &[u8], replacement: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(haystack.len());
+    let mut cursor = 0;
+    while cursor < haystack.len() {
+        if haystack[cursor..].starts_with(needle) {
+            out.extend_from_slice(replacement);
+            cursor += needle.len();
+        } else {
+            out.push(haystack[cursor]);
+            cursor += 1;
+        }
+    }
+    out
+}
+
+/// Copy a hostile artifact into `root`, expanding every placeholder it carries.
+///
+/// **The mechanism this implements is one `fixtures/trace-hostile/README.md` already claimed existed.**
+/// It did not. Nothing in the crate expanded a token — `grep` for any of the four across `crates/`
+/// found zero hits — and the hostile artifacts were `fs::copy`d verbatim, so `__PAD_STRING__` reached
+/// the parser as fourteen ASCII bytes and `__INVALID_UTF8__` as perfectly valid UTF-8. Four attacks
+/// tested nothing while reading, in the fixture table, as though each tested the bound in its name.
+///
+/// Measured before this fix, which is how the scale of it was established:
+///
+/// | artifact | README requires | actually produced |
+/// |---|---|---|
+/// | `oversized-file` | `artifact-too-large`, zero edges | `malformed-json`, **1 observation written** |
+/// | `oversized-record` | `record-too-large` | `record-unknown-key`, from its own padding key |
+/// | `oversized-string` | `string-too-long` | **nothing refused, 2 observations** |
+/// | `malformed-utf8` | `invalid-utf8-line` | **nothing refused, 2 observations** |
+///
+/// The same defect class as the Slice 10a lambda test, which passed because the walker never visited
+/// the node the fixture existed to exercise, and as the two vacuous T7 tests in Slice 8b. A test that
+/// cannot fail is worse than a missing one: it reports a guarantee nobody is keeping.
+///
+/// Substitution is on **bytes**. `__INVALID_UTF8__` expands to bytes that are not UTF-8, so a
+/// `String` round-trip could not carry it — which is also why the token exists instead of the payload
+/// being committed (`CLAUDE.md` §9, and a file that is not text cannot be reviewed as text).
+fn stage_hostile(root: &Path, name: &str) {
+    let source = common::named_fixture_root("trace-hostile").join(name);
+    let mut bytes = std::fs::read(&source)
+        .unwrap_or_else(|err| panic!("{} unreadable: {err}", source.display()));
+
+    for (token, width) in HOSTILE_TOKENS {
+        bytes = replace_bytes(&bytes, token.as_bytes(), &vec![b'x'; width]);
+    }
+    bytes = replace_bytes(&bytes, b"__INVALID_UTF8__", &INVALID_UTF8);
+
+    // The guard that keeps this honest. A token added to a fixture without being added above would
+    // otherwise silently disarm that fixture, which is exactly the failure being repaired. Matching
+    // on *prefixes* is deliberate: a token this function has never heard of still trips it.
+    for token in ["__PAD_", "__INVALID_", "__CONTENT_MERKLE__"] {
+        assert!(
+            !bytes.windows(token.len()).any(|w| w == token.as_bytes()),
+            "{name} still contains the placeholder {token} after staging; an unexpanded token means \
+             this artifact is attacking nothing"
+        );
+    }
+
+    std::fs::write(root.join(name), bytes).unwrap();
+}
+
+/// Every hostile artifact, sorted, so a new one is picked up without editing a list.
+fn hostile_artifacts() -> Vec<String> {
+    let dir = common::named_fixture_root("trace-hostile");
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .expect("fixtures/trace-hostile must exist")
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+        .map(|path| path.file_name().unwrap().to_str().unwrap().to_string())
+        .collect();
+    names.sort();
+    names
+}
+
 /// Every `(caller name, callee name)` pair `test-trace` asserted.
 fn observed_edges(conn: &nerve_store::Connection) -> Vec<(String, String)> {
     let mut statement = conn
@@ -424,13 +520,7 @@ fn every_trace_observation_is_test_call_trace_and_resolved() {
 /// printed so a change in it is visible in the log rather than discovered later.
 #[test]
 fn no_hostile_artifact_contributes_evidence_from_a_hostile_record() {
-    let hostile_dir = common::named_fixture_root("trace-hostile");
-    let mut artifacts: Vec<std::path::PathBuf> = std::fs::read_dir(&hostile_dir)
-        .expect("fixtures/trace-hostile must exist")
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
-        .collect();
-    artifacts.sort();
+    let artifacts = hostile_artifacts();
     assert!(
         artifacts.len() >= 12,
         "expected the full hostile set, found {}",
@@ -439,12 +529,11 @@ fn no_hostile_artifact_contributes_evidence_from_a_hostile_record() {
 
     let mut classification: BTreeMap<String, String> = BTreeMap::new();
 
-    for artifact in &artifacts {
+    for name in &artifacts {
         let (_dir, root, _unused) = indexed("bound.jsonl");
-        let name = artifact.file_name().unwrap().to_str().unwrap().to_string();
-        std::fs::copy(artifact, root.join(&name)).unwrap();
+        stage_hostile(&root, name);
 
-        let verdict = match nerve_index::ingest_trace(&root, Path::new(&name)) {
+        let verdict = match nerve_index::ingest_trace(&root, Path::new(name)) {
             Err(_) => "refused whole, as an error".to_string(),
             Ok(outcome) => format!(
                 "records {} · accepted {} · observations {} · refusals {}",
@@ -454,7 +543,7 @@ fn no_hostile_artifact_contributes_evidence_from_a_hostile_record() {
                 outcome.refused_total()
             ),
         };
-        classification.insert(name.clone(), verdict);
+        classification.insert(name.to_string(), verdict);
 
         // The schema survives every one of them. This is what a SQL-injection string would break and
         // what a partial commit would leave inconsistent.
@@ -511,8 +600,7 @@ fn hostile_artifact_text_is_inert_and_bounded() {
         "prompt-injection.jsonl",
     ] {
         let (_dir, root, _unused) = indexed("bound.jsonl");
-        let source = common::named_fixture_root("trace-hostile").join(name);
-        std::fs::copy(&source, root.join(name)).unwrap();
+        stage_hostile(&root, name);
 
         let rendered = match nerve_index::ingest_trace(&root, Path::new(name)) {
             Err(err) => err.to_string(),
@@ -559,8 +647,7 @@ fn traversal_inside_an_artifact_is_refused_in_every_spelling() {
         "traversal-absolute.jsonl",
     ] {
         let (_dir, root, _unused) = indexed("bound.jsonl");
-        let source = common::named_fixture_root("trace-hostile").join(name);
-        std::fs::copy(&source, root.join(name)).unwrap();
+        stage_hostile(&root, name);
 
         let result = nerve_index::ingest_trace(&root, Path::new(name));
         match result {
@@ -577,43 +664,202 @@ fn traversal_inside_an_artifact_is_refused_in_every_spelling() {
     }
 }
 
-/// Every refusal form the ingestion can emit has a producing case in the fixtures.
+/// A replayed `run_id` is reported, and **overwrites nothing**.
 ///
-/// The Slice 10a lesson: a tally member with no producer is an untested member of the vocabulary,
-/// and a `decorator-form` count was removed in that slice for exactly this reason.
+/// The fixture table makes two claims about `duplicate-run-id.jsonl` and only the first had a test.
+/// The second is the one an attacker would care about: the artifact replays `run-bound-1` with
+/// `count: 9999` on a *different* edge, and what it must not achieve is displacing what
+/// `run-bound-1` already means.
+///
+/// Both halves are asserted, because either alone is satisfiable the wrong way — reporting the
+/// conflict while clobbering the evidence, or preserving the evidence while saying nothing. Plan §7
+/// requires import-and-report rather than refusal precisely so that a *corrected* artifact with a
+/// repeated id is not thrown away; that choice is only safe if the earlier evidence survives it.
 #[test]
-fn every_refusal_form_is_produced_by_some_fixture() {
-    let mut produced: BTreeMap<String, usize> = BTreeMap::new();
+fn a_replayed_run_id_is_reported_and_overwrites_nothing() {
+    let (_dir, root, bound) = indexed("bound.jsonl");
+    let first = import(&root, &bound);
+    assert_eq!(
+        first.refused_count("run-id-conflict"),
+        0,
+        "a first import collides with nothing"
+    );
 
+    // Every trace observation exactly as the legitimate import left it.
+    let snapshot = |conn: &nerve_store::Connection| -> Vec<(String, String, i64, String, String)> {
+        let mut statement = conn
+            .prepare(
+                "SELECT assertion_id, file_path, start_line, environment, details
+                   FROM observation
+                  WHERE extractor_id = ?1
+                  ORDER BY assertion_id, file_path, start_line",
+            )
+            .unwrap();
+        let rows = statement
+            .query_map([nerve_index::trace::EXTRACTOR_ID], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .unwrap();
+        rows.map(|row| row.unwrap()).collect()
+    };
+
+    let before = snapshot(&open_db(&root));
+    assert!(
+        !before.is_empty(),
+        "no trace evidence to protect, so every assertion below would pass vacuously"
+    );
+
+    stage_hostile(&root, "duplicate-run-id.jsonl");
+    let replay = import(&root, "duplicate-run-id.jsonl");
+
+    // 1. Reported. Once — the collision is one fact about one header, not one per overlapping site.
+    assert_eq!(
+        replay.refused_count("run-id-conflict"),
+        1,
+        "the replay must be reported exactly once; got {:?}",
+        replay.refused
+    );
+
+    // 2. Nothing displaced. Every row the legitimate import wrote is still there, byte for byte,
+    //    including its `count`, which the replay asserts as 9999.
+    let after = snapshot(&open_db(&root));
+    for row in &before {
+        assert!(
+            after.contains(row),
+            "the replay displaced {}:{} — a repeated run id must add, never replace",
+            row.1,
+            row.2
+        );
+    }
+    // 3. The replay's own claim reached **only its own edge**.
+    //
+    //    This started as "no row anywhere contains 9999" and failed, correctly. The replay names a
+    //    *different* edge — `test_parse.py:8 → parse.py:24` — and plan §7 says it imports, so a row
+    //    carrying its count is the honest record of a claim it actually made. Forbidding the number
+    //    outright would have been the fifth over-assertion in this slice: banning the evidence
+    //    instead of bounding where it may land. What is worth asserting is the boundary.
+    let owned: BTreeMap<(String, String, i64), ()> = before
+        .iter()
+        .map(|row| ((row.0.clone(), row.1.clone(), row.2), ()))
+        .collect();
+    for row in &after {
+        if row.4.contains("9999") {
+            assert!(
+                !owned.contains_key(&(row.0.clone(), row.1.clone(), row.2)),
+                "the replay's asserted count reached {}:{}, a site the legitimate run already owned",
+                row.1,
+                row.2
+            );
+        }
+    }
+    assert!(
+        after.len() > before.len(),
+        "the replay produced no evidence of its own, so it was refused rather than imported — plan \
+         §7 requires import-and-report, because refusing would discard a corrected artifact"
+    );
+}
+
+/// Each hostile artifact produces **the** refusal its fixture table declares.
+///
+/// This replaces an aggregate: *at least six distinct forms across the whole set*. That threshold is
+/// how four disarmed artifacts went unnoticed — nine working attacks were more than enough to satisfy
+/// it, so the four whose placeholders were never expanded contributed nothing and cost nothing. An
+/// aggregate over a corpus cannot tell "every case works" from "enough cases work", and that
+/// difference is the entire value of a hostile corpus.
+///
+/// Per-artifact, and in **both** directions:
+///
+/// - an artifact declared hostile must produce its declared form, so a guard that stops firing fails
+///   here instead of being absorbed by its neighbours;
+/// - an artifact declared inert must produce **no** refusal, because refusing it would be its own
+///   defect. `fts5-syntax`, `prompt-injection` and `sql-injection` carry text that is dangerous only
+///   if something interprets it, and the correct answer is that nothing does. Refusing a legal
+///   `run_id` for containing `NEAR(` would invent a rule the format does not have, and T7's claim
+///   about untrusted content is inertness rather than rejection. `state-substitution` is inert here
+///   too: its answer is a **binding** of `stale`, asserted by
+///   [`repository_state_binding_has_three_distinct_values`], and a refusal would be the wrong answer.
+///
+/// Scope, so this is not read as more than it is: the fourteen parser forms in `trace::form::ALL` are
+/// each gated by a unit test in `trace_tests.rs`. This gates the **end-to-end** path — artifact on
+/// disk, through `ingest_trace`, to a counted refusal — for the forms a committed fixture can reach.
+#[test]
+fn each_hostile_artifact_produces_its_declared_refusal() {
+    // `fixtures/trace-hostile/README.md`'s table, as an assertion. `None` means inert: read,
+    // understood, and correctly not refused.
+    let declared: BTreeMap<&str, Option<&str>> = BTreeMap::from([
+        ("cross-repository.jsonl", Some("other-repository")),
+        ("deep-nesting.jsonl", Some("nesting-too-deep")),
+        ("duplicate-run-id.jsonl", Some("run-id-conflict")),
+        ("fts5-syntax.jsonl", None),
+        ("header-unknown-key.jsonl", Some("header-unknown-key")),
+        ("malformed-utf8.jsonl", Some("invalid-utf8-line")),
+        ("oversized-file.jsonl", Some("artifact-too-large")),
+        ("oversized-record.jsonl", Some("record-too-large")),
+        ("oversized-string.jsonl", Some("string-too-long")),
+        ("prompt-injection.jsonl", None),
+        ("sql-injection.jsonl", None),
+        ("state-substitution.jsonl", None),
+        ("traversal-absolute.jsonl", Some("path-refused")),
+        ("traversal-backslash.jsonl", Some("path-refused")),
+        ("traversal-dotdot.jsonl", Some("path-refused")),
+    ]);
+
+    let artifacts = hostile_artifacts();
+    assert_eq!(
+        artifacts.len(),
+        declared.len(),
+        "the hostile set on disk and this table have drifted apart: {artifacts:?} versus {:?}. A \
+         fixture with no row here would be imported and never checked.",
+        declared.keys().collect::<Vec<_>>()
+    );
+
+    let mut produced: BTreeMap<String, usize> = BTreeMap::new();
+    for name in &artifacts {
+        let expected = *declared
+            .get(name.as_str())
+            .unwrap_or_else(|| panic!("{name} has no row in the fixture table"));
+
+        let (_dir, root, bound) = indexed("bound.jsonl");
+        // Every attack arrives at a repository that **already holds legitimate trace evidence**, which
+        // is both the realistic case and the harder one. It is also the only setup under which
+        // `duplicate-run-id` means anything: it replays `run-bound-1` from `bound.jsonl`, so against an
+        // empty graph there is no identity to collide with and the attack is unarmed — which is what
+        // the earlier aggregate test was measuring without noticing.
+        import(&root, &bound);
+        stage_hostile(&root, name);
+        let outcome = nerve_index::ingest_trace(&root, Path::new(name))
+            .unwrap_or_else(|err| panic!("{name}: ingestion errored rather than refusing: {err}"));
+
+        match expected {
+            Some(form) => assert!(
+                outcome.refused_count(form) > 0,
+                "{name} must produce `{form}`; it produced {:?}. Either the guard stopped firing or \
+                 the fixture row claims an attack this artifact is not making.",
+                outcome.refused,
+            ),
+            None => assert!(
+                outcome.refused.is_empty(),
+                "{name} is inert by design and must produce no refusal; it produced {:?}. Refusing \
+                 inert-but-alarming text would reject legal input for looking dangerous.",
+                outcome.refused,
+            ),
+        }
+        for (form, count) in outcome.refused {
+            *produced.entry(form).or_insert(0) += count;
+        }
+    }
+
+    // A well-formed import's own counters join the tally, so the picture is not only the attacks.
     let (_dir, root, artifact) = indexed("bound.jsonl");
     for (form, count) in import(&root, &artifact).refused {
         *produced.entry(form).or_insert(0) += count;
     }
-
-    let hostile_dir = common::named_fixture_root("trace-hostile");
-    let mut artifacts: Vec<std::path::PathBuf> = std::fs::read_dir(&hostile_dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
-        .collect();
-    artifacts.sort();
-    for hostile in &artifacts {
-        let (_dir, root, _unused) = indexed("bound.jsonl");
-        let name = hostile.file_name().unwrap().to_str().unwrap().to_string();
-        std::fs::copy(hostile, root.join(&name)).unwrap();
-        if let Ok(outcome) = nerve_index::ingest_trace(&root, Path::new(&name)) {
-            for (form, count) in outcome.refused {
-                *produced.entry(form).or_insert(0) += count;
-            }
-        }
-    }
-
-    assert!(
-        produced.len() >= 6,
-        "only {} refusal form(s) were produced across every fixture: {produced:?}. A form no \
-         fixture reaches is untested.",
-        produced.len()
-    );
     println!("refusal forms produced across the fixture set: {produced:#?}");
 }
 

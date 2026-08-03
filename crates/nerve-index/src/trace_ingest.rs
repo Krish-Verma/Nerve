@@ -141,8 +141,18 @@ pub mod form {
     /// and that is exactly what does not happen: both runs survive in `environment.runs[]`, sharing a
     /// `run_id`, which is what makes the collision visible.
     ///
-    /// Detected where it could do harm: on a call site both artifacts describe. A replayed `run_id`
-    /// overlapping no previously observed site is not detected, and cannot overwrite anything either.
+    /// Detected **repository-wide**, and counted once per artifact rather than once per site.
+    ///
+    /// It was site-scoped first, on the argument that a replay overlapping no earlier site "cannot
+    /// overwrite anything either". That argument was wrong about where the harm is, and
+    /// `fixtures/trace-hostile/duplicate-run-id.jsonl` is the counter-example: it replays a `run_id`
+    /// on a *different* edge, so no stored observation ever saw it and nothing was reported. The
+    /// damage is not overwriting — it is that `run_id` stops naming one run. A reader asking what
+    /// `run-bound-1` observed then gets the union of two runs, at every site either artifact touched,
+    /// and is told nothing. Scope follows the fact: run identity is repository-wide, so the check is.
+    ///
+    /// Once per artifact because the conflict is a property of the header, which is also why it is
+    /// reported even when no record survives resolution.
     pub const RUN_ID_CONFLICT: &str = "run-id-conflict";
 
     /// Every tag in this module, in declaration order.
@@ -589,6 +599,14 @@ pub fn ingest_trace(root: &Path, artifact: &Path) -> Result<TraceOutcome> {
     outcome.partial_reason = header.partial_reason.clone();
     outcome.declared_limitations = header.producer_limitations.clone();
 
+    // Run identity, checked against the whole repository before anything is written. Here rather than
+    // in the write loop because the fact is about the header: an artifact replaying a `run_id` on an
+    // edge nothing else mentions still costs the reader the meaning of that `run_id`, and an artifact
+    // whose every record fails to resolve has still made the claim.
+    if run_id_already_recorded(&conn, &header.run_id, &artifact_content_hash)? {
+        count(&mut counters, form::RUN_ID_CONFLICT);
+    }
+
     // ---- resolve every frame to a symbol ---------------------------------------------------
     let prober = RepositoryProber::new(&root)?;
     let mut files: BTreeMap<String, FileState> = BTreeMap::new();
@@ -659,7 +677,7 @@ pub fn ingest_trace(root: &Path, artifact: &Path) -> Result<TraceOutcome> {
             &artifact_content_hash,
             evidence,
         );
-        let runs = merge_runs(stored_environment.as_deref(), this_run, &mut counters);
+        let runs = merge_runs(stored_environment.as_deref(), this_run);
         let environment = environment_json(&runs);
         let details = details_json(site, evidence, &runs);
 
@@ -887,16 +905,55 @@ fn run_entry(
     })
 }
 
+/// Whether this `run_id` is already recorded by an artifact with **different bytes**.
+///
+/// The pair `(run_id, artifact_content_hash)` is what separates the two cases the plan distinguishes:
+/// the same id from the same bytes is a **re-import**, which must stay a silent no-op, and the same id
+/// from different bytes is a **conflict**, which must be reported. Comparing ids alone would report
+/// every re-import as a collision with itself.
+///
+/// Reads `environment.runs[]`, whose shape this module owns — [`run_entry`] writes it and
+/// [`environment_json`] assembles it. Anything unparseable is skipped rather than guessed at: a row
+/// this module cannot read is not evidence that an id is free.
+fn run_id_already_recorded(
+    conn: &nerve_store::Connection,
+    run_id: &str,
+    artifact_content_hash: &str,
+) -> Result<bool> {
+    for text in nerve_store::environments_for_extractor(conn, EXTRACTOR_ID)? {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let Some(runs) = value.get("runs").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for run in runs {
+            let recorded_id = run.get("run_id").and_then(serde_json::Value::as_str);
+            let recorded_hash = run
+                .get("artifact_content_hash")
+                .and_then(serde_json::Value::as_str);
+            if recorded_id == Some(run_id) && recorded_hash != Some(artifact_content_hash) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// Merge one run into whatever `environment.runs[]` already holds.
 ///
 /// Keyed on `(run_id, artifact_content_hash)`, which is what makes a re-import of the same artifact a
 /// no-op and a *corrected* artifact with a repeated `run_id` an addition rather than a replacement.
-/// The repeat is counted under [`form::RUN_ID_CONFLICT`] and both entries survive, so the collision
-/// is visible in the evidence instead of resolved behind the reader's back.
+/// Both entries survive, so the collision is visible in the evidence instead of resolved behind the
+/// reader's back.
+///
+/// **Counts nothing.** [`form::RUN_ID_CONFLICT`] is counted once per artifact by
+/// [`run_id_already_recorded`], which sees the whole repository; counting here as well would report
+/// the same collision once per overlapping site, making the number a function of how much two runs
+/// happened to overlap rather than of the fact that they collided.
 fn merge_runs(
     stored_environment: Option<&str>,
     this_run: serde_json::Value,
-    counters: &mut BTreeMap<String, usize>,
 ) -> Vec<serde_json::Value> {
     let stored: Vec<serde_json::Value> = stored_environment
         .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
@@ -931,10 +988,9 @@ fn merge_runs(
             merged.push(this_run.clone());
             continue;
         }
-        if existing.0 == this_identity.0 {
-            // The same run id from different bytes. Counted, and the earlier entry is **kept**.
-            count(counters, form::RUN_ID_CONFLICT);
-        }
+        // A same-id-different-bytes entry reaches here and is **kept**, unchanged. The collision is
+        // counted repository-wide before any of this runs; keeping the entry is what makes both runs
+        // readable afterwards.
         merged.push(run);
     }
     if !replaced {
@@ -1163,33 +1219,20 @@ mod tests {
 
     #[test]
     fn re_merging_the_same_run_restates_it_rather_than_duplicating_it() {
-        let mut counters = BTreeMap::new();
-        let first = environment_json(&merge_runs(
-            None,
-            run("r1", "h1", "complete", "bound"),
-            &mut counters,
-        ));
+        let first = environment_json(&merge_runs(None, run("r1", "h1", "complete", "bound")));
         let again = environment_json(&merge_runs(
             Some(&first),
             run("r1", "h1", "complete", "bound"),
-            &mut counters,
         ));
         assert_eq!(first, again, "a re-import must be byte-identical");
-        assert_eq!(counters.get(form::RUN_ID_CONFLICT), None);
     }
 
     #[test]
     fn a_second_run_is_added_and_the_derived_state_is_the_weakest() {
-        let mut counters = BTreeMap::new();
-        let first = environment_json(&merge_runs(
-            None,
-            run("r1", "h1", "complete", "bound"),
-            &mut counters,
-        ));
+        let first = environment_json(&merge_runs(None, run("r1", "h1", "complete", "bound")));
         let both = environment_json(&merge_runs(
             Some(&first),
             run("r2", "h2", "partial", "bound"),
-            &mut counters,
         ));
         let value: serde_json::Value = serde_json::from_str(&both).unwrap();
         assert_eq!(value["runs"].as_array().unwrap().len(), 2);
@@ -1198,25 +1241,20 @@ mod tests {
             "one unfinished contributor must make the row say so"
         );
         assert_eq!(value["repository_binding"], "bound");
-        assert_eq!(counters.get(form::RUN_ID_CONFLICT), None);
     }
 
-    /// A replayed run id keeps both entries and is counted. Nothing is overwritten.
+    /// A replayed run id keeps **both** entries. Nothing is overwritten, and nothing is counted here.
+    ///
+    /// The count moved out of `merge_runs` when [`form::RUN_ID_CONFLICT`] became repository-wide: this
+    /// function sees one call site, and counting per site made the number a function of how much two
+    /// runs happened to overlap. What it still owns — and what this asserts — is that the earlier
+    /// entry survives and cannot have its binding upgraded by the replay. The count itself is
+    /// asserted end to end by `a_replayed_run_id_is_reported_and_overwrites_nothing`.
     #[test]
-    fn a_repeated_run_id_from_different_bytes_is_counted_and_both_survive() {
-        let mut counters = BTreeMap::new();
-        let first = environment_json(&merge_runs(
-            None,
-            run("r1", "h1", "complete", "bound"),
-            &mut counters,
-        ));
-        let conflicted = merge_runs(
-            Some(&first),
-            run("r1", "h2", "complete", "stale"),
-            &mut counters,
-        );
+    fn a_repeated_run_id_from_different_bytes_keeps_both_and_cannot_upgrade_the_binding() {
+        let first = environment_json(&merge_runs(None, run("r1", "h1", "complete", "bound")));
+        let conflicted = merge_runs(Some(&first), run("r1", "h2", "complete", "stale"));
         assert_eq!(conflicted.len(), 2, "the earlier run must be kept");
-        assert_eq!(counters.get(form::RUN_ID_CONFLICT), Some(&1));
         let value: serde_json::Value =
             serde_json::from_str(&environment_json(&conflicted)).unwrap();
         assert_eq!(
@@ -1228,22 +1266,15 @@ mod tests {
     /// The merge is order-independent, so two shards of one run give one answer either way round.
     #[test]
     fn merging_is_independent_of_the_order_artifacts_are_imported_in() {
-        let mut counters = BTreeMap::new();
         let a = run("r1", "h1", "complete", "bound");
         let b = run("r2", "h2", "complete", "bound");
         let forwards = environment_json(&merge_runs(
-            Some(&environment_json(&merge_runs(
-                None,
-                a.clone(),
-                &mut counters,
-            ))),
+            Some(&environment_json(&merge_runs(None, a.clone()))),
             b.clone(),
-            &mut counters,
         ));
         let backwards = environment_json(&merge_runs(
-            Some(&environment_json(&merge_runs(None, b, &mut counters))),
+            Some(&environment_json(&merge_runs(None, b))),
             a,
-            &mut counters,
         ));
         assert_eq!(forwards, backwards);
     }
@@ -1251,9 +1282,8 @@ mod tests {
     /// Corrupt or absent stored evidence never loses the run being imported.
     #[test]
     fn an_unreadable_stored_environment_does_not_discard_the_new_run() {
-        let mut counters = BTreeMap::new();
         for stored in [None, Some("not json"), Some("{}"), Some(r#"{"runs":7}"#)] {
-            let merged = merge_runs(stored, run("r1", "h1", "complete", "bound"), &mut counters);
+            let merged = merge_runs(stored, run("r1", "h1", "complete", "bound"));
             assert_eq!(merged.len(), 1);
             assert_eq!(merged[0]["run_id"], "r1");
         }

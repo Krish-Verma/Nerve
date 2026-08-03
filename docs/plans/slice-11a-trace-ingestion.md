@@ -223,9 +223,33 @@ reuses that path rather than adding a second one.
 | import the same artifact twice | **no duplicate observations.** `idx_observation_identity` already keys on `(assertion, state, extractor_id, version, source_type, file, lines)`; the import is idempotent by construction, as a re-index is |
 | two shards of one run | both import; observations accumulate on the same assertions |
 | two runs of the same test | both import; `run_id` distinguishes them in `environment` |
-| a corrected artifact with the same `run_id` | **imported, and the conflict is reported.** Nothing is silently overwritten |
+| a corrected artifact with the same `run_id` | **imported, and the conflict is reported.** Nothing is silently overwritten. Detection is **repository-wide and counted once per artifact** — see below |
 | re-index after import | trace observations are withdrawn by repository state like any other |
 | a failed import | **nothing commits.** One transaction, and a test asserts the database is byte-identical after a rejected artifact |
+
+### Where a replayed `run_id` is detected, corrected in 11a-i
+
+11a shipped this site-scoped: `merge_runs` compared the run about to be written against the runs
+already stored **on that call site**. `fixtures/trace-hostile/duplicate-run-id.jsonl` walks straight
+past that by replaying the id on a *different* edge — no stored observation ever sees it, so nothing
+was reported and the fixture's declared refusal never fired.
+
+The scope was wrong because the harm was misplaced. The original argument was that a replay
+overlapping no earlier site "cannot overwrite anything either", which is true and beside the point:
+the damage is not overwriting, it is that `run_id` **stops naming one run**. A reader asking what
+`run-bound-1` observed then receives the union of two runs, at every site either artifact touched, and
+is told nothing about it.
+
+Run identity is a property of the repository, so the check is one too:
+`nerve_store::environments_for_extractor` reads every environment this extractor has written and the
+import compares `(run_id, artifact_content_hash)` — same id and same bytes is a **re-import**, which
+stays a silent no-op; same id and different bytes is a **conflict**. Counted **once per artifact**,
+because the collision is one fact about one header, and reported even when no record survives
+resolution. `merge_runs` still keeps both entries and now counts nothing.
+
+Measured on the CLI: the replay reports `run-id-conflict 1` and exits **3**, the six legitimate edges
+survive unchanged, and the collision is visible in the evidence itself — one `run_id` against two
+artifact hashes, both artifact paths named.
 
 ## 8. `TEST_OBSERVED_CALL` is not in `impact::DEFAULT_RELATIONS`
 

@@ -8,22 +8,22 @@
 
 | | |
 |---|---|
-| **Last slice commit** | `0aa5942` — `feat: Slice 11a — trace ingestion`. **Slice 11a is NOT complete: three measured gaps are recorded below.** `git log --oneline -3` is authoritative. |
+| **Last slice commit** | **Slice 11a-i** — the hostile-fixture gaps closed. `git log --oneline -3` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 10b** — Express routes. **Row 10 complete.** Slice 11a is landed and green but has an open gap list. |
-| **Next action** | **Close the three Slice 11a gaps** (below), then 11b (the Python tracer), then 12a/12b, 13, 14, validation, acceptance, audit. |
+| **Last completed slice** | **Slice 11a + 11a-i** — trace ingestion, with every hostile artifact's declared refusal now asserted per artifact. **Row 11 is not complete: 11b, the reference Python tracer, is not built.** |
+| **Next action** | **Slice 11b** — the reference Python tracer (`tracers/python/nerve_trace/`, `sys.monitoring` with a `sys.settrace` fallback), a real pytest end-to-end run, and the criterion that no argument or return value is *capturable*. Then 12a/12b, 13, 14, validation, acceptance, audit. |
 | **Roadmap status** | **INCOMPLETE.** 11a landed with gaps; 11b, 12–14, real-world validation, the acceptance package and the final audit are not done. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
 
-## Verification state at the Slice 11a commit
+## Verification state at the Slice 11a-i commit
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace --no-fail-fast                   → 1168 passed, 0 failed, 2 ignored
+cargo test --workspace --no-fail-fast                   → 1169 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
 ```
 
@@ -304,25 +304,45 @@ from a false positive. Both `negative.py` and `negative.ts` assert zero of each.
 `0aa5942`. `nerve trace import` reads a versioned NDJSON artifact; Nerve never runs the tests.
 `no_subprocess.rs` and `no_network.rs` are **byte-untouched**, which is the whole point.
 
-### The three gaps. Fix these before calling row 11 done
+### The gaps: closed in 11a-i, and there were five, not three
 
-`fixtures/trace-hostile/README.md` declares an expected refusal form for all 14 hostile artifacts.
-**Three do not produce one**, verified by `no_hostile_artifact_contributes_evidence_from_a_hostile_record`:
+`fixtures/trace-hostile/README.md` declared an expected refusal form for every hostile artifact. The
+continuation state recorded three that produced none. Diagnosis found **five**, and one shared root
+cause behind four of them: **the token-expansion mechanism the README documents did not exist.**
+`grep` for `__PAD_ARTIFACT__`, `__PAD_RECORD__`, `__PAD_STRING__` or `__INVALID_UTF8__` across
+`crates/` returned nothing; the artifacts were `fs::copy`d verbatim, so `__PAD_STRING__` reached the
+parser as fourteen ASCII bytes and `__INVALID_UTF8__` as valid UTF-8.
 
-| artifact | README claims | actual | why |
+| artifact | README claims | was | now |
 |---|---|---|---|
-| `duplicate-run-id.jsonl` | `run-id-conflict` counted | **no refusal** | `RUN_ID_CONFLICT` is detected **per call site** — `merge_runs` only compares runs already stored on the observation it is about to restate — and the artifact replays a run id on a *different* edge, so no stored observation ever sees it. A repository-wide check needs a pre-write query for the run id. |
-| `malformed-utf8.jsonl` | `invalid-utf8-line` | **no refusal** | the invalid bytes do not reach a counted refusal. Not diagnosed further. |
-| `oversized-string.jsonl` | `string-too-long` | **no refusal** | not diagnosed further. |
+| `oversized-file.jsonl` | `artifact-too-large`, zero edges | `malformed-json`, **1 observation written** | `artifact-too-large` |
+| `oversized-record.jsonl` | `record-too-large` | `record-unknown-key`, from its own padding key | `record-too-large` |
+| `oversized-string.jsonl` | `string-too-long` | **nothing refused, 2 observations** | `string-too-long` |
+| `malformed-utf8.jsonl` | `invalid-utf8-line` | **nothing refused, 2 observations** | `invalid-utf8-line` |
+| `duplicate-run-id.jsonl` | `run-id-conflict` | **nothing refused** | `run-id-conflict` ×1, exit 3 |
 
-**`fts5-syntax.jsonl` and `prompt-injection.jsonl` also count no refusal, and that is correct** — they
-are **inert, not invalid**. FTS5 operators and instruction text are legal strings in a `run_id`;
-refusing them would refuse a legal artifact. `hostile_artifact_text_is_inert_and_bounded` carries
-their real assertion: schema intact, no control characters echoed, output bounded.
+The parser was never wrong about any of the four bounds — every one of the fourteen forms in
+`trace::form::ALL` has a unit test in `trace_tests.rs` and always passed. What was wrong was that no
+*fixture* reached them, so the end-to-end path was untested while reading as though it were tested.
 
-Also: `every_refusal_form_is_produced_by_some_fixture` passes on an **aggregate** threshold (≥6 forms
-across the whole set), which is why it did not catch the three above. **Tighten it to per-artifact**
-when fixing them — that weak threshold is the reason the gaps were found by a different test.
+**`run-id-conflict` was a real implementation defect**, and the scope was the error: detection compared
+only runs already stored on the call site about to be restated, and the artifact replays its id on a
+*different* edge. Now repository-wide via `nerve_store::environments_for_extractor`, counted **once per
+artifact** because the collision is one fact about one header. The harm was misplaced in the original
+reasoning: it is not overwriting — it is that `run_id` stops naming one run, so a reader asking what
+`run-bound-1` observed silently receives the union of two.
+
+**`fts5-syntax`, `prompt-injection`, `sql-injection` and `state-substitution` correctly count no
+refusal** — they are **inert, not invalid**. FTS5 operators and instruction text are legal in a
+`run_id`; refusing them would reject a legal artifact for looking dangerous, and T7's claim about
+untrusted content is inertness rather than rejection. This is now asserted *positively*: the
+per-artifact table requires them to produce **no** refusal, so a future over-eager guard fails.
+
+**Why a green suite hid all of this:** `every_refusal_form_is_produced_by_some_fixture` asserted an
+**aggregate** — ≥6 distinct forms across the whole set — which the nine working attacks satisfied on
+their own. Replaced by `each_hostile_artifact_produces_its_declared_refusal`, per artifact and
+bidirectional, plus a `stage_hostile` guard that **refuses to stage an artifact still containing an
+unexpanded token**, matching on prefixes so an unknown token also trips it.
 
 ### Corrections to the Slice 11 plan, all verified — do not relitigate
 

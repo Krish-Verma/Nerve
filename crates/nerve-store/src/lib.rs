@@ -56,11 +56,11 @@ pub use prune::{
     TouchedRows,
 };
 pub use query::{
-    entity_relation_counts, importers_of, indexed_content_hash, observations_for_assertions,
-    occurrences_of, path_is_indexed, repository, repository_state, search_entities, status,
-    symbol_spans_in_file, unresolved_entities, EntityRelationCounts, ExtractorRunSummary,
-    ObservationKey, ObservationPayload, OccurrenceRow, RepositoryInfo, SearchHit, StatusReport,
-    SymbolSpanRow, UnresolvedEntity,
+    entity_relation_counts, environments_for_extractor, importers_of, indexed_content_hash,
+    observations_for_assertions, occurrences_of, path_is_indexed, repository, repository_state,
+    search_entities, status, symbol_spans_in_file, unresolved_entities, EntityRelationCounts,
+    ExtractorRunSummary, ObservationKey, ObservationPayload, OccurrenceRow, RepositoryInfo,
+    SearchHit, StatusReport, SymbolSpanRow, UnresolvedEntity,
 };
 pub use schema::{migrate, schema_version, SCHEMA_VERSION};
 pub use select::{
