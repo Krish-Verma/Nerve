@@ -420,7 +420,9 @@ fn a_unique_name_resolves_and_a_shared_one_does_not() {
 fn an_exact_entity_id_wins_over_every_other_stage() {
     let conn = fixture();
     match resolve_selector(&conn, "A").unwrap() {
-        Selection::Resolved { entity, matched_by } => {
+        Selection::Resolved {
+            entity, matched_by, ..
+        } => {
             assert_eq!(entity.entity_id, "A");
             assert_eq!(matched_by.as_str(), "entity_id");
         }
@@ -432,7 +434,7 @@ fn an_exact_entity_id_wins_over_every_other_stage() {
 fn a_selector_matching_nothing_carries_suggestions() {
     let conn = fixture();
     match resolve_selector(&conn, "alp").unwrap() {
-        Selection::NotFound { suggestions } => {
+        Selection::NotFound { suggestions, .. } => {
             assert!(
                 suggestions.iter().any(|hit| hit.name == "alpha"),
                 "{suggestions:?}"
@@ -443,7 +445,7 @@ fn a_selector_matching_nothing_carries_suggestions() {
 
     // A typo in the last characters finds nothing by prefix, so the search steps back.
     match resolve_selector(&conn, "alphb").unwrap() {
-        Selection::NotFound { suggestions } => {
+        Selection::NotFound { suggestions, .. } => {
             assert!(
                 suggestions.iter().any(|hit| hit.name == "alpha"),
                 "{suggestions:?}"
@@ -454,7 +456,9 @@ fn a_selector_matching_nothing_carries_suggestions() {
 
     // Nothing remotely similar yields no suggestions rather than an arbitrary list.
     match resolve_selector(&conn, "zzzzznope").unwrap() {
-        Selection::NotFound { suggestions } => assert!(suggestions.is_empty(), "{suggestions:?}"),
+        Selection::NotFound { suggestions, .. } => {
+            assert!(suggestions.is_empty(), "{suggestions:?}")
+        }
         other => panic!("expected no match, got {other:?}"),
     }
 }

@@ -24,11 +24,11 @@
 //!   and `impact`'s unresolved account.
 
 use std::collections::BTreeMap;
-use std::path::{Component, Path};
 
 use serde_json::{json, Map, Value};
 
 use nerve_core::vocab::Relation;
+use nerve_store::SelectorShape;
 
 use crate::api::{self, ApiError};
 use crate::mcp::{echo, ToolAnswer, ToolFailure};
@@ -409,7 +409,15 @@ fn relations(arguments: &Map<String, Value>) -> std::result::Result<Vec<String>,
 /// reported as a refusal and never disguised as *missing*, and "the database happened not to
 /// contain it" would be exactly that disguise.
 ///
-/// The authoritative check is still `nerve-index`'s. Every path that reaches the filesystem
+/// The *decision* is [`nerve_store::selector_shape`]'s, not this file's. Until Slice 8b-i it was
+/// a private copy here, so `nerve why ../../etc/passwd` and `GET /api/why?subject=../../etc/passwd`
+/// answered "matches no indexed entity" — asserting a check neither surface had run. One helper,
+/// three surfaces; this function decides only what an MCP *argument* refusal looks like.
+///
+/// Control characters stay an MCP argument-hygiene check: they are about what may be put in a
+/// JSON-RPC argument, not about what a selector means.
+///
+/// The authoritative path check is still `nerve-index`'s. Every path that reaches the filesystem
 /// during this call is supplied by the database and resolved by `RepositoryProber`, which is what
 /// refuses an indexed file that has since been replaced by a symlink pointing out of the tree.
 fn validate_selector(key: &str, value: &str) -> std::result::Result<(), ToolFailure> {
@@ -419,22 +427,12 @@ fn validate_selector(key: &str, value: &str) -> std::result::Result<(), ToolFail
             json!({ "argument": key, "reason": "control_character" }),
         ));
     }
-    // A selector is `<path>`, `<path>#<qualified name>`, an entity id or a bare name. Only the
-    // part before `#` can be path-shaped.
-    let path_part = value.split('#').next().unwrap_or_default();
-    let candidate = Path::new(path_part);
-    let escapes = path_part.starts_with('/')
-        || path_part.starts_with('\\')
-        || candidate.is_absolute()
-        || !candidate
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)));
-    if escapes {
+    if let SelectorShape::Refused(reason) = nerve_store::selector_shape(value) {
         return Err(invalid(
-            "selector is refused: a path outside the repository root, or one containing `..`, is never resolved",
+            format!("selector is refused: {}", reason.statement()),
             json!({
                 "argument": key,
-                "reason": "path_refused",
+                "reason": reason.as_str(),
                 "selector": echo(value),
             }),
         ));
@@ -640,9 +638,14 @@ fn evidence_block(
 }
 
 /// The untrusted subtree: the repository block, the subject, the object and the assertions.
+///
+/// `selectors` joins them rather than sitting beside the bounds, because its `alternatives` are
+/// entities — repository names and repository paths — and T7's rule is about which subtree a
+/// string is in, not about how it got there.
 fn content_block(repository: &Value, answer: &Value, assertions: Vec<Value>) -> Value {
     json!({
         "repository": repository,
+        "selectors": answer.get("selectors").cloned().unwrap_or(Value::Null),
         "subject": answer.get("subject").cloned().unwrap_or(Value::Null),
         "object": answer.get("object").cloned().unwrap_or(Value::Null),
         "assertions": assertions,
@@ -666,6 +669,9 @@ fn failure(arguments: &Arguments, repository: &Value, err: ApiError) -> ToolFail
     let mut detail = err.detail;
     let candidates = cap_list(&mut detail, "candidates");
     let suggestions = cap_list(&mut detail, "suggestions");
+    // `excluded` is a repository-sized list like the other two — a qualifier can exclude every
+    // entity a stage matched — so it is capped by the same rule rather than left unbounded.
+    let excluded = cap_list(&mut detail, "excluded");
 
     let evidence = json!({
         "state": "refused",
@@ -674,6 +680,7 @@ fn failure(arguments: &Arguments, repository: &Value, err: ApiError) -> ToolFail
         "http_status": err.status,
         "candidates_total": candidates,
         "suggestions_total": suggestions,
+        "excluded_total": excluded,
         "candidate_limit": MAX_CANDIDATES,
     });
     let mut content = Map::new();
@@ -737,6 +744,12 @@ mod tests {
         assert_eq!(data["argument"], "sql");
     }
 
+    /// The refusal survives the move to the shared helper, argument shape and all.
+    ///
+    /// The decision is `nerve_store::selector_shape`'s — `select.rs` pins the shapes themselves,
+    /// including the ones a qualifier could otherwise hide (`file:/etc/passwd`). What is pinned
+    /// here is that this surface still turns that decision into a `-32602` naming the argument,
+    /// which is the Slice 8a contract a client depends on.
     #[test]
     fn traversal_and_absolute_paths_are_refused_not_sanitised() {
         for selector in [
@@ -747,6 +760,12 @@ mod tests {
             "src/../../../etc/passwd#Circle.area",
             "\\\\server\\share",
             "./../x",
+            "file:/etc/passwd",
+            "symbol:../../etc/passwd",
+            // Slice 8b-i corrections: on Unix `\` is not a separator, so these reached the store
+            // as ordinary names and came back as "matches no indexed entity".
+            "..\\..\\windows\\system32",
+            "a\\..\\b",
         ] {
             let err = parse(&arguments(&[("selector", json!(selector))]))
                 .err()
@@ -766,12 +785,32 @@ mod tests {
             "Circle.area",
             "meth_0123456789abcdef",
             "src/a.b.c/thing.ts",
+            "file:docs/architecture.md",
+            "adr:ADR-0001",
+            "symbol:parse",
+            // Slice 8b-i correction: a leading `.` is a legal relative path, not an escape.
+            // Refusing it told the caller their selector tried to leave the repository.
+            "./src/shapes.ts",
+            "./src/shapes.ts#Circle.area",
+            // A backslash with no `..` is a legal Unix filename, so it is resolved, not refused.
+            "a\\b.ts",
         ] {
             assert!(
                 parse(&arguments(&[("selector", json!(selector))])).is_ok(),
                 "{selector} must be accepted"
             );
         }
+    }
+
+    /// A malformed selector is not refused *here*.
+    ///
+    /// It reaches `resolve_selector`, which answers `Selection::Invalid`, which `api::resolve`
+    /// turns into a 400 and [`failure`] into the same `-32602` a bad argument always was. The
+    /// pre-check exists for the one refusal that must happen before the index is touched at all;
+    /// widening it would put a second copy of the qualifier vocabulary on this surface.
+    #[test]
+    fn a_malformed_qualifier_is_left_to_the_resolver() {
+        assert!(parse(&arguments(&[("selector", json!("banana:foo"))])).is_ok());
     }
 
     #[test]

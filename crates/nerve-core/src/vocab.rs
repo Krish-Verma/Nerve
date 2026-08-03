@@ -108,6 +108,55 @@ impl EntityKind {
             EntityKind::Function | EntityKind::Method | EntityKind::Class | EntityKind::Interface
         )
     }
+
+    /// How this kind is located by a repository-relative path, if it is at all.
+    ///
+    /// This is the vocabulary's own answer to *"which entities does `docs/architecture.md`
+    /// name?"*, and it is stated here rather than as a list in a SQL string because a kind added
+    /// to [`EntityKind::ALL`] must be classified before it can be addressed — the drift that
+    /// Slices 5d-iii and 7a-iii were corrective slices for.
+    ///
+    /// The two addressable roles differ in **where the path is stored**, which is why one
+    /// predicate cannot serve both:
+    ///
+    /// - [`PathRole::Content`] — `scope_path` *is* the path (`Module`, `Document`).
+    /// - [`PathRole::Container`] — the path is `scope_path` joined to `name` (`File`,
+    ///   `Directory`).
+    ///
+    /// Everything else is [`PathRole::None`], and each for a reason rather than by default: a
+    /// `Section`'s `scope_path` is the document that holds it, an `Unresolved`'s is the importer
+    /// that failed to resolve it, a `CoverageRun` is named by a report path and a content hash
+    /// rather than by a position in the tree, the symbol kinds are named by the symbol tuple, and
+    /// the `Repository` is the root every path is relative *to*.
+    pub fn path_role(self) -> PathRole {
+        match self {
+            EntityKind::Module | EntityKind::Document => PathRole::Content,
+            EntityKind::File | EntityKind::Directory => PathRole::Container,
+            EntityKind::Repository
+            | EntityKind::Function
+            | EntityKind::Method
+            | EntityKind::Class
+            | EntityKind::Interface
+            | EntityKind::Section
+            | EntityKind::Unresolved
+            | EntityKind::CoverageRun => PathRole::None,
+        }
+    }
+}
+
+/// Whether — and how — a repository-relative path names an entity of a given kind.
+///
+/// See [`EntityKind::path_role`]. The distinction between the two addressable roles is what lets
+/// a path selector resolve to the content at that path while still reporting the container as a
+/// second reading, rather than silently answering one of two questions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PathRole {
+    /// Not addressable by a repository path.
+    None,
+    /// The entity is the content at that path; `scope_path` holds the path itself.
+    Content,
+    /// The entity is the container at that path; the path is `scope_path` joined to `name`.
+    Container,
 }
 
 impl fmt::Display for EntityKind {
@@ -598,6 +647,61 @@ mod tests {
             4,
             "the symbol tuple names exactly four kinds"
         );
+    }
+
+    /// Every kind's path role, pinned one by one, for the same reason `is_symbol` is.
+    ///
+    /// [`EntityKind::path_role`] decides which entities a `<rel_path>` selector may return and
+    /// which SQL shape finds them, so a kind added to the vocabulary without a role would be
+    /// silently unaddressable — a default rather than a decision. Listing all twelve, and
+    /// checking the list is exhaustive over [`EntityKind::ALL`], makes a new kind fail here until
+    /// someone states where it lives.
+    #[test]
+    fn every_entity_kind_states_how_a_path_names_it() {
+        let pinned: [(EntityKind, PathRole); 12] = [
+            // `scope_path` is the path itself.
+            (EntityKind::Module, PathRole::Content),
+            (EntityKind::Document, PathRole::Content),
+            // The path is `scope_path` joined to `name`.
+            (EntityKind::File, PathRole::Container),
+            (EntityKind::Directory, PathRole::Container),
+            // Named by something other than a position in the tree.
+            (EntityKind::Repository, PathRole::None),
+            (EntityKind::Function, PathRole::None),
+            (EntityKind::Method, PathRole::None),
+            (EntityKind::Class, PathRole::None),
+            (EntityKind::Interface, PathRole::None),
+            (EntityKind::Section, PathRole::None),
+            (EntityKind::Unresolved, PathRole::None),
+            (EntityKind::CoverageRun, PathRole::None),
+        ];
+
+        for (kind, expected) in pinned {
+            assert_eq!(
+                kind.path_role(),
+                expected,
+                "{kind} is pinned against this list"
+            );
+        }
+
+        let mut listed: Vec<EntityKind> = pinned.iter().map(|(kind, _)| *kind).collect();
+        listed.sort_unstable();
+        let mut all = EntityKind::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a kind was added to the vocabulary without a path role above"
+        );
+
+        // A symbol is never addressed by a bare path: `src/app.ts` names the module or the file
+        // there, never a function inside it. That is what keeps stage 2 from competing with the
+        // `<rel_path>#<qualified_name>` stage.
+        for kind in EntityKind::ALL {
+            assert!(
+                !(kind.is_symbol() && kind.path_role() != PathRole::None),
+                "{kind} is both a symbol and path-addressable"
+            );
+        }
     }
 
     #[test]

@@ -62,7 +62,8 @@ pub use query::{
 };
 pub use schema::{migrate, schema_version, SCHEMA_VERSION};
 pub use select::{
-    entity_by_id, resolve_selector, EntityRef, Selection, SelectorKind, SUGGESTION_LIMIT,
+    entity_by_id, qualifiers, resolve_selector, selector_shape, EntityRef, InvalidSelector,
+    Qualifier, Selection, SelectorKind, SelectorRefusal, SelectorShape, SUGGESTION_LIMIT,
 };
 pub use write::{
     begin_extractor_run, finish_extractor_run, insert_identity_link, persist_batch,

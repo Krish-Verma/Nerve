@@ -67,6 +67,17 @@ channel. Refusals report **`refused`**, never disguised as "missing".
 **Status: ✅ implemented and verified by constructed attack** (file-level and parent-directory
 symlink escapes, both refused, zero content leaked).
 
+**Amended in Slice 8b-i — the "never disguised as missing" clause was not true of every surface.**
+A *selector* shaped like a traversal was refused by the MCP tool (Slice 8a) but answered
+"matches no indexed entity" by the CLI and by `/api/why`, which asserted a check those surfaces had
+never run. The syntactic refusal is now one helper in `nerve-store` that all three call, and two
+defects in the 8a original were fixed with it: `./x` was refused as an escape (Rust's
+`Components` keeps a *leading* `CurDir`), and `..\..\x` was not refused at all (on Unix `\` is not
+a separator, so the `..` never became a component). Neither was an access hole — the store binds
+parameters and `canonical_child` remains the authoritative filesystem guard — but both were
+T2 honesty failures. Verified on all three surfaces by attack and by a mutation probe that fails
+**8 tests across 7 targets**; before 8b-i the same probe failed only the MCP tests.
+
 ### T3 — Secret disclosure (A1, A3)
 
 **Controls (implemented):** built-in deny-list applied *before* reading (`.env*`, `*.pem`,
@@ -226,7 +237,8 @@ responsive, because the accept/read pool is separate from the query workers.
 | Test evidence — coverage (Slice 6b) | T9 | ✅ implemented and attack-verified — traversal and symlink escape refused and counted with zero content leakage; unindexed file rejected without creating an entity; line outside any symbol counted; every 6a resource bound refuses whole; a file changed since indexing refused rather than mapped through stale extents. **Zero call-shaped relations from the coverage extractor, asserted over `Relation::ALL`** (ADR-0005) |
 | Test evidence — tracing (Slice 11) | T9 | ⬜ required before Slice 11 ships |
 | MCP transport + `nerve_investigate` (Slice 8a) | T7, T8 | ✅ implemented and attack-verified. **T8:** every argument bounded before use, no argument reaching SQL as text, a traversal-shaped selector refused *as a refusal* rather than disguised as "not found", a symlink-swapped indexed file reporting freshness `refused` with no byte of the secret in the response, and three independent response bounds (row cap, per-assertion observation cap, and a 128 KiB ceiling measured on the text a client actually reads) with exact continuation. **T7:** every repository-derived value confined to one `repository_content` field, labelled three ways, and held there by a property test that walks the whole response and asserts no string inside the field appears outside it. Orchestrator-verified: an injected Markdown **heading** surfaces 7 times and every occurrence is inside a labelled region |
-| MCP remaining tools (Slice 8b) | T7, T8 | ⬜ required before 8b ships — the envelope is built and tested; each new tool must be shown to stay inside it |
+| Selectors, all three surfaces (Slice 8b-i) | T2, T7 | ✅ implemented and attack-verified. **T2:** one shared syntactic refusal for CLI, HTTP and MCP; before it, two of the three disguised a refusal as a miss. Both directions verified — `../../etc/passwd`, `/etc/passwd`, `..\..\windows`, `a\..\b`, `docs/..\..\x` refused; `./docs/architecture.md`, `docs/./architecture.md`, `a..b.ts`, `a\b.ts` **not** refused, so the check does not over-refuse a legal path. **T7:** this slice made `Document` entities reachable by path through MCP for the first time, widening the T7 surface, so it was re-attacked rather than assumed — an injected level-1 heading surfaces 4 times, every occurrence inside `repository_content`, 0 leaks. `selectors.alternatives` was placed **inside** the untrusted subtree because it carries repository names and paths |
+| MCP remaining tools (Slice 8b-ii) | T7, T8 | ⬜ required before 8b-ii ships — the envelope is built and tested; each new tool must be shown to stay inside it |
 
 ## 7. Corrective items
 

@@ -1545,16 +1545,12 @@ fn run_search(output: &Output, path: &Path, query: &str, kind: Option<&str>, lim
         output.line(format!("No matches for {query:?}."));
     }
     for hit in &hits {
-        let location = match (&hit.file_path, hit.start_line) {
-            (Some(file), Some(line)) => format!("{file}:{line}"),
-            _ => "-".to_string(),
-        };
-        let qualified = if hit.scope_path.is_empty() {
-            hit.name.clone()
-        } else {
-            format!("{}.{}", hit.scope_path, hit.name)
-        };
-        output.line(format!("{:<10} {qualified:<32} {location}", hit.kind));
+        output.line(format!(
+            "{:<10} {:<32} {}",
+            hit.kind,
+            hit.qualified_name(),
+            hit.location()
+        ));
     }
 
     output.object(json!({
@@ -1865,18 +1861,113 @@ fn relation_names(relations: &[Relation]) -> Vec<&'static str> {
     relations.iter().map(|relation| relation.as_str()).collect()
 }
 
+/// One selector, resolved, and what a stated rule passed over on the way.
+struct Resolution {
+    role: String,
+    selector: String,
+    entity: nerve_store::EntityRef,
+    matched_by: nerve_store::SelectorKind,
+    alternatives: Vec<nerve_store::EntityRef>,
+}
+
+impl Resolution {
+    fn to_json(&self) -> serde_json::Value {
+        json!({
+            "role": self.role,
+            "selector": self.selector,
+            "matched_by": self.matched_by.as_str(),
+            "alternatives": self.alternatives.iter().map(entity_json).collect::<Vec<_>>(),
+        })
+    }
+}
+
+fn selectors_json(resolutions: &[&Resolution]) -> serde_json::Value {
+    json!(resolutions
+        .iter()
+        .map(|resolution| resolution.to_json())
+        .collect::<Vec<_>>())
+}
+
+/// `nerve why`'s optional second selector, without building a `Vec` at the call site.
+fn why_selectors_json(subject: &Resolution, object: Option<&Resolution>) -> serde_json::Value {
+    match object {
+        Some(object) => selectors_json(&[subject, object]),
+        None => selectors_json(&[subject]),
+    }
+}
+
 /// Resolve one selector, or render the refusal and return its exit code.
 ///
-/// Ambiguity is exit 10 with the candidate list; nothing is chosen on the user's behalf.
+/// Ambiguity is exit 10 with the candidate list; nothing is chosen on the user's behalf. So are
+/// the two refusals Slice 8b-i separates out of "matches no indexed entity": a **malformed**
+/// selector and a **refused** traversal-shaped one are wrong command lines, which is what
+/// [`exit::USAGE`] means and what an ambiguous selector already returned. `NotFound` keeps
+/// [`exit::NO_INDEX`] unchanged — it is a stretch, it is pre-existing, and correcting it is a
+/// slice of its own rather than a side effect of this one.
+///
+/// A resolution that passed over a second reading says so on the spot, before the answer, rather
+/// than leaving the caller to infer from silence that `src/app.ts` had two readings.
 fn resolve_one(
     output: &Output,
     command: &str,
     conn: &nerve_store::Connection,
     role: &str,
     selector: &str,
-) -> Result<nerve_store::EntityRef, i32> {
+) -> Result<Resolution, i32> {
     match nerve_store::resolve_selector(conn, selector) {
-        Ok(nerve_store::Selection::Resolved { entity, .. }) => Ok(*entity),
+        Ok(nerve_store::Selection::Resolved {
+            entity,
+            matched_by,
+            alternatives,
+        }) => {
+            for passed_over in &alternatives {
+                let addressable = passed_over
+                    .repository_path()
+                    .map(|path| format!("{}:{path}", passed_over.kind))
+                    .unwrap_or_else(|| passed_over.entity_id.clone());
+                output.line(format!(
+                    "note     {selector:?} ({role}) named the {}; the {} at that path is \
+                     also indexed, as {addressable}",
+                    entity.kind, passed_over.kind
+                ));
+            }
+            Ok(Resolution {
+                role: role.to_string(),
+                selector: selector.to_string(),
+                entity: *entity,
+                matched_by,
+                alternatives,
+            })
+        }
+        Ok(nerve_store::Selection::Refused { reason }) => Err(output.failure_detail(
+            command,
+            exit::USAGE,
+            &format!("{selector:?} ({role}) is refused: {}", reason.statement()),
+            &["  nothing was looked up; this is a refusal, not an absence".to_string()],
+            json!({
+                "selector": selector,
+                "selector_role": role,
+                "reason": reason.as_str(),
+            }),
+        )),
+        Ok(nerve_store::Selection::Invalid { reason }) => {
+            let accepted = nerve_store::qualifiers().join(", ");
+            Err(output.failure_detail(
+                command,
+                exit::USAGE,
+                &format!(
+                    "{selector:?} ({role}) is not a selector ({})",
+                    reason.as_str()
+                ),
+                &[format!("  qualifiers: {accepted}")],
+                json!({
+                    "selector": selector,
+                    "selector_role": role,
+                    "reason": reason.as_str(),
+                    "accepted_qualifiers": nerve_store::qualifiers(),
+                }),
+            ))
+        }
         Ok(nerve_store::Selection::Ambiguous {
             candidates,
             matched_by,
@@ -1903,24 +1994,38 @@ fn resolve_one(
                 }),
             ))
         }
-        Ok(nerve_store::Selection::NotFound { suggestions }) => {
-            let message = format!("{selector:?} ({role}) matches no indexed entity");
+        Ok(nerve_store::Selection::NotFound {
+            qualifier,
+            excluded,
+            suggestions,
+        }) => {
+            let message = match qualifier {
+                Some(qualifier) => format!(
+                    "{selector:?} ({role}) matches no indexed {} entity",
+                    qualifier.as_str()
+                ),
+                None => format!("{selector:?} ({role}) matches no indexed entity"),
+            };
             let mut lines = Vec::new();
+            // What the qualifier ruled out, so the refusal is "no module there — there is a
+            // document" rather than a bare miss the caller has to go and disprove.
+            if !excluded.is_empty() {
+                lines.push("  the selector does name these, which the qualifier excluded:".into());
+                for entity in &excluded {
+                    lines.push(format!("    {}  {}", entity_line(entity), entity.entity_id));
+                }
+            }
             if suggestions.is_empty() {
                 lines.push("  no near matches; try `nerve search`".to_string());
             } else {
                 lines.push("  did you mean:".to_string());
                 for hit in &suggestions {
-                    let qualified = if hit.scope_path.is_empty() {
-                        hit.name.clone()
-                    } else {
-                        format!("{}.{}", hit.scope_path, hit.name)
-                    };
-                    let location = match (&hit.file_path, hit.start_line) {
-                        (Some(file), Some(line)) => format!("{file}:{line}"),
-                        _ => "-".to_string(),
-                    };
-                    lines.push(format!("    {:<10} {qualified:<34} {location}", hit.kind));
+                    lines.push(format!(
+                        "    {:<10} {:<34} {}",
+                        hit.kind,
+                        hit.qualified_name(),
+                        hit.location()
+                    ));
                 }
             }
             Err(output.failure_detail(
@@ -1931,11 +2036,14 @@ fn resolve_one(
                 json!({
                     "selector": selector,
                     "selector_role": role,
+                    "qualifier": qualifier.map(nerve_store::Qualifier::as_str),
+                    "excluded": excluded.iter().map(entity_json).collect::<Vec<_>>(),
                     "suggestions": suggestions.iter().map(|hit| json!({
                         "entity_id": hit.entity_id,
                         "kind": hit.kind,
                         "name": hit.name,
                         "scope_path": hit.scope_path,
+                        "qualified_name": hit.qualified_name(),
                         "file_path": hit.file_path,
                         "start_line": hit.start_line,
                     })).collect::<Vec<_>>(),
@@ -1982,11 +2090,11 @@ fn run_path(output: &Output, path: &Path, arguments: PathArguments) -> i32 {
     };
 
     let from = match resolve_one(output, "path", &conn, "from", &arguments.from) {
-        Ok(entity) => entity,
+        Ok(resolution) => resolution,
         Err(code) => return code,
     };
     let to = match resolve_one(output, "path", &conn, "to", &arguments.to) {
-        Ok(entity) => entity,
+        Ok(resolution) => resolution,
         Err(code) => return code,
     };
 
@@ -1997,7 +2105,12 @@ fn run_path(output: &Output, path: &Path, arguments: PathArguments) -> i32 {
         relations: relations.clone(),
         resolved_only: arguments.resolved_only,
     };
-    let report = match nerve_store::find_paths(&conn, &from.entity_id, &to.entity_id, &query) {
+    let report = match nerve_store::find_paths(
+        &conn,
+        &from.entity.entity_id,
+        &to.entity.entity_id,
+        &query,
+    ) {
         Ok(report) => report,
         Err(err) => return output.failure("path", exit::INTERNAL, &err.to_string()),
     };
@@ -2065,6 +2178,7 @@ fn run_path(output: &Output, path: &Path, arguments: PathArguments) -> i32 {
         "command": "path",
         "ok": true,
         "exit_code": exit::SUCCESS,
+        "selectors": selectors_json(&[&from, &to]),
         "from": entity_json(&report.from),
         "to": entity_json(&report.to),
         "max_depth": report.max_depth,
@@ -2157,7 +2271,7 @@ fn run_impact(output: &Output, path: &Path, arguments: ImpactArguments) -> i32 {
     };
 
     let subject = match resolve_one(output, "impact", &conn, "selector", &arguments.selector) {
-        Ok(entity) => entity,
+        Ok(resolution) => resolution,
         Err(code) => return code,
     };
 
@@ -2166,7 +2280,7 @@ fn run_impact(output: &Output, path: &Path, arguments: ImpactArguments) -> i32 {
         limit: arguments.limit,
         relations,
     };
-    let report = match nerve_store::impact(&conn, &subject.entity_id, &query, &prober) {
+    let report = match nerve_store::impact(&conn, &subject.entity.entity_id, &query, &prober) {
         Ok(report) => report,
         Err(err) => return output.failure("impact", exit::INTERNAL, &err.to_string()),
     };
@@ -2271,6 +2385,7 @@ fn run_impact(output: &Output, path: &Path, arguments: ImpactArguments) -> i32 {
         "command": "impact",
         "ok": true,
         "exit_code": exit::SUCCESS,
+        "selectors": selectors_json(&[&subject]),
         "root": root.display().to_string(),
         "subject": entity_json(&report.subject),
         "relations": walked,
@@ -2350,12 +2465,12 @@ fn run_why(output: &Output, path: &Path, arguments: WhyArguments) -> i32 {
     };
 
     let subject = match resolve_one(output, "why", &conn, "from", &arguments.from) {
-        Ok(entity) => entity,
+        Ok(resolution) => resolution,
         Err(code) => return code,
     };
     let object = match &arguments.to {
         Some(selector) => match resolve_one(output, "why", &conn, "to", selector) {
-            Ok(entity) => Some(entity),
+            Ok(resolution) => Some(resolution),
             Err(code) => return code,
         },
         None => None,
@@ -2367,8 +2482,10 @@ fn run_why(output: &Output, path: &Path, arguments: WhyArguments) -> i32 {
     };
     let report = match nerve_store::explain(
         &conn,
-        &subject.entity_id,
-        object.as_ref().map(|entity| entity.entity_id.as_str()),
+        &subject.entity.entity_id,
+        object
+            .as_ref()
+            .map(|resolution| resolution.entity.entity_id.as_str()),
         &query,
         &prober,
     ) {
@@ -2445,6 +2562,7 @@ fn run_why(output: &Output, path: &Path, arguments: WhyArguments) -> i32 {
         "command": "why",
         "ok": true,
         "exit_code": exit::SUCCESS,
+        "selectors": why_selectors_json(&subject, object.as_ref()),
         "subject": entity_json(&report.subject),
         "object": report.object.as_ref().map(entity_json),
         "direction": query.direction.as_str(),

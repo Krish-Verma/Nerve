@@ -2928,3 +2928,293 @@ fn mcp_refuses_an_unindexed_directory_before_it_frames_anything() {
     assert!(responses.is_empty(), "{responses:#?}");
     assert!(String::from_utf8(output.stderr).unwrap().contains("mcp"));
 }
+
+// ---- selector resolution by entity kind (Slice 8b-i) -----------------------------------------
+
+/// Criterion 1: a document is named by its path, and the file at that path is the alternative.
+///
+/// Before this slice the command below printed `"docs/architecture.md" (from) matches no indexed
+/// entity` and exited 2 — a document was reachable only as the bare stem `architecture`.
+#[test]
+fn a_document_path_resolves_to_the_document_and_names_the_file_it_passed_over() {
+    let (_dir, root) = indexed_fixture("md-docs");
+    let root = root.to_str().unwrap();
+
+    let human = run(&["why", "docs/architecture.md", "--path", root]);
+    assert_eq!(code(&human), 0, "{}", stderr(&human));
+    let text = stdout(&human);
+    assert!(text.contains("document"), "{text}");
+    // The choice is stated rather than left to be inferred, and it names the string that gets
+    // the other reading.
+    assert!(
+        text.contains("note") && text.contains("file:docs/architecture.md"),
+        "the passed-over file must be named and addressable:\n{text}"
+    );
+
+    let value = json(&run(&[
+        "why",
+        "docs/architecture.md",
+        "--path",
+        root,
+        "--json",
+    ]));
+    assert_eq!(value["exit_code"], 0);
+    assert_eq!(value["subject"]["kind"], "document");
+    let selector = &value["selectors"][0];
+    assert_eq!(selector["role"], "from");
+    assert_eq!(selector["selector"], "docs/architecture.md");
+    assert_eq!(selector["matched_by"], "path");
+    let alternatives = selector["alternatives"].as_array().unwrap();
+    assert_eq!(alternatives.len(), 1, "{alternatives:?}");
+    assert_eq!(alternatives[0]["kind"], "file");
+    assert_eq!(alternatives[0]["name"], "architecture.md");
+}
+
+/// Criteria 2, 3, 6 and 7 through the real command surface.
+#[test]
+fn qualifiers_reach_the_reading_the_bare_path_passed_over() {
+    let (_dir, root) = indexed_fixture("md-docs");
+    let root = root.to_str().unwrap();
+
+    // Criterion 2: the container, by the qualifier the alternative names.
+    let file = json(&run(&[
+        "why",
+        "file:docs/architecture.md",
+        "--path",
+        root,
+        "--json",
+    ]));
+    assert_eq!(file["subject"]["kind"], "file");
+    assert!(file["selectors"][0]["alternatives"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    // Criterion 3: a source path is the module, with the file reported as the second reading.
+    let module = json(&run(&["why", "src/app.ts", "--path", root, "--json"]));
+    assert_eq!(module["subject"]["kind"], "module");
+    assert_eq!(module["selectors"][0]["matched_by"], "path");
+    assert_eq!(module["selectors"][0]["alternatives"][0]["kind"], "file");
+
+    // Criterion 6: an ADR by the identifier that lives in its metadata, not in its name.
+    let adr = json(&run(&["why", "adr:ADR-0001", "--path", root, "--json"]));
+    assert_eq!(adr["subject"]["kind"], "document");
+    assert_eq!(adr["subject"]["name"], "ADR-0001-header-status");
+
+    // Criterion 7: `symbol:` takes a same-named module out of contention entirely.
+    let unqualified = json(&run(&["why", "app", "--path", root, "--json"]));
+    assert_eq!(unqualified["subject"]["kind"], "module");
+    let constrained = run(&["why", "symbol:app", "--path", root, "--json"]);
+    assert_eq!(code(&constrained), 2);
+    let value = json(&constrained);
+    assert_eq!(value["qualifier"], "symbol");
+    assert!(
+        value["excluded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entity| entity["kind"] == "module"),
+        "the refusal must name what the qualifier excluded: {value}"
+    );
+}
+
+/// Criterion 4: a qualifier that admits nothing at a path says what is actually there.
+#[test]
+fn a_wrong_qualifier_exits_two_and_names_the_entity_that_is_there() {
+    let (_dir, root) = indexed_fixture("md-docs");
+    let root = root.to_str().unwrap();
+
+    let output = run(&["why", "module:docs/architecture.md", "--path", root]);
+    assert_eq!(code(&output), 2, "a miss keeps its exit code");
+    let text = stderr(&output);
+    assert!(text.contains("no indexed module entity"), "{text}");
+    assert!(text.contains("excluded"), "{text}");
+    assert!(text.contains("document"), "{text}");
+}
+
+/// Criterion 5: a malformed selector is a usage error, not a search that came back empty.
+#[test]
+fn an_unknown_qualifier_is_a_usage_error_rather_than_a_miss() {
+    let (_dir, root) = indexed_fixture("md-docs");
+    let root = root.to_str().unwrap();
+
+    let output = run(&["why", "banana:foo", "--path", root]);
+    assert_eq!(code(&output), 10, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("is not a selector"),
+        "{}",
+        stderr(&output)
+    );
+
+    let value = json(&run(&["why", "banana:foo", "--path", root, "--json"]));
+    assert_eq!(value["exit_code"], 10);
+    assert_eq!(value["reason"], "unknown_qualifier");
+    let accepted = value["accepted_qualifiers"].as_array().unwrap();
+    assert!(accepted.iter().any(|name| name == "document"));
+    assert!(accepted.iter().any(|name| name == "adr"));
+
+    // A well-formed selector that simply matches nothing keeps exit 2 and its suggestions.
+    assert_eq!(code(&run(&["why", "nosuchthingatall", "--path", root])), 2);
+}
+
+/// Criterion 8: real ambiguity still refuses, and nothing is chosen.
+#[test]
+fn two_symbols_with_one_name_are_still_refused_with_their_candidates() {
+    let (_dir, root) = indexed_fixture("md-docs");
+    let root = root.to_str().unwrap();
+
+    let value = json(&run(&["why", "describe", "--path", root, "--json"]));
+    assert_eq!(value["exit_code"], 10);
+    assert_eq!(value["matched_by"], "name");
+    assert!(value["candidates"].as_array().unwrap().len() >= 2);
+
+    // The alias covers both kinds, so it does not disambiguate and must not pretend to.
+    assert_eq!(code(&run(&["why", "symbol:describe", "--path", root])), 10);
+    // Naming the kind does.
+    let method = json(&run(&["why", "method:describe", "--path", root, "--json"]));
+    assert_eq!(method["subject"]["kind"], "method");
+}
+
+/// Criterion 9, CLI half: a traversal selector is **refused**, not reported as missing.
+///
+/// Before this slice every one of these exited 2 with "matches no indexed entity", which asserts
+/// a check the CLI had never run. Backslash forms are included because they defeated the check
+/// even on the surface that had one — on Unix `\` is not a path separator.
+#[test]
+fn a_traversal_selector_is_refused_by_the_cli_rather_than_missed() {
+    let (_dir, root) = indexed_fixture("md-docs");
+    let root = root.to_str().unwrap();
+
+    for selector in [
+        "../../etc/passwd",
+        "../secrets.env",
+        "/etc/passwd",
+        "/etc/passwd#thing",
+        "src/../../../etc/passwd#Circle.area",
+        "./../x",
+        "\\\\server\\share",
+        "..\\..\\windows\\system32",
+        "a\\..\\b",
+        "src//../../etc/passwd",
+        "//etc/passwd",
+        "file:/etc/passwd",
+    ] {
+        let output = run(&["why", selector, "--path", root]);
+        assert_eq!(code(&output), 10, "{selector}: {}", stderr(&output));
+        let text = stderr(&output);
+        assert!(text.contains("is refused"), "{selector}: {text}");
+        assert!(
+            !text.contains("matches no indexed entity"),
+            "{selector} was disguised as a miss: {text}"
+        );
+
+        let value = json(&run(&["why", selector, "--path", root, "--json"]));
+        assert_eq!(value["reason"], "path_refused", "{selector}");
+        assert_eq!(value["exit_code"], 10, "{selector}");
+    }
+
+    // The second selector is checked too, not only the first.
+    let output = run(&["path", "run", "../../etc/passwd", "--path", root]);
+    assert_eq!(code(&output), 10);
+    assert!(
+        stderr(&output).contains("is refused"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// Criterion 10: what must **not** be refused, including the two corrections this slice made.
+#[test]
+fn legal_selectors_are_never_reported_as_escape_attempts() {
+    let (_dir, root) = indexed_fixture("md-docs");
+    let root = root.to_str().unwrap();
+
+    for selector in [
+        // `..` inside a segment is not a parent-directory component.
+        "docs/a..b.md",
+        "a..b.ts",
+        // Unicode.
+        "docs/архитектура.md",
+        "café",
+        // A leading `.` is a legal relative path. `./x` means `x`; refusing it told the user
+        // their selector tried to leave the repository.
+        "./docs/architecture.md",
+        "docs/./architecture.md",
+        // A backslash with no `..` is one legal Unix filename.
+        "a\\b.ts",
+        // A repeated separator with nothing to smuggle.
+        "src//app.ts",
+        // A bare name.
+        "nosuchthingatall",
+    ] {
+        let output = run(&["why", selector, "--path", root]);
+        let text = stderr(&output);
+        assert!(
+            !text.contains("is refused"),
+            "{selector} must not be refused: {text}"
+        );
+        assert_eq!(
+            code(&output),
+            2,
+            "{selector} must be an honest miss: {text}"
+        );
+    }
+}
+
+/// Criterion 11: every suggestion printed can be typed back, and resolves.
+///
+/// The CLI's private copy of the scope fold ran for **every** kind, so a document was suggested
+/// as `docs/architecture.md.architecture` and a file as `docs.architecture.md`. Both were typed
+/// back verbatim by the person reading them; both returned "matches no indexed entity".
+#[test]
+fn every_suggestion_the_cli_prints_can_be_typed_back() {
+    let (_dir, root) = indexed_fixture("md-docs");
+    let root = root.to_str().unwrap();
+
+    let value = json(&run(&["why", "architectur", "--path", root, "--json"]));
+    assert_eq!(value["exit_code"], 2);
+    let suggestions = value["suggestions"].as_array().unwrap();
+    assert!(!suggestions.is_empty(), "{value}");
+
+    for hit in suggestions {
+        let typed = hit["qualified_name"].as_str().unwrap();
+        assert!(
+            !typed.contains(".md."),
+            "{typed} is the untypeable form the private fold produced"
+        );
+        // Retyping it must reach an entity: resolved (0) or ambiguous (10), never a miss (2)
+        // and never a usage error about the string itself.
+        let retyped = run(&["why", typed, "--path", root]);
+        assert!(
+            matches!(code(&retyped), 0 | 10),
+            "suggestion {typed:?} does not resolve: exit {} {}",
+            code(&retyped),
+            stderr(&retyped)
+        );
+    }
+
+    // And the human-readable form is the same string, not a second rendering of it.
+    let human = run(&["why", "architectur", "--path", root]);
+    let text = stderr(&human);
+    assert!(text.contains("architecture"), "{text}");
+    assert!(!text.contains("docs.architecture.md"), "{text}");
+    assert!(
+        !text.contains("docs/architecture.md.architecture"),
+        "{text}"
+    );
+}
+
+/// `nerve search` printed the same untypeable fold. It was the second copy, and it is gone.
+#[test]
+fn search_prints_names_that_resolve_as_selectors() {
+    let (_dir, root) = indexed_fixture("md-docs");
+    let root = root.to_str().unwrap();
+
+    let text = stdout(&run(&["search", "architecture", "--path", root]));
+    assert!(text.contains("architecture"), "{text}");
+    assert!(!text.contains("docs.architecture.md"), "{text}");
+    assert!(
+        !text.contains("docs/architecture.md.architecture"),
+        "{text}"
+    );
+}

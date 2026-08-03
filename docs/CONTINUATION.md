@@ -8,24 +8,27 @@
 
 | | |
 |---|---|
-| **Last slice commit** | `cbce2c0` — `feat: Slice 8a — MCP over stdio, one tool, and the two gates that had to come first`. A docs commit may sit on top; `git log --oneline -3` is authoritative. |
+| **Last slice commit** | Slice 8b-i — `feat: Slice 8b-i — a path now names what is at it`. Hash recorded by the follow-up docs commit; `git log --oneline -3` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 8a** — MCP over stdio, one tool, T7 + T8 satisfied |
-| **Next slice** | **Slice 8b** — the rest of the MCP tool surface, inside the envelope 8a secured. Then 9–14, validation. |
-| **Roadmap status** | **INCOMPLETE.** 8b, 9–14 and real-world validation not started. |
+| **Last completed slice** | **Slice 8b-i** — selector resolution by entity kind |
+| **Next slice** | **Slice 8b-ii** — the rest of the MCP tool surface, on a selector layer that is now correct. Then 9–14, validation. |
+| **Roadmap status** | **INCOMPLETE.** 8b-ii, 9–14 and real-world validation not started. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
 
-## Verification state at the Slice 8a commit
+## Verification state at the Slice 8b-i commit
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace                                  → 862 passed, 0 failed, 2 ignored
+cargo test --workspace --no-fail-fast                   → 911 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
 ```
+
+**Use `--no-fail-fast`.** Plain `cargo test` halts at the first failing target and understates a
+mutation's blast radius — measured in Slice 7b: 3 reported against 16 actual.
 
 Run by the orchestrator, not merely reported by an implementer. The 2 ignored are opt-in
 measurements, not skipped tests:
@@ -238,10 +241,12 @@ across `types.ts` and `App.tsx:144`) are the model.
 
 | | |
 |---|---|
-| **8b** | **Next.** The rest of the MCP tool surface — `search`, `path`, `impact`, `gaps`, each earning its place on a materially-different-contract test. The T7/T8 envelope already exists and is tested; each tool must be shown to stay inside it. |
-| 7c | `nerve check` (CI exit codes) + `nerve doctor` (diagnostics). |
-| 8 | MCP — one default investigation tool. **T7 + T8 gate.** |
-| 9 | Python |
+Rows 7c, 8a and 8b-i are **complete** and no longer listed here; `docs/ROADMAP.md` is authoritative.
+
+| | |
+|---|---|
+| **8b-ii** | **Next.** The rest of the MCP tool surface — `search`, `path`, `impact`, `gaps`, each earning its place on a materially-different-contract test. The T7/T8 envelope exists and is tested; each tool must be shown to stay inside it. **The selector layer is now correct** (8b-i), so document and ADR evidence is reachable — and 8b-i's T7 re-attack on the newly-reachable document surface is the pattern to repeat for each tool. |
+| 9 | Python. **`tree-sitter-python 0.25.0`, MIT, matches the workspace `tree-sitter = "0.25"` — checked 2026-08-02.** Do **not** use `tree-sitter-stack-graphs-python`: stack-graphs is a code-navigation engine and CLAUDE.md §1 forbids depending on a competing code-intelligence engine. Bare grammar only, as TS/JS does it. Follow `resolve.rs`'s precedent: relative and in-repo absolute imports resolve, everything dynamic is recorded as `Unresolved` rather than guessed. |
 | 10 | Framework rules |
 | 11 | Test call tracing. **T9 gate.** |
 | 12 | Git history / temporal layer |
@@ -360,11 +365,17 @@ recorded in `docs/plans/slice-15-real-world-validation.md`.
   correspondence. Found during 7a-iii, deliberately left.
 - **The CLI↔API agreement-test boilerplate is duplicated twice** (`gaps`, `overview`) — roughly 35
   lines of spawn/`Reaper` each. A third such test should hoist it into the shared harness.
-- **A document path does not resolve as a selector.** `resolve_selector` stage 2 maps `<rel_path>`
-  to the `Module` entity for that file, so `docs/foo.md` returns `selector_not_found` with
-  suggestions rather than reaching the `Document` entity. Pre-existing `nerve-store` behaviour,
-  identical through `nerve why`, `/api/why` and MCP. **Slice 8b must confront this if it exposes
-  document evidence.**
+- ~~A document path does not resolve as a selector.~~ **Fixed in Slice 8b-i.** A path now names
+  whatever is at it, and a second reading is reported in `alternatives` rather than silently
+  discarded.
+- **`./docs/foo.md` — a leading `./` — still resolves to nothing.** Correctly *not* refused as a
+  traversal any more, but not normalised away either, so a path pasted from shell tab-completion
+  misses. Left deliberately: normalising selectors (`./x`, `x/`, `//x`) is a design question, not
+  an edit to make at commit time.
+- **CLI and HTTP serialize `selectors` differently.** CLI: an array of
+  `{role, selector, matched_by, alternatives}`. HTTP: an object keyed by query-parameter name.
+  Each surface is uniform within itself and the underlying resolution is shared, but the two JSON
+  shapes differ for one concept. Recorded in `docs/UI-BACKEND-HANDOFF.md` Entry 3.
 - **MCP materialises the full `why` report before bounding it.** Bounded by repository size exactly
   as `nerve why` and `/api/why` already are; the *response* is bounded, which is the security
   property. Pushing a limit into `nerve_store::explain` would change all three surfaces and belongs

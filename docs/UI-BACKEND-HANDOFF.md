@@ -256,6 +256,117 @@ entries in the Rust router; no TypeScript mirror asserts that list, so nothing b
 
 ---
 
+## Entry 3 — selectors now name documents and files, and refuse differently
+
+**Slice 8b-i** · behaviour change on **every** endpoint that takes a selector ·
+report: `docs/reports/slice-08b-i-report.md`
+**Status: ⬜ no UI change made.** Nothing under `apps/nerve-web/` was touched. Two of the changes
+below are backward-compatible additions; **one changes a status code you may already handle.**
+
+### What changed
+
+A repository-relative path now names whatever is actually at it. Before this slice
+`docs/architecture.md` resolved to **nothing** — the path stage asked only about modules — and at
+`src/app.ts` the `File` entity was silently passed over in favour of the `Module` with no
+indication a choice had been made. On the documentation fixture that was 26 % of entities
+unreachable by their most natural identifier.
+
+### Selector grammar — the whole of it
+
+```
+selector  := [ qualifier ":" ] body
+body      := <entity_id> | <rel_path> | <rel_path> "#" <qualified_name> | <name>
+```
+
+Qualifiers are generated from the entity-kind vocabulary, so the list below **is** the list of
+kinds, plus two aliases. If a kind is ever added, its qualifier exists the same day.
+
+| qualifier | selects |
+|---|---|
+| `repository:` `directory:` `file:` `module:` `function:` `method:` `class:` `interface:` `document:` `section:` `unresolved:` `coverage_run:` | that kind only |
+| `symbol:` | alias — `function`, `method`, `class`, `interface` |
+| `adr:` | alias — a `document` whose `meta.adr` is true, matched on its ADR id (`adr:ADR-0001`) |
+
+A colon only introduces a qualifier when it comes before the first `/` and the first `#`, so a path
+containing a colon (`docs/a:b.md`) is still a path. **`#` remains the symbol separator** — there is
+no `::` form.
+
+### One path, two readings — `alternatives`
+
+`src/app.ts` holds both a `Module` and a `File`; `docs/architecture.md` holds both a `Document` and
+a `File`. The rule: **content wins, container is reported.**
+
+Every endpoint that resolves a selector now carries a `selectors` object:
+
+```jsonc
+"selectors": {
+  "subject": {                     // keyed by the query parameter name
+    "matched_by": "path",          // entity_id | path | path_qualified | name
+    "alternatives": [ { "kind": "file", "name": "app.ts", "entity_id": "file_…", … } ]
+  }
+}
+```
+
+`alternatives` is **`[]` for the overwhelming majority of selectors** and only ever non-empty when
+a path had a second reading. When it is non-empty the UI should say which entity was chosen and
+offer the other — the passed-over entity is always addressable as `file:<path>` or
+`directory:<path>`.
+
+This is an **addition**; every existing field is unchanged.
+
+> **Shape note.** `nerve <cmd> --json` emits `selectors` as an *array* of
+> `{role, selector, matched_by, alternatives}`. The HTTP API emits an *object keyed by query
+> parameter name*. Same information, two shapes; each is uniform within its own surface. If you
+> ever diff CLI and API output, expect this.
+
+### Error states — one is new, one is a changed status
+
+| condition | status | code | note |
+|---|---|---|---|
+| resolves | `200` | — | |
+| several candidates | `409` | `ambiguous_selector` | unchanged, `detail.candidates[]` |
+| nothing matches | `404` | `selector_not_found` | unchanged, `detail.suggestions[]` |
+| **malformed selector** | **`400`** | **`invalid_selector`** | **new.** Unknown qualifier (`banana:foo`), empty qualifier, empty body. A malformed request, *not* a miss — do not render it as "not found" |
+| **path escapes the root** | **`400`** | **`refused_selector`** | **changed.** Previously this returned `404 selector_not_found` |
+
+**`refused_selector` is the one to check your existing handling against.** `../../etc/passwd`,
+`/etc/passwd` and `..\..\x` used to come back as an ordinary miss, which asserted a check the
+backend had never run. They are now an explicit refusal. If a view maps every non-200 selector
+outcome onto "not found", it will now mislabel a refusal.
+
+Suggested wording — *"That selector is refused: a path outside the repository root, or one
+containing `..`, is never resolved."* Do not offer search suggestions for it; there is nothing to
+suggest, and offering alternatives implies Nerve went looking.
+
+### Suggestions are now typeable
+
+The `detail.suggestions[]` list attached to a `404` previously rendered strings like
+`docs/architecture.md.architecture` — which resolve to nothing. Every suggestion now carries a
+`qualified_name` that **can be typed back as a selector**. A UI may safely make them clickable.
+
+### States for a selector input
+
+| state | render |
+|---|---|
+| resolved, `alternatives: []` | the entity |
+| resolved, `alternatives` non-empty | the entity, plus *"also at this path: file `app.ts`"* with the `file:` selector |
+| `409` | the candidate list; Nerve refuses to choose |
+| `404` | the suggestions, as clickable selectors |
+| `400 invalid_selector` | "not a selector" — a typo in the qualifier, not a missing entity |
+| `400 refused_selector` | a refusal, with no suggestions |
+
+### Known gap
+
+`./docs/architecture.md` — with a leading `./` — returns `404`. It is correctly **not** refused,
+but the `./` is not normalised away either. A path pasted from shell tab-completion will miss.
+Deferred deliberately; normalisation is its own design question.
+
+### Frontend edits the backend made
+
+**None.** No file under `apps/nerve-web/` was touched.
+
+---
+
 <!--
   Append new entries below this line, newest last. Each entry should carry:
   endpoint · method · authentication · query parameters · request schema · response schema ·

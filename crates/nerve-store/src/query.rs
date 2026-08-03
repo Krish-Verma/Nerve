@@ -519,6 +519,23 @@ pub struct SearchHit {
     pub score: f64,
 }
 
+impl SearchHit {
+    /// `scope.name` for a scoped symbol, `name` otherwise. See [`crate::select::fold_scope`].
+    ///
+    /// A hit is shown to a human as something to *type back*, so it must fold exactly as
+    /// [`crate::select::EntityRef::qualified_name`] does. Two private copies of this fold that
+    /// omitted the symbol guard printed `docs.architecture.md` beside the word *document*, and
+    /// that string resolves to nothing at all.
+    pub fn qualified_name(&self) -> String {
+        crate::select::fold_scope(&self.kind, &self.scope_path, &self.name)
+    }
+
+    /// `file:line`, or `-` when the hit has no occurrence.
+    pub fn location(&self) -> String {
+        crate::select::format_location(self.file_path.as_deref(), self.start_line)
+    }
+}
+
 /// Turn user input into a safe FTS5 MATCH expression.
 ///
 /// Repository content and user queries are untrusted input, so the query is not passed to

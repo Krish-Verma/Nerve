@@ -17,7 +17,9 @@ use serde_json::{json, Value};
 
 use nerve_core::vocab::{EntityKind, Relation};
 use nerve_index::{RepositoryProber, SourceSnippet};
-use nerve_store::{Connection, Direction, EntityRef, Selection, WhyDirection};
+use nerve_store::{
+    Connection, Direction, EntityRef, Qualifier, Selection, SelectorKind, WhyDirection,
+};
 
 use crate::request::Target;
 use crate::shapes;
@@ -212,7 +214,8 @@ pub fn search(ctx: &Context<'_>, target: &Target) -> Answer {
 
 /// One entity: what it is, where it lives, and what defines or contains it.
 pub fn entity(ctx: &Context<'_>, target: &Target) -> Answer {
-    let subject = resolve(ctx, target, "selector")?;
+    let selected = resolve(ctx, target, "selector")?;
+    let subject = &selected.entity;
     let occurrences =
         nerve_store::occurrences_of(ctx.conn, &subject.entity_id).map_err(ApiError::internal)?;
     let counts = nerve_store::entity_relation_counts(ctx.conn, &subject.entity_id)
@@ -230,8 +233,8 @@ pub fn entity(ctx: &Context<'_>, target: &Target) -> Answer {
     let defining = nerve_store::neighbourhood(ctx.conn, &subject.entity_id, &structural)
         .map_err(ApiError::internal)?;
 
-    Ok(json!({
-        "entity": shapes::entity(&subject),
+    let mut value = json!({
+        "entity": shapes::entity(subject),
         "occurrence_count": occurrences.len(),
         "occurrences": occurrences.iter().map(shapes::occurrence).collect::<Vec<_>>(),
         "relation_counts": {
@@ -239,7 +242,9 @@ pub fn entity(ctx: &Context<'_>, target: &Target) -> Answer {
             "incoming": counts.incoming,
         },
         "defining_edges": shapes::neighbourhood(&defining),
-    }))
+    });
+    note_selectors(&mut value, &[("selector", &selected)]);
+    Ok(value)
 }
 
 // ---- neighbourhood -------------------------------------------------------------------------
@@ -258,12 +263,13 @@ pub fn neighbourhood(ctx: &Context<'_>, target: &Target) -> Answer {
         relations: relations(target)?,
         resolved_only: target.flag("resolved_only"),
     };
-    let report = nerve_store::neighbourhood(ctx.conn, &focus.entity_id, &query)
+    let report = nerve_store::neighbourhood(ctx.conn, &focus.entity.entity_id, &query)
         .map_err(ApiError::internal)?;
     let mut value = shapes::neighbourhood(&report);
     value["direction"] = json!(query.direction.as_str());
     value["relations"] = json!(relation_names(&query.relations));
     value["resolved_only"] = json!(query.resolved_only);
+    note_selectors(&mut value, &[("selector", &focus)]);
     Ok(value)
 }
 
@@ -284,13 +290,19 @@ pub fn path(ctx: &Context<'_>, target: &Target) -> Answer {
         relations: relations(target)?,
         resolved_only: target.flag("resolved_only"),
     };
-    let report = nerve_store::find_paths(ctx.conn, &from.entity_id, &to.entity_id, &query)
-        .map_err(ApiError::internal)?;
+    let report = nerve_store::find_paths(
+        ctx.conn,
+        &from.entity.entity_id,
+        &to.entity.entity_id,
+        &query,
+    )
+    .map_err(ApiError::internal)?;
     let mut value = shapes::path_report(&report);
     value["limit"] = json!(query.limit);
     value["direction"] = json!(query.direction.as_str());
     value["relations"] = json!(relation_names(&query.relations));
     value["resolved_only"] = json!(query.resolved_only);
+    note_selectors(&mut value, &[("from", &from), ("to", &to)]);
     Ok(value)
 }
 
@@ -324,8 +336,10 @@ pub fn why(ctx: &Context<'_>, target: &Target) -> Answer {
     // path rules on every path the database hands it.
     let report = nerve_store::explain(
         ctx.conn,
-        &subject.entity_id,
-        object.as_ref().map(|entity| entity.entity_id.as_str()),
+        &subject.entity.entity_id,
+        object
+            .as_ref()
+            .map(|resolved| resolved.entity.entity_id.as_str()),
         &query,
         ctx.prober,
     )
@@ -334,6 +348,11 @@ pub fn why(ctx: &Context<'_>, target: &Target) -> Answer {
     let mut value = shapes::why_report(&report);
     value["direction"] = json!(query.direction.as_str());
     value["relations"] = json!(relation_names(&query.relations));
+    let mut resolutions: Vec<(&str, &Resolution)> = vec![("subject", &subject)];
+    if let Some(object) = &object {
+        resolutions.push(("object", object));
+    }
+    note_selectors(&mut value, &resolutions);
     Ok(value)
 }
 
@@ -520,9 +539,11 @@ pub fn impact(ctx: &Context<'_>, target: &Target) -> Answer {
     };
     // Freshness is computed by re-reading the repository through the prober, which enforces the
     // path rules on every path the database hands it.
-    let report = nerve_store::impact(ctx.conn, &subject.entity_id, &query, ctx.prober)
+    let report = nerve_store::impact(ctx.conn, &subject.entity.entity_id, &query, ctx.prober)
         .map_err(ApiError::internal)?;
-    Ok(shapes::impact_report(&report))
+    let mut value = shapes::impact_report(&report);
+    note_selectors(&mut value, &[("subject", &subject)]);
+    Ok(value)
 }
 
 /// Which files parsed with errors, so what came out of them can be read with suspicion.
@@ -546,17 +567,45 @@ pub fn partial_parses(ctx: &Context<'_>) -> Answer {
 
 // ---- shared argument handling ---------------------------------------------------------------
 
+/// One selector parameter, resolved, and what the resolution passed over.
+pub struct Resolution {
+    /// The entity the selector named.
+    pub entity: EntityRef,
+    /// Which stage matched.
+    pub matched_by: SelectorKind,
+    /// Entities the same selector also names, which a stated rule passed over.
+    pub alternatives: Vec<EntityRef>,
+}
+
 /// Resolve one selector parameter to exactly one entity, or refuse.
 ///
 /// Ambiguity is a refusal carrying every candidate. Nothing is chosen on the caller's behalf:
 /// silently picking one is the failure mode that makes a tool untrustworthy in exactly the
 /// situation where the caller most needs it to be right.
-fn resolve(ctx: &Context<'_>, target: &Target, key: &str) -> Result<EntityRef, ApiError> {
+///
+/// Four refusals, each its own status, because a caller fixes each of them differently:
+///
+/// - **400 `refused_selector`** — traversal-shaped. Never disguised as a miss (T2), and now
+///   refused on this surface as well as on the MCP one, through `nerve_store::selector_shape`.
+/// - **400 `invalid_selector`** — an unknown or empty qualifier, or an empty body. A malformed
+///   request, not a search that came back empty.
+/// - **409 `ambiguous_selector`** — more than one entity, with all of them.
+/// - **404 `selector_not_found`** — nothing, with the nearest hits, plus what a qualifier
+///   excluded so the answer can say *"no module there — there is a document"*.
+fn resolve(ctx: &Context<'_>, target: &Target, key: &str) -> Result<Resolution, ApiError> {
     let selector = target
         .get(key)
         .ok_or_else(|| ApiError::bad_request(format!("{key} is required")))?;
     match nerve_store::resolve_selector(ctx.conn, selector).map_err(ApiError::internal)? {
-        Selection::Resolved { entity, .. } => Ok(*entity),
+        Selection::Resolved {
+            entity,
+            matched_by,
+            alternatives,
+        } => Ok(Resolution {
+            entity: *entity,
+            matched_by,
+            alternatives,
+        }),
         Selection::Ambiguous {
             candidates,
             matched_by,
@@ -571,17 +620,68 @@ fn resolve(ctx: &Context<'_>, target: &Target, key: &str) -> Result<EntityRef, A
                 "candidates": candidates.iter().map(shapes::entity).collect::<Vec<_>>(),
             }),
         )),
-        Selection::NotFound { suggestions } => Err(ApiError::with_detail(
+        Selection::NotFound {
+            qualifier,
+            excluded,
+            suggestions,
+        } => Err(ApiError::with_detail(
             404,
             "selector_not_found",
             format!("{selector:?} matches no indexed entity"),
             json!({
                 "parameter": key,
                 "selector": selector,
+                "qualifier": qualifier.map(Qualifier::as_str),
+                "excluded": excluded.iter().map(shapes::entity).collect::<Vec<_>>(),
                 "suggestions": suggestions.iter().map(shapes::search_hit).collect::<Vec<_>>(),
             }),
         )),
+        Selection::Invalid { reason } => Err(ApiError::with_detail(
+            400,
+            "invalid_selector",
+            format!("{selector:?} is not a selector"),
+            json!({
+                "parameter": key,
+                "selector": selector,
+                "reason": reason.as_str(),
+                "accepted_qualifiers": nerve_store::qualifiers(),
+            }),
+        )),
+        Selection::Refused { reason } => Err(ApiError::with_detail(
+            400,
+            "refused_selector",
+            format!("{selector:?} is refused: {}", reason.statement()),
+            json!({
+                "parameter": key,
+                "selector": selector,
+                "reason": reason.as_str(),
+            }),
+        )),
     }
+}
+
+/// Record, on the answer, which stage named each subject and what it passed over.
+///
+/// Additive and uniform: every endpoint that resolves a selector says so the same way, so a
+/// caller never has to infer from silence that `src/app.ts` had two readings and one was chosen
+/// by rule. `alternatives` is empty for every selector that had only one reading.
+fn note_selectors(value: &mut Value, resolutions: &[(&str, &Resolution)]) {
+    value["selectors"] = json!(resolutions
+        .iter()
+        .map(|(key, resolution)| {
+            (
+                (*key).to_string(),
+                json!({
+                    "matched_by": resolution.matched_by.as_str(),
+                    "alternatives": resolution
+                        .alternatives
+                        .iter()
+                        .map(shapes::entity)
+                        .collect::<Vec<_>>(),
+                }),
+            )
+        })
+        .collect::<serde_json::Map<String, Value>>());
 }
 
 fn direction(target: &Target) -> Result<Direction, ApiError> {

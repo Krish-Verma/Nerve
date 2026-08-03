@@ -879,3 +879,138 @@ fn impact_is_deterministic() {
         assert_eq!(session.json("/api/impact?subject=add"), first);
     }
 }
+
+// ---- selector resolution by entity kind (Slice 8b-i) -----------------------------------------
+
+/// A traversal-shaped selector is **refused** on this surface, not reported as a miss.
+///
+/// Until Slice 8b-i the check existed only on the MCP surface, so `GET /api/why?subject=..%2F..`
+/// answered 404 "matches no indexed entity" — asserting a check the HTTP path never ran. The
+/// decision is now `nerve_store::selector_shape`'s and all three surfaces share it.
+#[test]
+fn a_traversal_selector_is_refused_by_the_http_surface_too() {
+    let (_dir, _root, session) = common::served();
+    for selector in [
+        "..%2F..%2Fetc%2Fpasswd",
+        "%2Fetc%2Fpasswd",
+        ".%2F..%2Fx",
+        "file:%2Fetc%2Fpasswd",
+        // Backslash forms, which reached the store as ordinary names before this slice.
+        "..%5C..%5Cwindows",
+        "a%5C..%5Cb",
+    ] {
+        let response = session.get(&format!("/api/why?subject={selector}"));
+        assert_eq!(response.status, 400, "{selector}: {}", response.body);
+        let value = response.parse_json();
+        assert_eq!(value["error"]["code"], "refused_selector", "{selector}");
+        assert_eq!(
+            value["error"]["detail"]["reason"], "path_refused",
+            "{selector}"
+        );
+        assert!(
+            !response.body.contains("root:"),
+            "{selector} leaked content"
+        );
+    }
+}
+
+/// A legal relative path is **not refused** — it is looked for, and missed honestly.
+///
+/// `./src/math.ts` means `src/math.ts`, but Nerve stores the canonical form and this slice adds
+/// no path normalisation, so the selector matches nothing. That is a *miss*, and the suggestion
+/// list names the entity the caller meant. What it must never be is a refusal claiming the
+/// selector tried to leave the repository root, which is what Slice 8a's check said.
+#[test]
+fn a_leading_dot_segment_is_missed_rather_than_refused() {
+    let (_dir, _root, session) = common::served();
+    let response = session.get("/api/why?subject=.%2Fsrc%2Fmath.ts");
+    assert_eq!(response.status, 404, "{}", response.body);
+    let value = response.parse_json();
+    assert_eq!(value["error"]["code"], "selector_not_found");
+    assert_ne!(value["error"]["code"], "refused_selector");
+    let suggestions = value["error"]["detail"]["suggestions"].as_array().unwrap();
+    assert!(
+        suggestions.iter().any(|hit| hit["name"] == "math"),
+        "{suggestions:?}"
+    );
+}
+
+/// A malformed selector is its own refusal, distinct from a search that found nothing.
+#[test]
+fn an_invalid_selector_is_four_hundred_and_a_miss_is_still_four_oh_four() {
+    let (_dir, _root, session) = common::served();
+
+    let bad = session.get("/api/why?subject=banana:foo");
+    assert_eq!(bad.status, 400, "{}", bad.body);
+    let value = bad.parse_json();
+    assert_eq!(value["error"]["code"], "invalid_selector");
+    assert_eq!(value["error"]["detail"]["reason"], "unknown_qualifier");
+    let accepted = value["error"]["detail"]["accepted_qualifiers"]
+        .as_array()
+        .expect("the refusal must name the vocabulary it applied");
+    assert!(accepted.iter().any(|value| value == "symbol"));
+    assert!(accepted.iter().any(|value| value == "module"));
+
+    // A well-formed selector that matches nothing keeps its 404 and its suggestions.
+    let miss = session.get("/api/why?subject=nosuchthingatall");
+    assert_eq!(miss.status, 404, "{}", miss.body);
+    assert_eq!(miss.parse_json()["error"]["code"], "selector_not_found");
+}
+
+/// A path with two readings resolves by rule, and the answer says which one and what it passed
+/// over — rather than leaving a caller to infer from silence that a choice was made.
+#[test]
+fn a_source_path_reports_the_file_the_module_was_chosen_over() {
+    let (_dir, _root, session) = common::served();
+    let value = session.json("/api/why?subject=src%2Fmath.ts");
+    assert_eq!(value["subject"]["kind"], "module");
+
+    let selector = &value["selectors"]["subject"];
+    assert_eq!(selector["matched_by"], "path");
+    let alternatives = selector["alternatives"].as_array().unwrap();
+    assert_eq!(alternatives.len(), 1, "{alternatives:?}");
+    assert_eq!(alternatives[0]["kind"], "file");
+
+    // And the string the caller would have to type to get that one instead does work.
+    let file = session.json("/api/why?subject=file:src%2Fmath.ts");
+    assert_eq!(file["subject"]["kind"], "file");
+    assert_eq!(file["subject"]["entity_id"], alternatives[0]["entity_id"]);
+    assert!(file["selectors"]["subject"]["alternatives"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+/// A qualifier that excludes everything at a path says what is there instead.
+#[test]
+fn a_wrong_qualifier_is_a_miss_that_names_what_it_excluded() {
+    let (_dir, _root, session) = common::served();
+    let response = session.get("/api/why?subject=document:src%2Fmath.ts");
+    assert_eq!(response.status, 404, "{}", response.body);
+    let detail = &response.parse_json()["error"]["detail"];
+    assert_eq!(detail["qualifier"], "document");
+    let excluded = detail["excluded"].as_array().unwrap();
+    assert!(
+        excluded.iter().any(|entity| entity["kind"] == "module"),
+        "{excluded:?}"
+    );
+}
+
+/// Two selectors, two entries, each naming its own parameter.
+#[test]
+fn every_resolved_parameter_is_reported_under_its_own_name() {
+    let (_dir, _root, session) = common::served();
+    let value = session.json("/api/path?from=src%2Fmath.ts&to=add");
+    let selectors = value["selectors"].as_object().unwrap();
+    assert_eq!(selectors.len(), 2, "{selectors:?}");
+    assert_eq!(selectors["from"]["matched_by"], "path");
+    assert_eq!(selectors["to"]["matched_by"], "name");
+    assert!(!selectors["from"]["alternatives"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(selectors["to"]["alternatives"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
