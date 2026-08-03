@@ -258,6 +258,22 @@ enum Command {
         #[arg(long, default_value_t = nerve_server::DEFAULT_WORKERS)]
         workers: usize,
     },
+    /// Speak the Model Context Protocol on stdin and stdout, for an agent.
+    ///
+    /// One tool, `nerve_investigate`: the MCP counterpart of `nerve why`. Read-only, offline,
+    /// stdio only — no socket, no port, no outbound connection.
+    ///
+    /// Stdout is the protocol stream for the lifetime of the process, so nothing else is
+    /// written to it. Responses are bounded and say when they were cut, and every value that
+    /// came out of the repository is returned inside a field labelled untrusted content, so the
+    /// consuming agent can apply its own policy to it (THREAT-MODEL T7 and T8).
+    Mcp {
+        /// Repository root. Defaults to the current directory.
+        path: Option<PathBuf>,
+        /// Repository root. Equivalent to the positional form.
+        #[arg(long = "path", value_name = "PATH")]
+        path_flag: Option<PathBuf>,
+    },
     /// Show the evidence behind a relationship.
     Why {
         /// Subject selector: entity id, rel/path.ts, rel/path.ts#Name, or a unique name.
@@ -475,6 +491,10 @@ fn main() {
             path.or(path_flag).unwrap_or_else(|| PathBuf::from(".")),
             port,
             workers,
+        ),
+        Command::Mcp { path, path_flag } => run_mcp(
+            &output,
+            &path.or(path_flag).unwrap_or_else(|| PathBuf::from(".")),
         ),
         Command::Why {
             from,
@@ -2524,6 +2544,31 @@ fn run_serve(output: &Output, root: PathBuf, port: u16, workers: usize) -> i32 {
     server.join();
     output.line("Stopped.");
     exit::SUCCESS
+}
+
+// ---- mcp -----------------------------------------------------------------------------------
+
+/// Speak MCP on stdin and stdout until the client closes the stream.
+///
+/// **Stdout belongs to the protocol.** Nothing is printed there while the session runs: not a
+/// banner, not a `--json` summary, not a progress line. A stray line would desynchronise the
+/// client's parser, and a client that cannot parse the stream cannot report why.
+///
+/// A failure to open the index is reported the way every other command reports one, before the
+/// loop starts and therefore before anything has been framed. There is no signal handler here
+/// and none is wanted: the session ends when its stdin ends, which is how a stdio server is
+/// supposed to stop, and the connection is read-only so there is nothing to unwind.
+fn run_mcp(output: &Output, path: &Path) -> i32 {
+    let mut session = match nerve_server::mcp::McpSession::open(path) {
+        Ok(session) => session,
+        Err(err) => return output.failure("mcp", serve_exit_code(&err), &err.to_string()),
+    };
+    match nerve_server::mcp::serve_stdio(&mut session) {
+        Ok(()) => exit::SUCCESS,
+        // A broken pipe is the client hanging up, which is how these sessions usually end.
+        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => exit::SUCCESS,
+        Err(err) => output.failure("mcp", exit::INTERNAL, &err.to_string()),
+    }
 }
 
 /// Turn SIGINT and SIGTERM into a graceful stop.

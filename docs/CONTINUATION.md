@@ -8,22 +8,22 @@
 
 | | |
 |---|---|
-| **Last slice commit** | `e91909f` — `feat: Slice 7c-ii — nerve doctor, which has to work when everything else does not`. A docs commit may sit on top; `git log --oneline -3` is authoritative. |
+| **Last slice commit** | Slice 8a — `feat: Slice 8a — MCP over stdio`. `git log --oneline -3` is authoritative; a docs commit records the hash. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 7c-ii** — `nerve doctor`. **Slice 7 is now complete.** |
-| **Next slice** | **Slice 8 — MCP.** One default investigation tool. **T7 + T8 gate.** Then 9–14, validation. |
-| **Roadmap status** | **INCOMPLETE.** 8–14 and real-world validation not started. |
+| **Last completed slice** | **Slice 8a** — MCP over stdio, one tool, T7 + T8 satisfied |
+| **Next slice** | **Slice 8b** — the rest of the MCP tool surface, inside the envelope 8a secured. Then 9–14, validation. |
+| **Roadmap status** | **INCOMPLETE.** 8b, 9–14 and real-world validation not started. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
 
-## Verification state at the Slice 7c-ii commit
+## Verification state at the Slice 8a commit
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace                                  → 821 passed, 0 failed, 2 ignored
+cargo test --workspace                                  → 862 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
 ```
 
@@ -181,6 +181,42 @@ empty, so `schema_version` fires), `.nerve` as a file, `nerve.db` as a directory
 symlinked to `/etc/passwd` — refused with no content disclosed.** Orchestrator mutation probe
 (synthesise a complete migration list) failed 3 tests.
 
+## What Slice 8a delivered
+
+**`nerve mcp`** — stdio JSON-RPC 2.0, `initialize` / `notifications/initialized` / `ping` /
+`tools/list` / `tools/call`, and **one** tool, `nerve_investigate`, the MCP counterpart of
+`nerve why`. **Zero new crates**: framing hand-rolled on `serde_json`, because 4a already measured
+the async-runtime trade and a single-client stdio loop needs it even less. `Cargo.lock` untouched,
+still 100 crates.
+
+**T7 is structural, not annotational.** Every repository-derived value lives under one
+`repository_content` key; beside it sit only Nerve's vocabulary, integers, and `query` (the
+caller's own echoed arguments, which the trust block names explicitly rather than mislabelling).
+The label is carried three ways, and — the reason for one field rather than per-span markers — it
+can be tested as a **property**: a test walks the whole response and asserts no string inside the
+field appears outside it.
+
+**Three independent response bounds**: row cap, per-assertion observation cap (with the true total
+still reported, so a caller sees "20 of 90" rather than believing there were 20), and a 128 KiB
+ceiling measured on the *pretty-printed text a client reads*. The ceiling is the backstop the row
+cap cannot be: one pathological `details` blob defeats a row cap. Cutting from the end keeps the
+page a prefix so continuation stays exact, and the degenerate case is named — a single oversized
+record yields `continuable: false` rather than an offset that advances by zero and loops forever.
+
+**A traversal-shaped selector is refused as a refusal**, never disguised as "not found" (T2's
+rule). The implementer deliberately did not route it through `discover::canonical_child`, and the
+orchestrator verified why: `discover.rs:96` maps a `canonicalize` failure to `PathEscapesRoot`, so
+a merely-nonexistent path is indistinguishable from an escape and legal bare-name selectors would
+be refused.
+
+**What the orchestrator's own T7 test taught.** Injection text placed in a Markdown *body* came
+back **absent entirely** — Nerve stores ranges and hashes, never source text, so body prose never
+enters the graph. The real vector is a **heading**, which becomes an entity name. Re-run that way,
+the string appeared 7 times and **every occurrence was inside a labelled region. Zero leaks.**
+
+Three mutation probes: removing an output bound, removing the trust block (5 tests, 3 targets),
+and — the orchestrator's — disabling the traversal pre-check (3 tests).
+
 ---
 
 ## The interface is frozen (2026-08-02)
@@ -202,7 +238,7 @@ across `types.ts` and `App.tsx:144`) are the model.
 
 | | |
 |---|---|
-| **8** | **Next.** MCP — one default investigation tool. **T7 + T8 gate** (`docs/THREAT-MODEL.md`). |
+| **8b** | **Next.** The rest of the MCP tool surface — `search`, `path`, `impact`, `gaps`, each earning its place on a materially-different-contract test. The T7/T8 envelope already exists and is tested; each tool must be shown to stay inside it. |
 | 7c | `nerve check` (CI exit codes) + `nerve doctor` (diagnostics). |
 | 8 | MCP — one default investigation tool. **T7 + T8 gate.** |
 | 9 | Python |
@@ -324,6 +360,15 @@ recorded in `docs/plans/slice-15-real-world-validation.md`.
   correspondence. Found during 7a-iii, deliberately left.
 - **The CLI↔API agreement-test boilerplate is duplicated twice** (`gaps`, `overview`) — roughly 35
   lines of spawn/`Reaper` each. A third such test should hoist it into the shared harness.
+- **A document path does not resolve as a selector.** `resolve_selector` stage 2 maps `<rel_path>`
+  to the `Module` entity for that file, so `docs/foo.md` returns `selector_not_found` with
+  suggestions rather than reaching the `Document` entity. Pre-existing `nerve-store` behaviour,
+  identical through `nerve why`, `/api/why` and MCP. **Slice 8b must confront this if it exposes
+  document evidence.**
+- **MCP materialises the full `why` report before bounding it.** Bounded by repository size exactly
+  as `nerve why` and `/api/why` already are; the *response* is bounded, which is the security
+  property. Pushing a limit into `nerve_store::explain` would change all three surfaces and belongs
+  in its own slice.
 - **`nerve doctor` reports a `nerve.db` that is a *directory* as "is missing".** The verdict (fatal,
   exit 2) and the remedy are right; the sentence is not, and `nerve_dir` gets the analogous case
   right ("exists but is not a directory"). Cosmetic, but it is a diagnostic tool saying something

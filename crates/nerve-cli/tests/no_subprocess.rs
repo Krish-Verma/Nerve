@@ -223,4 +223,38 @@ fn indexing_a_repository_never_executes_its_contents() {
         !marker.exists(),
         "repository content executed during indexing — THREAT-MODEL T1 violated"
     );
+
+    // `mcp` is in the loop too, and separately, because it is the one command whose *caller* is
+    // an agent that may itself have been prompt-injected by this very repository (A4). It reads
+    // the same hostile tree, through the same reader, and must run nothing either.
+    let mut child = Command::new(binary)
+        .args(["mcp", path])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("nerve mcp must run");
+    {
+        use std::io::Write;
+        let stdin = child.stdin.as_mut().expect("stdin is piped");
+        for message in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nerve_investigate","arguments":{"selector":"src/evil.ts"}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"nerve_investigate","arguments":{"selector":"looksHarmless"}}}"#,
+        ] {
+            stdin.write_all(message.as_bytes()).unwrap();
+            stdin.write_all(b"\n").unwrap();
+        }
+    }
+    let session = child.wait_with_output().expect("nerve mcp must finish");
+    assert!(
+        !String::from_utf8_lossy(&session.stdout).is_empty(),
+        "the session must actually have answered, or this proves nothing"
+    );
+
+    assert!(
+        !marker.exists(),
+        "repository content executed while serving MCP — THREAT-MODEL T1 violated"
+    );
 }

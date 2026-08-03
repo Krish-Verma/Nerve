@@ -1,10 +1,16 @@
-//! Nerve's local HTTP surface.
+//! Nerve's machine-facing surfaces: a local HTTP server, and MCP over stdio.
 //!
 //! A **loopback-only, single-user, read-only** server that makes the evidence graph explorable
-//! from a browser. It is a surface, not a layer: every question it answers is answered by
-//! calling the same `nerve-store` and `nerve-index` functions the CLI calls
-//! (ARCHITECTURE.md invariant 3). If an endpoint needed a query that did not exist, the query
-//! was added to `nerve-store`; none of it lives here.
+//! from a browser, plus [`mcp`], which answers the same questions for an agent over stdin and
+//! stdout. Both are surfaces, not layers: every question either answers is answered by calling
+//! the same `nerve-store` and `nerve-index` functions the CLI calls (ARCHITECTURE.md invariant
+//! 3). If an endpoint needed a query that did not exist, the query was added to `nerve-store`;
+//! none of it lives here.
+//!
+//! The two share [`api`] and [`shapes`] rather than describing the graph twice, so a client
+//! cannot be told one thing over HTTP and a different thing over MCP. [`mcp`] adds only what is
+//! specific to talking to an agent: JSON-RPC framing, argument validation, response bounds and
+//! the untrusted-content label (THREAT-MODEL T7 and T8). It opens no socket and binds no port.
 //!
 //! ## Why there is no async runtime here
 //!
@@ -42,6 +48,7 @@ pub mod api;
 pub mod assets;
 pub mod error;
 pub mod guard;
+pub mod mcp;
 pub mod request;
 pub mod respond;
 pub mod router;

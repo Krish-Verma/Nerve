@@ -2830,3 +2830,101 @@ fn doctor_writes_nothing_to_the_database() {
         "the database bytes must be identical"
     );
 }
+
+// ---- mcp -------------------------------------------------------------------------------------
+
+/// Drive `nerve mcp` as a real client does: one JSON message per line on the child's stdin.
+///
+/// The in-process tests in `nerve-server` cover the protocol exhaustively. This one exists to
+/// prove the *binary* wires it up — that stdout carries the protocol and nothing else, that no
+/// banner or `--json` summary is interleaved with it, and that the process exits cleanly when
+/// its input ends.
+fn mcp_session(root: &Path, messages: &[&str]) -> (Vec<serde_json::Value>, Output) {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new(binary())
+        .args(["mcp", root.to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("nerve mcp must start");
+    {
+        let stdin = child.stdin.as_mut().expect("stdin is piped");
+        for message in messages {
+            stdin.write_all(message.as_bytes()).unwrap();
+            stdin.write_all(b"\n").unwrap();
+        }
+    }
+    let output = child.wait_with_output().expect("nerve mcp must finish");
+    let text = String::from_utf8(output.stdout.clone()).expect("stdout must be UTF-8");
+    let responses = text
+        .lines()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|err| panic!("not JSON ({err}): {line}"))
+        })
+        .collect();
+    (responses, output)
+}
+
+#[test]
+fn mcp_answers_a_real_client_transcript_on_stdio() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    let before = database_digest(&root);
+
+    let (responses, output) = mcp_session(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli-test","version":"1"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nerve_investigate","arguments":{"selector":"src/shapes.ts#Circle.area"}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"nerve_investigate","arguments":{"selector":"../../etc/passwd"}}}"#,
+        ],
+    );
+
+    assert_eq!(code(&output), 0);
+    // Five messages in, four responses out: `notifications/initialized` is never answered.
+    assert_eq!(responses.len(), 4, "{responses:#?}");
+    assert_eq!(
+        responses
+            .iter()
+            .map(|r| r["id"].clone())
+            .collect::<Vec<_>>(),
+        vec![
+            serde_json::json!(1),
+            serde_json::json!(2),
+            serde_json::json!(3),
+            serde_json::json!(4)
+        ]
+    );
+    assert_eq!(responses[0]["result"]["serverInfo"]["name"], "nerve");
+    assert_eq!(responses[1]["result"]["tools"].as_array().unwrap().len(), 1);
+    let answer = &responses[2]["result"];
+    assert_eq!(answer["isError"], false);
+    assert_eq!(
+        answer["structuredContent"]["trust"]["repository_content_is_untrusted"],
+        true
+    );
+    assert_eq!(responses[3]["error"]["data"]["reason"], "path_refused");
+
+    // Nothing but the protocol reached stdout, and the session wrote nothing to the index.
+    assert!(
+        String::from_utf8(output.stderr).unwrap().is_empty(),
+        "nerve mcp must be silent on stderr in a successful session"
+    );
+    assert_eq!(database_digest(&root), before);
+}
+
+#[test]
+fn mcp_refuses_an_unindexed_directory_before_it_frames_anything() {
+    let dir = tempfile::tempdir().unwrap();
+    let (responses, output) = mcp_session(
+        dir.path(),
+        &[r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#],
+    );
+    assert_eq!(code(&output), 2);
+    assert!(responses.is_empty(), "{responses:#?}");
+    assert!(String::from_utf8(output.stderr).unwrap().contains("mcp"));
+}

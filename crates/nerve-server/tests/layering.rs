@@ -8,12 +8,17 @@
 //! The check mirrors `crates/nerve-cli/tests/cli.rs`. It is deliberately crude: a grep that
 //! fails loudly is worth more than a convention nobody rechecks.
 
-const SOURCES: [(&str, &str); 9] = [
+const SOURCES: [(&str, &str); 11] = [
     ("lib.rs", include_str!("../src/lib.rs")),
     ("api.rs", include_str!("../src/api.rs")),
     ("assets.rs", include_str!("../src/assets.rs")),
     ("error.rs", include_str!("../src/error.rs")),
     ("guard.rs", include_str!("../src/guard.rs")),
+    ("mcp.rs", include_str!("../src/mcp.rs")),
+    (
+        "mcp/investigate.rs",
+        include_str!("../src/mcp/investigate.rs"),
+    ),
     ("request.rs", include_str!("../src/request.rs")),
     ("respond.rs", include_str!("../src/respond.rs")),
     ("router.rs", include_str!("../src/router.rs")),
