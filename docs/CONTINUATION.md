@@ -11,8 +11,8 @@
 | **Last slice commit** | **Slice 11a-i** (`871aef3`) — the hostile-fixture gaps closed. Since then: the acceptance package, the T9 restatement, UI Entry 5, the validation-plan extension, and the 11b and 12a plans. `git log --oneline -10` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 11a + 11a-i** — trace ingestion, with every hostile artifact's declared refusal now asserted per artifact. **Row 11 is not complete: 11b, the reference Python tracer, is not built.** |
-| **Next action** | **Slice 11b** — the reference Python tracer (`tracers/python/nerve_trace/`, `sys.monitoring` with a `sys.settrace` fallback), a real pytest end-to-end run, and the criterion that no argument or return value is *capturable*. Then 12a/12b, 13, 14, validation, acceptance, audit. |
+| **Last completed slice** | **Slice 11b** — the reference Python tracer. **Row 11 is complete**: ingestion (11a), the corrective slice (11a-i) and the producer (11b). |
+| **Next action** | **Slice 12a** — Git object access. The plan is written and decides everything: `docs/plans/slice-12a-git-object-access.md`, with the dependency question already settled in `docs/plans/slice-12-git-object-access-analysis.md`. Then 12b, 13, 14, validation execution, the final audit. |
 | **Roadmap status** | **INCOMPLETE.** 11a landed with gaps; 11b, 12–14, real-world validation, the acceptance package and the final audit are not done. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
@@ -48,8 +48,11 @@ no repair. See `docs/reports/restart-recovery-report.md`.
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace --no-fail-fast                   → 1169 passed, 0 failed, 2 ignored
+cargo test --workspace --no-fail-fast                   → 1179 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
+python3 -m unittest discover -s tracers/python          → 115 tests, OK (skipped=1)
+scripts/trace_python_e2e.sh                             → all checks passed (needs pytest; ran)
+scripts/final_acceptance.sh                             → 34 passed, 0 failed, 1 skipped
 ```
 
 `Cargo.lock` is at **101** packages and Slice 10 added none.

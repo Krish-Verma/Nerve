@@ -99,10 +99,14 @@ what it cannot automate reads as though nothing were missing.
 ## 4. Last recorded result
 
 ```
-passed  34
+passed  35
 failed  0
-skipped 1     no Rust source references the trace producer — tracers/ did not exist yet
+skipped 0
 ```
 
-The skip is the honest kind: the check has nothing to examine until Slice 11b lands, and it says so
-rather than passing on an absent directory.
+The previous run was `34 passed, 0 failed, 1 skipped` — the skip being *"no Rust source references
+the trace producer"*, which had nothing to examine because `tracers/` did not exist yet. It said so
+rather than passing on an absent directory, and Slice 11b turned it into a real check.
+
+**`docs/ROADMAP.md` rows 12a, 12b, 13 and 14 are still not done**, and neither is the real-world
+validation run or the final audit. A green run here means what is built works.
