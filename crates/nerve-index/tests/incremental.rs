@@ -1982,19 +1982,27 @@ fn a_single_file_edit_costs_a_fraction_of_a_full_index() {
 /// plus one Python module written in here rather than committed into the fixture, so that every
 /// extractor fires on one tree without changing what `documents.rs` measures over the same
 /// corpus.
+///
+/// The module has to contain a *call*, not just a definition: Slice 9b added `py-reference`, and
+/// a Python file with no reference site in it makes that extractor write nothing, which would
+/// leave the equality below failing for a reason that has nothing to do with withdrawal.
 #[test]
 fn every_extractor_an_index_run_writes_is_one_it_also_withdraws() {
     let (_dir, root) = named_fixture_copy("md-docs");
     write(
         &root,
         "src/tool.py",
-        "\"\"\"One Python module, so `py-structural` writes something here too.\"\"\"\n\
+        "\"\"\"One Python module, so both Python extractors write something here too.\"\"\"\n\
          \n\
          import os\n\
          \n\
          \n\
+         def scale(value):\n\
+         \x20   return value * 2\n\
+         \n\
+         \n\
          def run(value):\n\
-         \x20   return value\n",
+         \x20   return scale(value)\n",
     );
     nerve_index::init_with_project_id(&root, Some(TEST_PROJECT_ID)).unwrap();
     index(&root);

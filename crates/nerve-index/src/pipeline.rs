@@ -4,22 +4,29 @@
 //! be byte-identical across runs, and an ordered parallel merge is a later slice — introducing
 //! it alongside deletion and invalidation would confound two new causes of divergence.
 //!
-//! Five extractors run per index, each with its own `extractor_run` row and its own batch
+//! Six extractors run per index, each with its own `extractor_run` row and its own batch
 //! verified against its own declared source types. Keeping them separate is what makes a
 //! `DELETE FROM observation WHERE extractor_id = 'ts-js-reference'` a complete retraction of
 //! everything resolution claimed, with the structural graph untouched.
 //!
-//! # Python (Slice 9a)
+//! # Python (Slices 9a and 9b)
 //!
-//! `py-structural` is the fifth, and it is a separate extractor rather than a branch inside
-//! `ts-js-structural` for the reason 5d-i established: an observation names what produced it, so
-//! a Python fact must never claim a TypeScript extractor read it. The split is total —
-//! [`crate::lang::Language::is_ts_js`] and [`crate::lang::Language::is_python`] partition the
-//! code files, a Python file never reaches [`crate::extract`] or [`crate::refs`], and a TS/JS
-//! file never reaches [`crate::pystruct`]. Python specifier resolution is
-//! [`crate::pyresolve`], which shares nothing with [`crate::resolve`] but its discipline: a
-//! specifier resolves only to a file that is in the index, and everything else is an
-//! `Unresolved` value with a reason.
+//! `py-structural` and `py-reference` are separate extractors rather than branches inside
+//! `ts-js-structural` / `ts-js-reference` for the reason 5d-i established: an observation names
+//! what produced it, so a Python fact must never claim a TypeScript extractor read it. The split
+//! is total — [`crate::lang::Language::is_ts_js`] and [`crate::lang::Language::is_python`]
+//! partition the code files, a Python file never reaches [`crate::extract`] or [`crate::refs`],
+//! and a TS/JS file never reaches [`crate::pystruct`] or [`crate::pyrefs`]. Python specifier
+//! resolution is [`crate::pyresolve`], which shares nothing with [`crate::resolve`] but its
+//! discipline: a specifier resolves only to a file that is in the index, and everything else is
+//! an `Unresolved` value with a reason.
+//!
+//! The two languages' cross-module views are also separate. [`crate::exports::ExportIndex`]
+//! answers "what does this module export?" for TypeScript; [`crate::pysurface::PySurfaceIndex`]
+//! answers "what does this module provide at top level, and which class declares which method?"
+//! for Python. Both are built from the **whole** repository — freshly parsed modules for the
+//! invalidation set, cached facts for everything else — because a chain in one file can reach a
+//! declaration in any other and that has to keep working when the other file was not re-parsed.
 //!
 //! # Filesystem structure (Slice 5d-i)
 //!
@@ -125,8 +132,10 @@ use crate::fsstruct::{self, FsEntry};
 use crate::gitinfo;
 use crate::incremental::{self, MoveCandidate, PreviousModule};
 use crate::lang::{path_is_document, path_is_python, FileKind, Language, MARKDOWN_LANGUAGE};
+use crate::pyrefs::{self, PyRefTarget, PyReferenceExtraction};
 use crate::pyresolve;
 use crate::pystruct::{self, PyImportForm, PyImportSite, PyModuleExtraction};
+use crate::pysurface::{PyModuleSurface, PySurfaceIndex};
 use crate::refs::{self, RefTarget, ReferenceExtraction};
 use crate::resolve;
 
@@ -136,11 +145,12 @@ use crate::resolve;
 /// `coverage` is deliberately absent: it is ingested by a separate, explicitly invoked command
 /// (`docs/plans/slice-06-test-evidence.md` §A.4), and an index run neither produces nor replaces
 /// it. The list is used exactly once, at the withdrawal in [`index_repository_with`].
-pub const INDEX_EXTRACTOR_IDS: [&str; 5] = [
+pub const INDEX_EXTRACTOR_IDS: [&str; 6] = [
     fsstruct::EXTRACTOR_ID,
     EXTRACTOR_ID,
     refs::EXTRACTOR_ID,
     pystruct::EXTRACTOR_ID,
+    pyrefs::EXTRACTOR_ID,
     docs::EXTRACTOR_ID,
 ];
 
@@ -847,6 +857,38 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         );
     }
 
+    // Python's cross-module view, built over the whole corpus for the same reason the export
+    // closure is: `from pkg import Engine` reaches `pkg/core.py` through `pkg/__init__.py`, and
+    // that chain must resolve identically whether or not this run re-parsed the package init.
+    // A TypeScript module contributes nothing here, and a Python module contributes nothing to
+    // `export_index` — the two indexes are disjoint by construction, not by filtering.
+    let python_surfaces: Vec<PyModuleSurface> = loaded
+        .iter()
+        .filter(|file| file.language().is_some_and(Language::is_python))
+        .map(|file| match python_extractions.get(&file.rel_path) {
+            Some(extraction) => PyModuleSurface::from_extraction(extraction),
+            None => cached_facts(&previous, &file.rel_path).as_python_surface(&file.rel_path),
+        })
+        .collect();
+    let python_surface_index = PySurfaceIndex::build(python_surfaces, &indexed);
+
+    let mut python_reference_extractions: BTreeMap<String, PyReferenceExtraction> = BTreeMap::new();
+    for file in &loaded {
+        let Some(extraction) = python_extractions.get(&file.rel_path) else {
+            continue;
+        };
+        python_reference_extractions.insert(
+            file.rel_path.clone(),
+            pyrefs::extract_references(
+                &config.project_id,
+                &file.rel_path,
+                &file.source,
+                extraction,
+                &python_surface_index,
+            )?,
+        );
+    }
+
     // ---- whole-repository view, from fresh work plus cache -------------------------------
     //
     // Reported totals describe the repository, not the fraction of it this run touched, so the
@@ -855,9 +897,14 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     for file in &loaded {
         let facts = match document_extractions.get(&file.rel_path) {
             Some(extraction) => ModuleFacts::from_document(extraction),
-            None => match python_extractions.get(&file.rel_path) {
-                Some(extraction) => ModuleFacts::from_python(extraction, &file.source),
-                None => match (
+            None => match (
+                python_extractions.get(&file.rel_path),
+                python_reference_extractions.get(&file.rel_path),
+            ) {
+                (Some(extraction), Some(references)) => {
+                    ModuleFacts::from_python(extraction, references, &file.source)
+                }
+                _ => match (
                     extractions.get(&file.rel_path),
                     reference_extractions.get(&file.rel_path),
                 ) {
@@ -968,6 +1015,19 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     let python_batch = build_python_graph(&config.project_id, &python_targets, &indexed)?;
     python_batch
         .verify_declared_source_types(pystruct::EXTRACTOR_ID, &pystruct::DECLARED_SOURCE_TYPES)?;
+
+    let python_reference_targets: Vec<(&LoadedFile, &PyReferenceExtraction)> = loaded
+        .iter()
+        .filter_map(|file| {
+            python_reference_extractions
+                .get(&file.rel_path)
+                .map(|extraction| (file, extraction))
+        })
+        .collect();
+    let python_reference_batch =
+        build_python_reference_graph(&config.project_id, &python_reference_targets);
+    python_reference_batch
+        .verify_declared_source_types(pyrefs::EXTRACTOR_ID, &pyrefs::DECLARED_SOURCE_TYPES)?;
 
     let reference_targets: Vec<(&LoadedFile, &ReferenceExtraction)> = loaded
         .iter()
@@ -1214,7 +1274,32 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
             status.as_str(),
         )?;
 
-        // `md-structural` runs unconditionally, exactly as the other three do. A run over a
+        // `py-reference` sits after `py-structural` exactly as `ts-js-reference` sits after
+        // `ts-js-structural`: every target it resolves to is an entity the structural batch
+        // created, and only the `Unresolved` entities are its own.
+        let python_reference_run = nerve_store::begin_extractor_run(
+            &tx,
+            &repo_id,
+            &state_id,
+            pyrefs::EXTRACTOR_ID,
+            pyrefs::EXTRACTOR_VERSION,
+        )?;
+        rows_written += nerve_store::persist_batch(
+            &tx,
+            &repo_id,
+            python_reference_run,
+            &python_reference_batch,
+            &mut touched,
+        )?;
+        nerve_store::finish_extractor_run(
+            &tx,
+            python_reference_run,
+            python_loaded as i64,
+            python_failed as i64,
+            status.as_str(),
+        )?;
+
+        // `md-structural` runs unconditionally, exactly as the others do. A run over a
         // repository with no documents records that Nerve looked and found none, which is a
         // fact; making the row conditional on content would make its absence ambiguous.
         let document_run = nerve_store::begin_extractor_run(
@@ -1268,16 +1353,16 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
                 .get(&file.rel_path)
                 .cloned()
                 .unwrap_or_default();
-            // A row records the versions of the extractors that actually produced it, in both
-            // columns when one extractor produced the whole entry. A document is `md-structural`
-            // twice over and a Python module is `py-structural` twice over, so a bump to a TS/JS
-            // extractor must not invalidate every README or every `.py` file, and a bump to
-            // `py-structural` must invalidate exactly the Python ones.
+            // A row records the versions of the extractors that actually produced it. A document
+            // is `md-structural` twice over, so its two columns are the same; a Python module has
+            // two extractors of its own, exactly as a TypeScript one does. That is what makes a
+            // bump to a TS/JS extractor leave every `.py` file alone, and a bump to either Python
+            // extractor invalidate exactly the Python ones.
             // `load_previous_modules` reads the columns back through the same rule.
             let (structural_version, reference_version) = if file.kind.is_doc() {
                 (docs::EXTRACTOR_VERSION, docs::EXTRACTOR_VERSION)
             } else if file.language().is_some_and(Language::is_python) {
-                (pystruct::EXTRACTOR_VERSION, pystruct::EXTRACTOR_VERSION)
+                (pystruct::EXTRACTOR_VERSION, pyrefs::EXTRACTOR_VERSION)
             } else {
                 (EXTRACTOR_VERSION, refs::EXTRACTOR_VERSION)
             };
@@ -1405,11 +1490,11 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
 /// re-extracted.
 ///
 /// The versions compared depend on which extractor owns the row. A document is produced entirely
-/// by `md-structural` and a Python module entirely by `py-structural`, so bumping a TypeScript
-/// extractor must not re-scan either, and bumping `py-structural` must re-scan every `.py` file
-/// and nothing else. The row says which it is, through the `language` column and the path —
-/// both, so that a row rewritten by hand cannot smuggle a document or a Python module past the
-/// TS/JS version check.
+/// by `md-structural`, and a Python module by `py-structural` plus `py-reference`, so bumping a
+/// TypeScript extractor must not re-scan either, and bumping either Python extractor must re-scan
+/// every `.py` file and nothing else. The row says which it is, through the `language` column and
+/// the path — both, so that a row rewritten by hand cannot smuggle a document or a Python module
+/// past the TS/JS version check.
 fn load_previous_modules(
     conn: &nerve_store::Connection,
     repo_id: &str,
@@ -1425,7 +1510,7 @@ fn load_previous_modules(
                 && row.reference_version == docs::EXTRACTOR_VERSION
         } else if is_python {
             row.structural_version == pystruct::EXTRACTOR_VERSION
-                && row.reference_version == pystruct::EXTRACTOR_VERSION
+                && row.reference_version == pyrefs::EXTRACTOR_VERSION
         } else {
             row.structural_version == EXTRACTOR_VERSION
                 && row.reference_version == refs::EXTRACTOR_VERSION
@@ -2174,6 +2259,72 @@ fn build_python_graph(
     }
 
     Ok(builder.batch)
+}
+
+/// Turn Python reference sites into assertions and observations.
+///
+/// A **separate batch under a separate extractor run**, exactly as `ts-js-reference` is. It
+/// creates no symbol entities — every resolved target already exists in the `py-structural`
+/// batch — and only the `Unresolved` entities it names itself.
+///
+/// `CALLS`, `REFERENCES` and `EXTENDS`. **Never `IMPLEMENTS`**: Python has no `implements`
+/// keyword, so a base list states inheritance and nothing else.
+fn build_python_reference_graph(
+    project_id: &str,
+    targets: &[(&LoadedFile, &PyReferenceExtraction)],
+) -> GraphBatch {
+    let mut builder = GraphBuilder::new(pyrefs::EXTRACTOR_ID, pyrefs::EXTRACTOR_VERSION);
+
+    for (file, extraction) in targets.iter().copied() {
+        let rel_path = file.rel_path.as_str();
+        let hash = file.content_hash.as_str();
+
+        for site in &extraction.sites {
+            let (target, evidence) = match &site.target {
+                PyRefTarget::Resolved(entity_id) => (entity_id.clone(), Evidence::RESOLVED),
+                PyRefTarget::Unresolved { name, reason } => {
+                    // `Value` covers it: the closed vocabulary's own gloss is "a value or type
+                    // name that no binding in scope could resolve", which is what a callee or a
+                    // base class Nerve could not name is. No member was needed.
+                    let entity_id =
+                        ids::unresolved_id(project_id, rel_path, UnresolvedCategory::Value, name);
+                    builder.add_entity(EntityRecord {
+                        entity_id: entity_id.clone(),
+                        kind: EntityKind::Unresolved,
+                        name: name.clone(),
+                        scope_path: rel_path.to_string(),
+                        language: None,
+                        meta: Some(
+                            serde_json::json!({
+                                "category": UnresolvedCategory::Value.as_str(),
+                                "importer": rel_path,
+                                "raw_specifier": serde_json::Value::Null,
+                                // The first reason recorded for this name in this file. Each
+                                // individual site carries its own reason in observation details.
+                                "reason": reason.as_str(),
+                            })
+                            .to_string(),
+                        ),
+                    });
+                    builder.add_occurrence(&entity_id, rel_path, site.span, hash);
+                    (entity_id, Evidence::DIRECT)
+                }
+            };
+
+            builder.claim(
+                &site.source_entity_id,
+                site.relation,
+                &target,
+                evidence,
+                rel_path,
+                site.span,
+                hash,
+                site.details.clone(),
+            );
+        }
+    }
+
+    builder.batch
 }
 
 /// Turn resolved reference sites into assertions and observations.

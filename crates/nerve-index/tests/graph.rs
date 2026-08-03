@@ -308,10 +308,10 @@ fn evidence_source_types_distinguish_read_from_resolved() {
 
 /// Every extractor is recorded, each with its own run row and version.
 ///
-/// `md-structural` and `py-structural` run even though `ts-basic` holds neither documents nor
-/// Python: the rows say Nerve looked and found none, which is a fact. A row that appeared only
-/// when a matching file existed would make its absence ambiguous between "none here" and "never
-/// looked for".
+/// `md-structural`, `py-structural` and `py-reference` run even though `ts-basic` holds neither
+/// documents nor Python: the rows say Nerve looked and found none, which is a fact. A row that
+/// appeared only when a matching file existed would make its absence ambiguous between "none
+/// here" and "never looked for".
 ///
 /// `fs-structural` is first, and the order is load-bearing rather than cosmetic: it owns the
 /// `File` entity that the extractors which do read files hang their occurrences off.
@@ -331,7 +331,14 @@ fn every_extractor_run_is_recorded_per_index() {
             ("fs-structural".to_string(), "1.0.0".to_string()),
             ("ts-js-structural".to_string(), "1.1.0".to_string()),
             ("ts-js-reference".to_string(), "1.0.0".to_string()),
-            ("py-structural".to_string(), "1.0.0".to_string()),
+            (
+                "py-structural".to_string(),
+                nerve_index::PYTHON_EXTRACTOR_VERSION.to_string()
+            ),
+            (
+                "py-reference".to_string(),
+                nerve_index::PYTHON_REFERENCE_EXTRACTOR_VERSION.to_string()
+            ),
             ("md-structural".to_string(), "1.2.0".to_string()),
         ]
     );
@@ -355,6 +362,7 @@ fn every_extractor_run_is_recorded_per_index() {
     for (extractor, why) in [
         ("md-structural", "ts-basic has no documents"),
         ("py-structural", "ts-basic has no Python"),
+        ("py-reference", "ts-basic has no Python"),
     ] {
         assert_eq!(
             report

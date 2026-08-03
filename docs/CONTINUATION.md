@@ -8,22 +8,22 @@
 
 | | |
 |---|---|
-| **Last slice commit** | `4e53d82` — `feat: Slice 9a — Python structure, and an import site that makes two claims`. A docs commit may sit on top; `git log --oneline -3` is authoritative. |
+| **Last slice commit** | Slice 9b — `feat: Slice 9b — Python references`. Hash recorded by the follow-up docs commit; `git log --oneline -3` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 9a** — Python structure (`py-structural`) |
-| **Next slice** | **Slice 9b** — `py-reference` with its own precision gate. Then 10–14, validation, final audit. |
-| **Roadmap status** | **INCOMPLETE.** 9b, 10–14 and real-world validation not started. |
+| **Last completed slice** | **Slice 9b** — Python references (`py-reference`). **Row 9 complete.** |
+| **Next slice** | **Slice 10 — Framework rules.** Then 11–14, validation, final audit. |
+| **Roadmap status** | **INCOMPLETE.** 10–14 and real-world validation not started. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
 
-## Verification state at the Slice 9a commit
+## Verification state at the Slice 9b commit
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace --no-fail-fast                   → 1012 passed, 0 failed, 2 ignored
+cargo test --workspace --no-fail-fast                   → 1058 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
 ```
 
@@ -239,12 +239,11 @@ across `types.ts` and `App.tsx:144`) are the model.
 
 ## Remaining roadmap
 
-Rows 1–8 are **complete** and no longer listed here; `docs/ROADMAP.md` is authoritative.
+Rows 1–9 are **complete** and no longer listed here; `docs/ROADMAP.md` is authoritative.
 
 | | |
 |---|---|
-| **9** | **Next.** Python. **`tree-sitter-python 0.25.0`, MIT, matches the workspace `tree-sitter = "0.25"` — checked 2026-08-02.** Do **not** use `tree-sitter-stack-graphs-python`: stack-graphs is a code-navigation engine and CLAUDE.md §1 forbids depending on a competing code-intelligence engine. Bare grammar only, as TS/JS does it. Follow `resolve.rs`'s precedent: relative and in-repo absolute imports resolve, everything dynamic is recorded as `Unresolved` rather than guessed. |
-| 10 | Framework rules |
+| **10** | **Next.** Framework rules — routes, events, DI. **9a records decorators as structural metadata on the decorated symbol and 9b walks a decorator's *arguments* but emits no call edge for the decorator itself** — that metadata is this slice's input. Heuristic rules must stay explicitly heuristic and out of conservative evidence policies by default. |
 | 11 | Test call tracing. **T9 gate.** |
 | 12 | Git history / temporal layer |
 | 13 | Cross-repository contracts |

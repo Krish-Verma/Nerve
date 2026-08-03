@@ -1,8 +1,8 @@
 //! Nerve indexing pipeline.
 //!
 //! Discovery and ignore rules, path safety, tree-sitter parsing, the `fs-structural`,
-//! `ts-js-structural`, `ts-js-reference`, `py-structural`, `md-structural` and `coverage`
-//! extractors, lexical binding, export closure, specifier
+//! `ts-js-structural`, `ts-js-reference`, `py-structural`, `py-reference`, `md-structural` and
+//! `coverage` extractors, lexical binding, export closure, specifier
 //! resolution, a hand-written Markdown block scanner, the `init` / `index` / `coverage`
 //! application entry points, and the query-time file prober that gives `nerve why` its freshness
 //! answer without loosening any of those path rules.
@@ -45,8 +45,11 @@ pub mod lang;
 pub mod markdown;
 pub mod pipeline;
 pub mod probe;
+pub mod pybind;
+pub mod pyrefs;
 pub mod pyresolve;
 pub mod pystruct;
+pub mod pysurface;
 pub mod refs;
 pub mod resolve;
 
@@ -65,7 +68,10 @@ pub use docs::{
 pub use error::{IndexError, Result};
 pub use exports::ExportIndex;
 pub use extract::{extract_module, ModuleExtraction, EXTRACTOR_ID, EXTRACTOR_VERSION};
-pub use facts::{CachedCounters, CachedReExport, CachedSymbol, DocumentCounters, ModuleFacts};
+pub use facts::{
+    CachedCounters, CachedPyMethod, CachedPyRebind, CachedReExport, CachedSymbol, DocumentCounters,
+    ModuleFacts, PythonFacts,
+};
 pub use fsstruct::{
     FsEntry, EXTRACTOR_ID as FILESYSTEM_EXTRACTOR_ID,
     EXTRACTOR_VERSION as FILESYSTEM_EXTRACTOR_VERSION,
@@ -88,11 +94,18 @@ pub use pipeline::{
     RunStatus, INDEX_EXTRACTOR_IDS,
 };
 pub use probe::{RepositoryProber, SourceSnippet, MAX_SNIPPET_BYTES, MAX_SNIPPET_LINES};
+pub use pybind::{PyBinding, PyBindingTable, PyScopeKind};
+pub use pyrefs::{
+    extract_references as extract_python_references, PyRefTarget, PyReferenceExtraction,
+    PyReferenceSite, PyUnresolvedReason, EXTRACTOR_ID as PYTHON_REFERENCE_EXTRACTOR_ID,
+    EXTRACTOR_VERSION as PYTHON_REFERENCE_EXTRACTOR_VERSION, PY_UNMODELLED_FORMS,
+};
 pub use pystruct::{
     extract_module as extract_python_module, AllDeclaration, PyImportForm, PyImportSite,
     PyModuleExtraction, PySymbol, EXTRACTOR_ID as PYTHON_EXTRACTOR_ID,
     EXTRACTOR_VERSION as PYTHON_EXTRACTOR_VERSION,
 };
+pub use pysurface::{PyModuleSurface, PySurfaceIndex};
 pub use refs::{
     extract_references, RefTarget, ReferenceExtraction, ReferenceSite, UnresolvedReason,
     EXTRACTOR_ID as REFERENCE_EXTRACTOR_ID, EXTRACTOR_VERSION as REFERENCE_EXTRACTOR_VERSION,

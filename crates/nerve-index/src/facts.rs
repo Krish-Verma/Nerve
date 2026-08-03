@@ -140,6 +140,51 @@ pub struct DocumentCounters {
     pub supersession: Vec<CachedSupersession>,
 }
 
+/// A module-scope `from X import Y [as Z]` binding, kept unresolved.
+///
+/// The Python counterpart of [`CachedReExport`], and kept for the same reason: what a specifier
+/// resolves to changes when the file set changes, without the module itself changing at all.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedPyRebind {
+    /// Name bound in the importing module.
+    pub local: String,
+    /// Specifier exactly as written, leading dots included.
+    pub specifier: String,
+    /// Name in the imported module.
+    pub imported: String,
+}
+
+/// A method, with the class entity that declares it.
+///
+/// [`CachedSymbol`] records a `scope_path` but not an owner, and reconstructing the owning class
+/// from the scope path means re-deriving disambiguators and unwrapping `<local:…>` tokens. The
+/// owner is the thing `py-reference` actually needs, so it is what is stored.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedPyMethod {
+    /// Entity id of the declaring class.
+    pub class_entity_id: String,
+    /// Method name.
+    pub name: String,
+    /// Entity id of the method.
+    pub entity_id: String,
+}
+
+/// What an unchanged **Python** module must remember so another Python module can be
+/// re-extracted without re-parsing it.
+///
+/// Empty for TypeScript and for documents, by construction rather than by omission: nothing here
+/// has a meaning outside `py-reference`, and feeding it to `ts-js-reference` would give
+/// TypeScript Python's answers.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PythonFacts {
+    /// Whether the module rewrites `sys.path`, which poisons its own absolute specifiers.
+    pub sys_path_mutated: bool,
+    /// Module-scope unconditional `from X import Y [as Z]` bindings, in source order.
+    pub rebinds: Vec<CachedPyRebind>,
+    /// Methods this module declares, with their owning class.
+    pub methods: Vec<CachedPyMethod>,
+}
+
 /// Everything an unchanged module must remember for another module to be re-extracted.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModuleFacts {
@@ -159,6 +204,14 @@ pub struct ModuleFacts {
     /// payload is a cache miss, and a cache miss re-extracts the whole repository for nothing.
     #[serde(default)]
     pub document: DocumentCounters,
+    /// Per-Python-module facts. Empty for TypeScript and for documents.
+    ///
+    /// `serde(default)` for the same reason, and `py-structural` was bumped to 1.1.0 when this
+    /// field arrived: the cache row it writes gained content, and a Slice 9a payload deserialised
+    /// with an empty `python` would silently stop a package `__init__` re-export from being
+    /// followed.
+    #[serde(default)]
+    pub python: PythonFacts,
 }
 
 impl ModuleFacts {
@@ -167,8 +220,9 @@ impl ModuleFacts {
     /// `exports` and `re_exports` stay empty, and that is a statement rather than a gap: they
     /// exist to feed [`crate::exports::ExportIndex`], which answers "which module declares the
     /// symbol behind this name?" for `ts-js-reference` — an extractor that never sees a `.py`
-    /// file. Slice 9b's `py-reference` will need an index of its own with Python's scoping rules
-    /// in it, and reusing this one would give Python TypeScript's answers.
+    /// file. Python's own equivalent is [`ModuleFacts::python`], read back by
+    /// [`ModuleFacts::as_python_surface`]; reusing the TypeScript one would give Python
+    /// TypeScript's answers.
     ///
     /// `import_specifiers` **is** filled, because it is what [`crate::incremental::classify`]
     /// re-resolves when the file set moves: adding `pkg/mod.py` can make a previously unresolved
@@ -176,6 +230,7 @@ impl ModuleFacts {
     /// to the new file for the graph walk to follow.
     pub fn from_python(
         extraction: &crate::pystruct::PyModuleExtraction,
+        references: &crate::pyrefs::PyReferenceExtraction,
         source: &str,
     ) -> ModuleFacts {
         let import_specifiers: BTreeSet<String> = extraction
@@ -186,6 +241,8 @@ impl ModuleFacts {
             .filter(|import| !import.raw_specifier.is_empty())
             .map(|import| import.raw_specifier.clone())
             .collect();
+
+        let surface = crate::pysurface::PyModuleSurface::from_extraction(extraction);
 
         ModuleFacts {
             import_specifiers: import_specifiers.into_iter().collect(),
@@ -202,10 +259,70 @@ impl ModuleFacts {
                 .collect(),
             counters: CachedCounters {
                 has_syntax_error: extraction.has_syntax_error,
+                unmodelled_call_sites: references.unmodelled_call_sites,
+                unmodelled_by_form: references.unmodelled_by_form.clone(),
                 ..CachedCounters::default()
+            },
+            python: PythonFacts {
+                sys_path_mutated: surface.sys_path_mutated,
+                rebinds: surface
+                    .rebinds
+                    .iter()
+                    .map(|(local, (specifier, imported))| CachedPyRebind {
+                        local: local.clone(),
+                        specifier: specifier.clone(),
+                        imported: imported.clone(),
+                    })
+                    .collect(),
+                methods: surface
+                    .methods
+                    .iter()
+                    .map(|((class_entity_id, name), entity_id)| CachedPyMethod {
+                        class_entity_id: class_entity_id.clone(),
+                        name: name.clone(),
+                        entity_id: entity_id.clone(),
+                    })
+                    .collect(),
             },
             ..ModuleFacts::default()
         }
+    }
+
+    /// Rebuild a Python module's cross-module surface from the cache.
+    ///
+    /// The counterpart of [`as_export_source`](ModuleFacts::as_export_source): a module this run
+    /// did not re-parse must still be able to answer "what do you provide under this name?", or
+    /// an incremental index would produce a different graph from a full one.
+    pub fn as_python_surface(&self, rel_path: &str) -> crate::pysurface::PyModuleSurface {
+        let mut surface = crate::pysurface::PyModuleSurface {
+            rel_path: rel_path.to_string(),
+            sys_path_mutated: self.python.sys_path_mutated,
+            ..crate::pysurface::PyModuleSurface::default()
+        };
+        for symbol in &self.symbols {
+            if symbol.scope_path.is_empty() {
+                surface
+                    .defines
+                    .entry(symbol.name.clone())
+                    .or_insert_with(|| symbol.entity_id.clone());
+            }
+            if symbol.kind == EntityKind::Class.as_str() {
+                surface.classes.insert(symbol.entity_id.clone());
+            }
+        }
+        for rebind in &self.python.rebinds {
+            surface
+                .rebinds
+                .entry(rebind.local.clone())
+                .or_insert_with(|| (rebind.specifier.clone(), rebind.imported.clone()));
+        }
+        for method in &self.python.methods {
+            surface
+                .methods
+                .entry((method.class_entity_id.clone(), method.name.clone()))
+                .or_insert_with(|| method.entity_id.clone());
+        }
+        surface
     }
 
     /// The cache entry for a document. It imports nothing and exports nothing, so every
@@ -365,6 +482,9 @@ impl ModuleFacts {
                 unmodelled_by_form: references.unmodelled_by_form.clone(),
             },
             document: DocumentCounters::default(),
+            // Empty by construction: a TypeScript module contributes nothing to Python's
+            // cross-module view, and `py-reference` never sees a `.ts` file.
+            python: PythonFacts::default(),
         }
     }
 

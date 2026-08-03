@@ -60,7 +60,13 @@ use crate::pyresolve::PACKAGE_INIT;
 pub const EXTRACTOR_ID: &str = "py-structural";
 
 /// Version of the extractor. Bump on any change to what it emits.
-pub const EXTRACTOR_VERSION: &str = "1.0.0";
+///
+/// 1.1.0 (Slice 9b): the extraction cache row this extractor writes gained
+/// [`crate::facts::PythonFacts`] — the module-scope re-export bindings and the class-member map
+/// that `py-reference` reads for a module this run did not re-parse. The graph it emits is
+/// unchanged; the bump is what forces an existing index to rebuild rows that predate the field,
+/// which would otherwise silently stop a package `__init__` re-export from being followed.
+pub const EXTRACTOR_VERSION: &str = "1.1.0";
 
 /// The evidence source types this extractor is permitted to emit (ADR-0003).
 ///

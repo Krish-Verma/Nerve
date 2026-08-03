@@ -379,26 +379,41 @@ fn every_json_output_parses_and_carries_its_required_keys() {
     );
     assert_eq!(status["last_run"]["extractor_id"], "md-structural");
 
-    // Every run for the current state is reported, not only the last.
+    // Every run for the current state is reported, not only the last. The count is derived from
+    // the withdrawal list rather than written out, so adding an extractor cannot make this test
+    // fail for a reason that has nothing to do with what it is checking.
     let runs = status["runs"].as_array().unwrap();
-    assert_eq!(runs.len(), 5, "one run per extractor");
+    assert_eq!(
+        runs.len(),
+        nerve_index::INDEX_EXTRACTOR_IDS.len(),
+        "one run per extractor"
+    );
     assert_eq!(runs[0]["extractor_id"], "fs-structural");
     assert_eq!(runs[0]["extractor_version"], "1.0.0");
     assert_eq!(runs[1]["extractor_id"], "ts-js-structural");
     assert_eq!(runs[1]["extractor_version"], "1.1.0");
     assert_eq!(runs[2]["extractor_id"], "ts-js-reference");
     assert_eq!(runs[2]["extractor_version"], "1.0.0");
-    // Slice 9a. The row is here in a repository with no Python in it, exactly as
-    // `md-structural`'s is in one with no documents: it records that Nerve looked.
+    // Slices 9a and 9b. Both rows are here in a repository with no Python in it, exactly as
+    // `md-structural`'s is in one with no documents: they record that Nerve looked.
     assert_eq!(runs[3]["extractor_id"], "py-structural");
-    assert_eq!(runs[3]["extractor_version"], "1.0.0");
+    assert_eq!(
+        runs[3]["extractor_version"],
+        nerve_index::PYTHON_EXTRACTOR_VERSION
+    );
     assert_eq!(runs[3]["files_processed"], 0);
-    assert_eq!(runs[4]["extractor_id"], "md-structural");
+    assert_eq!(runs[4]["extractor_id"], "py-reference");
+    assert_eq!(
+        runs[4]["extractor_version"],
+        nerve_index::PYTHON_REFERENCE_EXTRACTOR_VERSION
+    );
+    assert_eq!(runs[4]["files_processed"], 0);
+    assert_eq!(runs[5]["extractor_id"], "md-structural");
     // Slice 5d-ii: `SUPERSEDES` edges from the four explicit supersession fields. The version
     // moved with the behaviour and in the same commit as it, because that is what makes every
     // document re-scan once on this build rather than keep a graph the current rules would not
     // produce.
-    assert_eq!(runs[4]["extractor_version"], "1.2.0");
+    assert_eq!(runs[5]["extractor_version"], "1.2.0");
     require_keys(&runs[0], &["run_id", "state_id", "status"]);
 
     let search = json(&run(&["search", "area", "--path", root, "--json"]));
@@ -1868,9 +1883,20 @@ fn the_impact_caveat_appears_even_when_nothing_is_unresolved() {
         "the account is unconditional: {text}"
     );
     assert!(
-        text.contains("no\n  failed resolution is hiding a dependency")
-            || text.contains("failed resolution is hiding a dependency"),
+        text.contains("No reference site under those relations failed to resolve"),
         "the zero case says so in words: {text}"
+    );
+    // Slice 9b. The zero case must state a count of *failed resolutions* and must not read as a
+    // coverage claim. Before 9b it said "every reference site Nerve indexed under those relations
+    // resolved", which was vacuously true in a repository that indexed no reference site at all —
+    // every Python repository, until `py-reference` existed.
+    assert!(
+        text.contains("not of coverage"),
+        "the zero case must disclaim coverage, not imply it: {text}"
+    );
+    assert!(
+        !text.contains("Every reference site"),
+        "the zero case must not claim every site resolved: {text}"
     );
 
     let value = json(&run(&["impact", "add", "--path", path, "--json"]));

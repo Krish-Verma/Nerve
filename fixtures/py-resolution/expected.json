@@ -1,0 +1,86 @@
+{
+  "_format": {
+    "purpose": "Ground truth for the Slice 9b precision harness (crates/nerve-index/tests/py_precision.rs). Written before py-reference existed, as fixtures/ts-resolution/expected.json and fixtures/py-basic/expected.json were. See README.md.",
+    "selector": "<rel_path>#<qualified_name>, where qualified_name is scope_path.name (or just name at module top level). <rel_path> on its own names that file's Module entity.",
+    "resolved": "Every AST_RESOLVED CALLS/REFERENCES/EXTENDS edge the corpus must contain, and the only ones it may contain. A missing one is a false negative and fails the gate; an extra one is a false positive and fails the gate.",
+    "unresolved": "Every edge to an Unresolved entity, and the only ones there may be. target_name is the Unresolved entity's name; reason is py-reference's recorded reason.",
+    "forbidden": "Edges that must not exist in any form, resolved or unresolved. Each is the plausible wrong answer for a negative fixture.",
+    "known_false_negatives": "Edges a semantically complete resolver would produce and Nerve deliberately does not. Each must be ABSENT: observing one means the refusal was lifted and the entry belongs in `resolved` instead. These are what the FN column of the printed table counts, so the number is measured rather than asserted to be zero.",
+    "unmodelled_call_sites": "Call and base-class shapes whose form is not modelled. Counted, never guessed.",
+    "no_implements": "There is no IMPLEMENTS section and there never will be. Python has no `implements` keyword; `class Abstract(ABC)` states inheritance, and EXTENDS is what the syntax states."
+  },
+
+  "resolved": [
+    { "from": "pkg/util.py#normalize", "relation": "CALLS", "to": "pkg/util.py#scale", "note": "same-module call" },
+    { "from": "pkg/core.py#Engine.start", "relation": "CALLS", "to": "pkg/util.py#scale", "note": "relative from-import, called inside a method" },
+    { "from": "pkg/core.py#Engine.make", "relation": "CALLS", "to": "pkg/core.py#Engine", "note": "the class name in value position inside one of its own methods" },
+    { "from": "pkg/core.py#Turbo.boost", "relation": "CALLS", "to": "pkg/core.py#Engine.start", "note": "explicit class receiver; the class declares the method" },
+    { "from": "app.py", "relation": "CALLS", "to": "pkg/util.py#scale", "note": "module-level call site; the source is the Module entity" },
+    { "from": "app.py#direct", "relation": "CALLS", "to": "pkg/util.py#scale", "note": "from pkg.util import scale" },
+    { "from": "app.py#via_dotted_module", "relation": "CALLS", "to": "pkg/util.py#scale", "note": "import pkg.util binds pkg; pkg.util is the longest indexed prefix" },
+    { "from": "app.py#via_module_alias", "relation": "CALLS", "to": "pkg/core.py#Engine", "note": "import pkg.core as core" },
+    { "from": "app.py#via_package_re_export", "relation": "CALLS", "to": "pkg/core.py#Engine", "note": "pkg/__init__.py binds Engine from .core, so pkg.Engine is pkg.core.Engine" },
+    { "from": "negative.py#Scoped.use", "relation": "CALLS", "to": "negative.py#helper", "note": "a class body is not an enclosing scope for its methods, so the module function wins" },
+    { "from": "scoping.py#comprehension_body_reaches_outward", "relation": "CALLS", "to": "pkg/util.py#scale", "note": "a comprehension body reaches outward for names it does not bind" },
+    { "from": "scoping.py#rebinds_a_global", "relation": "CALLS", "to": "scoping.py#target", "note": "`global target` keeps the name module-scoped despite the assignment below it" },
+    { "from": "scoping.py#outer", "relation": "CALLS", "to": "scoping.py#outer.replace", "note": "a nested def is a binding in the enclosing function scope" },
+    { "from": "scoping.py#outer.replace", "relation": "CALLS", "to": "scoping.py#outer.helper", "note": "`nonlocal helper` binds the enclosing function's name despite the assignment below it" },
+    { "from": "unmodelled.py#Computed", "relation": "CALLS", "to": "unmodelled.py#make_base", "note": "the base is computed, but the call that computes it is real" },
+
+    { "from": "app.py", "relation": "REFERENCES", "to": "pkg/util.py#scale", "note": "module-level value-position reference" },
+    { "from": "app.py#via_package_re_export", "relation": "REFERENCES", "to": "pkg/core.py#Engine", "note": "return annotation" },
+    { "from": "app.py#annotated", "relation": "REFERENCES", "to": "pkg/core.py#Engine", "note": "parameter and return annotation" },
+    { "from": "negative.py#call_other_start", "relation": "REFERENCES", "to": "negative.py#Other", "note": "the annotation is a reference; it is not a licence to resolve the call" },
+    { "from": "pkg/core.py#Engine.ratio", "relation": "REFERENCES", "to": "pkg/util.py#scale", "note": "value-position reference inside a method" },
+    { "from": "unmodelled.py#make_base", "relation": "REFERENCES", "to": "pkg/core.py#Engine", "note": "a class returned by value" },
+    { "from": "unmodelled.py#Boxed", "relation": "REFERENCES", "to": "pkg/core.py#Engine", "note": "the head of a subscripted base is still referenced, even though the base is not modelled" },
+
+    { "from": "pkg/core.py#Turbo", "relation": "EXTENDS", "to": "pkg/core.py#Engine", "note": "local base" },
+    { "from": "app.py#Derived", "relation": "EXTENDS", "to": "pkg/core.py#Engine", "note": "base named through a module alias" },
+    { "from": "unmodelled.py#Rocket", "relation": "EXTENDS", "to": "pkg/core.py#Engine", "note": "imported base" }
+  ],
+
+  "unresolved": [
+    { "from": "pkg/core.py#Engine.restart", "relation": "CALLS", "target_name": "self.start", "reason": "receiver-not-resolvable" },
+    { "from": "pkg/core.py#Engine.ratio", "relation": "CALLS", "target_name": "doubler", "reason": "local-binding-not-a-symbol" },
+    { "from": "negative.py#shadowed_by_parameter", "relation": "CALLS", "target_name": "scale", "reason": "local-binding-not-a-symbol" },
+    { "from": "negative.py#call_other_start", "relation": "CALLS", "target_name": "other.start", "reason": "receiver-not-resolvable" },
+    { "from": "negative.py#inherited_member", "relation": "CALLS", "target_name": "Turbo.start", "reason": "method-not-declared-on-class" },
+    { "from": "unmodelled.py#Rocket.go", "relation": "CALLS", "target_name": "factory", "reason": "local-binding-not-a-symbol" },
+    { "from": "wildcard.py#use_wildcard", "relation": "CALLS", "target_name": "scale", "reason": "name-not-in-scope" },
+    { "from": "external.py#Abstract.encode", "relation": "CALLS", "target_name": "dumps", "reason": "import-module-unresolved" },
+    { "from": "external.py#encode_via_module", "relation": "CALLS", "target_name": "json.dumps", "reason": "import-module-unresolved" },
+    { "from": "external.py#call_missing", "relation": "CALLS", "target_name": "missing", "reason": "import-name-not-exported" },
+    { "from": "external.py#report", "relation": "CALLS", "target_name": "print", "reason": "name-not-in-scope" },
+    { "from": "external.py#Abstract", "relation": "EXTENDS", "target_name": "ABC", "reason": "import-module-unresolved" }
+  ],
+
+  "forbidden": [
+    { "from": "negative.py#shadowed_by_parameter", "relation": "CALLS", "to": "pkg/util.py#scale", "why": "a parameter shadows the import" },
+    { "from": "negative.py#shadowed_by_local", "relation": "REFERENCES", "to": "pkg/util.py#scale", "why": "a local of the same name shadows the import" },
+    { "from": "negative.py#assigned_anywhere_is_local", "relation": "REFERENCES", "to": "pkg/util.py#scale", "why": "Python binds a name for the whole function body, not from the assignment onwards" },
+    { "from": "negative.py#call_other_start", "relation": "CALLS", "to": "negative.py#Other.start", "why": "an annotation is not a type inference licence" },
+    { "from": "negative.py#call_other_start", "relation": "CALLS", "to": "pkg/core.py#Engine.start", "why": "a same-named attribute on a different class" },
+    { "from": "negative.py#Scoped", "relation": "REFERENCES", "to": "negative.py#helper", "why": "in the class body itself the class attribute shadows the module function" },
+    { "from": "scoping.py#comprehension_binds_its_own_name", "relation": "REFERENCES", "to": "scoping.py#target", "why": "the comprehension variable shadows the module function inside the comprehension" },
+    { "from": "unmodelled.py#Computed", "relation": "EXTENDS", "to": "pkg/core.py#Engine", "why": "a computed base is not the class the computing function happens to return" },
+    { "from": "unmodelled.py#Boxed", "relation": "EXTENDS", "to": "pkg/core.py#Engine", "why": "a subscripted base is a runtime call, not an erased type argument to be stripped" }
+  ],
+
+  "known_false_negatives": [
+    { "from": "wildcard.py#use_wildcard", "relation": "CALLS", "to": "pkg/util.py#scale", "why": "what `from pkg.util import *` binds lives in the imported module's runtime namespace. Slice 9a records the binding set as unknowable, and 9b does not contradict it." },
+    { "from": "pkg/core.py#Engine.restart", "relation": "CALLS", "to": "pkg/core.py#Engine.start", "why": "`self` is a parameter name, not a language keyword. Reading it as the enclosing class would be type inference by convention, and a subclass instance is what is usually passed." },
+    { "from": "negative.py#inherited_member", "relation": "CALLS", "to": "pkg/core.py#Engine.start", "why": "`Turbo.start` is inherited. Walking the MRO to find the declaration stops being a syntax fact as soon as one base is unresolved." }
+  ],
+
+  "unmodelled_call_sites": 8,
+  "unmodelled_by_form": {
+    "call-result": 1,
+    "computed-member": 1,
+    "dynamic-import": 2,
+    "heritage-call": 1,
+    "heritage-other": 1,
+    "iife": 1,
+    "super": 1
+  }
+}

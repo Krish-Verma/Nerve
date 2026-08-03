@@ -2365,8 +2365,14 @@ fn run_impact(output: &Output, path: &Path, arguments: ImpactArguments) -> i32 {
     ));
     output.line(format!("                 over {}", walked.join(", ")));
     if account.is_empty() {
-        output.line("  Every reference site Nerve indexed under those relations resolved, so no");
-        output.line("  failed resolution is hiding a dependency from this answer.");
+        // Not "every reference site resolved". Zero **failed** resolutions is what is measured,
+        // and in a repository that indexed no reference site at all the old wording was
+        // vacuously true while reading as a coverage claim — which is the one thing this block
+        // exists to avoid. A construct Nerve declines to model, or a language whose reference
+        // extractor does not exist yet, contributes nothing to either side of the count.
+        output.line("  No reference site under those relations failed to resolve. That is a count");
+        output.line("  of failed resolutions, not of coverage: a construct Nerve does not model —");
+        output.line("  or a language it does not yet resolve — contributes no site to count.");
     } else {
         output.line(format!(
             "                 {} assertion(s), {} distinct target(s) · {}",

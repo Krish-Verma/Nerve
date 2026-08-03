@@ -524,7 +524,10 @@ fn a_python_only_repository_produces_no_ts_js_observations() {
         .find(|run| run.extractor_id == "py-structural")
         .expect("py-structural must have a run row");
     assert_eq!(python_run.files_processed, 3);
-    assert_eq!(python_run.extractor_version, "1.0.0");
+    assert_eq!(
+        python_run.extractor_version,
+        nerve_index::PYTHON_EXTRACTOR_VERSION
+    );
 }
 
 /// The converse, over the TypeScript corpus: `py-structural` runs, reads nothing, and writes
