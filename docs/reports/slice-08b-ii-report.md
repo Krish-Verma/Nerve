@@ -186,7 +186,7 @@ repository. No LLM in the product path. No telemetry. No dependency. Independent
 
 ## Commit
 
-Hash recorded by the follow-up docs commit.
+`b40458d` — *feat: Slice 8b-ii — four more MCP tools, and one that stopped being needed*.
 
 ## Next slice
 

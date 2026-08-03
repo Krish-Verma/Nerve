@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| **Last slice commit** | Slice 8b-ii — `feat: Slice 8b-ii — four more MCP tools`. Hash recorded by the follow-up docs commit; `git log --oneline -3` is authoritative. |
+| **Last slice commit** | `b40458d` — `feat: Slice 8b-ii — four more MCP tools, and one that stopped being needed`. A docs commit may sit on top; `git log --oneline -3` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
 | **Last completed slice** | **Slice 8b-ii** — the rest of the MCP tool surface. **Row 8 complete.** |
