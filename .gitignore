@@ -3,3 +3,5 @@ target/
 .DS_Store
 node_modules/
 apps/nerve-web/dist/
+__pycache__/
+.pytest_cache/
