@@ -242,6 +242,11 @@ fn indexing_a_repository_never_executes_its_contents() {
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nerve_investigate","arguments":{"selector":"src/evil.ts"}}}"#,
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"nerve_investigate","arguments":{"selector":"looksHarmless"}}}"#,
+            // Every tool reads the same hostile tree through the same reader (Slice 8b-ii).
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"nerve_search","arguments":{"query":"looksHarmless"}}}"#,
+            r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"nerve_path","arguments":{"from":"src/evil.ts","to":"looksHarmless"}}}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"nerve_impact","arguments":{"selector":"looksHarmless"}}}"#,
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"nerve_gaps","arguments":{}}}"#,
         ] {
             stdin.write_all(message.as_bytes()).unwrap();
             stdin.write_all(b"\n").unwrap();

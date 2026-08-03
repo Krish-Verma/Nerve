@@ -30,8 +30,9 @@
 //!   [`nerve_store::resolve_selector`], which binds parameters and refuses ambiguity rather than
 //!   guessing, and the only inlined SQL literals anywhere below are closed compile-time
 //!   vocabularies;
-//! - **responses are bounded regardless of repository size**, with the applied caps and the
-//!   continuation offset echoed back — see [`investigate`];
+//! - **responses are bounded regardless of repository size**, with the applied caps echoed back
+//!   — every tool's own row cap, plus the 128 KiB ceiling in [`tool::fit`] measured on the
+//!   pretty-printed text a client actually reads;
 //! - malformed JSON, a batch, a bad `id`, an unknown method, a wrong type, a missing field and
 //!   an oversized payload each produce one stable JSON-RPC error object. Nothing panics, and a
 //!   response is serialized in full before a single byte is written, so a failure cannot leave a
@@ -41,9 +42,9 @@
 //! has no model in its product path, so repository text cannot alter Nerve's behaviour; what
 //! this surface adds is the **label**, so the consuming agent can apply its own policy. Every
 //! string that came out of the repository is returned inside one field —
-//! [`investigate::UNTRUSTED_CONTENT_FIELD`] — and every result carries a trust block and a
-//! leading text block saying so. Nothing in the tool description, the server instructions or any
-//! response tells the consuming model to trust repository text.
+//! [`tool::UNTRUSTED_CONTENT_FIELD`] — and every result of every tool carries a trust block and
+//! a leading text block saying so. Nothing in any tool description, the server instructions or
+//! any response tells the consuming model to trust repository text.
 //!
 //! ## Also
 //!
@@ -61,13 +62,45 @@ use nerve_store::Connection;
 use crate::api;
 use crate::error::{Result, ServerError};
 
+pub mod gaps;
+pub mod impact;
 pub mod investigate;
+pub mod path;
+pub mod search;
+pub mod tool;
 
 /// Server name reported in `initialize`.
 pub const SERVER_NAME: &str = "nerve";
 
 /// Server version reported in `initialize`.
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Every tool this server advertises, in the order `tools/list` returns them.
+///
+/// Five, and each earns its place by having a **materially different input/output contract**
+/// (`docs/plans/slice-08-mcp.md`): a selector and its evidence; a free-text query and ranked
+/// hits; two selectors and an ordered chain; one selector and a reverse closure with an
+/// unresolved account; and no selector at all, with a four-valued coverage verdict and a `totals`
+/// that is null rather than zero when nothing was measured. Anything that is `nerve_investigate`
+/// with a flag is not a tool.
+pub const TOOL_NAMES: [&str; 5] = [
+    investigate::TOOL_NAME,
+    search::TOOL_NAME,
+    path::TOOL_NAME,
+    impact::TOOL_NAME,
+    gaps::TOOL_NAME,
+];
+
+/// The `tools/list` payload.
+pub fn descriptors() -> Vec<Value> {
+    vec![
+        investigate::descriptor(),
+        search::descriptor(),
+        path::descriptor(),
+        impact::descriptor(),
+        gaps::descriptor(),
+    ]
+}
 
 /// Protocol revisions this server will speak, newest first.
 ///
@@ -485,7 +518,7 @@ fn respond(
             "initialize must be the first request on this connection",
             json!({ "method": echo(method) }),
         ),
-        "tools/list" => success(id, json!({ "tools": [investigate::descriptor()] })),
+        "tools/list" => success(id, json!({ "tools": descriptors() })),
         "tools/call" => tools_call(session, id, params),
         _ => error(
             id,
@@ -516,7 +549,11 @@ fn initialize_result(params: &Map<String, Value>) -> Value {
     })
 }
 
-/// `tools/call`: validate the envelope, run the one tool, shape the result.
+/// `tools/call`: validate the envelope, run the named tool, shape the result.
+///
+/// Dispatch is a match on a closed table of five names. A name that is not one of them is
+/// refused with the list, rather than falling through to a default tool — a client that
+/// mistypes `nerve_impact` must not silently receive an investigation.
 fn tools_call(session: &McpSession, id: Value, params: &Map<String, Value>) -> Value {
     let name = match params.get("name") {
         Some(Value::String(name)) => name.clone(),
@@ -525,12 +562,12 @@ fn tools_call(session: &McpSession, id: Value, params: &Map<String, Value>) -> V
         }
         None => return error(id, INVALID_PARAMS, "name is required", json!({})),
     };
-    if name != investigate::TOOL_NAME {
+    if !TOOL_NAMES.contains(&name.as_str()) {
         return error(
             id,
             INVALID_PARAMS,
             "unknown tool",
-            json!({ "name": echo(&name), "tools": [investigate::TOOL_NAME] }),
+            json!({ "name": echo(&name), "tools": TOOL_NAMES }),
         );
     }
     let arguments = match params.get("arguments") {
@@ -542,7 +579,18 @@ fn tools_call(session: &McpSession, id: Value, params: &Map<String, Value>) -> V
     };
 
     let ctx = session.context();
-    match investigate::call(&ctx, session.repository(), &arguments) {
+    let repository = session.repository();
+    let outcome = match name.as_str() {
+        search::TOOL_NAME => search::call(&ctx, repository, &arguments),
+        path::TOOL_NAME => path::call(&ctx, repository, &arguments),
+        impact::TOOL_NAME => impact::call(&ctx, repository, &arguments),
+        gaps::TOOL_NAME => gaps::call(&ctx, repository, &arguments),
+        // `investigate` last: the guard above means only a name from `TOOL_NAMES` reaches here,
+        // and `tests/mcp.rs::every_advertised_tool_answers_over_the_wire` drives all five so a
+        // name that was advertised but never wired up cannot pass unnoticed.
+        _ => investigate::call(&ctx, repository, &arguments),
+    };
+    match outcome {
         Ok(answer) => success(id, tool_result(&answer, false)),
         Err(ToolFailure::Refused(answer)) => success(id, tool_result(&answer, true)),
         Err(ToolFailure::InvalidArguments { message, data }) => {
@@ -560,7 +608,7 @@ fn tools_call(session: &McpSession, id: Value, params: &Map<String, Value>) -> V
 fn tool_result(answer: &ToolAnswer, is_error: bool) -> Value {
     json!({
         "content": [
-            { "type": "text", "text": investigate::UNTRUSTED_STATEMENT },
+            { "type": "text", "text": tool::UNTRUSTED_STATEMENT },
             { "type": "text", "text": answer.text },
         ],
         "structuredContent": answer.payload,
@@ -658,6 +706,122 @@ mod tests {
             initialize_result(&Map::new())["protocolVersion"],
             DEFAULT_PROTOCOL_VERSION
         );
+    }
+
+    /// Every argument every tool's parser accepts, beside the schema that advertises it.
+    ///
+    /// Four tables that must agree: `TOOL_NAMES`, the descriptor list, each descriptor's
+    /// `inputSchema`, and each parser's accepted set. A tool whose schema omits an argument its
+    /// parser accepts is a tool a client cannot use correctly; one whose schema declares an
+    /// argument the parser refuses is a tool that answers `-32602` to its own documentation.
+    fn accepted_arguments() -> Vec<(&'static str, Vec<&'static str>)> {
+        vec![
+            (
+                investigate::TOOL_NAME,
+                investigate::ACCEPTED_ARGUMENTS.into(),
+            ),
+            (search::TOOL_NAME, search::ACCEPTED_ARGUMENTS.into()),
+            (path::TOOL_NAME, path::ACCEPTED_ARGUMENTS.into()),
+            (impact::TOOL_NAME, impact::ACCEPTED_ARGUMENTS.into()),
+            (gaps::TOOL_NAME, gaps::ACCEPTED_ARGUMENTS.into()),
+        ]
+    }
+
+    #[test]
+    fn tools_list_advertises_exactly_the_five_named_tools() {
+        let descriptors = descriptors();
+        assert_eq!(descriptors.len(), TOOL_NAMES.len());
+        let names: Vec<&str> = descriptors
+            .iter()
+            .map(|descriptor| descriptor["name"].as_str().expect("a tool has a name"))
+            .collect();
+        assert_eq!(names, TOOL_NAMES.to_vec());
+        let mut unique = names.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), names.len(), "tool names must be distinct");
+        assert_eq!(
+            names,
+            accepted_arguments()
+                .iter()
+                .map(|(name, _)| *name)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Acceptance criterion 1: every descriptor states its bounds and the trust label.
+    #[test]
+    fn every_tool_descriptor_states_its_bounds_and_that_repository_content_is_untrusted() {
+        for descriptor in descriptors() {
+            let name = descriptor["name"].as_str().unwrap();
+            let description = descriptor["description"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{name} has no description"));
+            let lowered = description.to_ascii_lowercase();
+            assert!(lowered.contains("untrusted"), "{name} omits the label");
+            assert!(
+                lowered.contains("repository_content"),
+                "{name} does not name the untrusted field"
+            );
+            assert!(lowered.contains("bounded:"), "{name} omits its bounds");
+            assert!(
+                lowered.contains("128 kib"),
+                "{name} omits the answer byte ceiling"
+            );
+            assert!(
+                lowered.contains("read-only") && lowered.contains("offline"),
+                "{name} omits the posture"
+            );
+            assert!(descriptor["title"].is_string(), "{name} has no title");
+            assert_eq!(
+                descriptor["inputSchema"]["additionalProperties"], false,
+                "{name} would accept an undeclared argument"
+            );
+        }
+    }
+
+    #[test]
+    fn every_tool_schema_declares_exactly_the_arguments_its_parser_accepts() {
+        for (descriptor, (name, mut accepted)) in descriptors().iter().zip(accepted_arguments()) {
+            assert_eq!(descriptor["name"], name);
+            let properties = descriptor["inputSchema"]["properties"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{name} declares no properties"));
+            let mut declared: Vec<&str> = properties.keys().map(String::as_str).collect();
+            declared.sort_unstable();
+            accepted.sort_unstable();
+            assert_eq!(declared, accepted, "{name}");
+
+            // Everything a schema says is required must be something it declares.
+            for required in descriptor["inputSchema"]["required"].as_array().unwrap() {
+                let required = required.as_str().unwrap();
+                assert!(
+                    accepted.contains(&required),
+                    "{name} requires undeclared {required:?}"
+                );
+            }
+        }
+    }
+
+    /// T7, applied to the one text a client reads before it has any result.
+    #[test]
+    fn no_tool_description_asks_the_model_to_trust_repository_text() {
+        for descriptor in descriptors() {
+            let name = descriptor["name"].as_str().unwrap().to_string();
+            let text = serde_json::to_string(&descriptor)
+                .unwrap()
+                .to_ascii_lowercase();
+            assert!(text.contains("untrusted"), "{name}");
+            for phrase in [
+                "trust the",
+                "trusted content",
+                "you may trust",
+                "safe to trust",
+                "follow the instructions",
+            ] {
+                assert!(!text.contains(phrase), "{name} contains {phrase:?}");
+            }
+        }
     }
 
     /// Nothing this server says to a model may ask it to trust repository text.

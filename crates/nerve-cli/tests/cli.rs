@@ -2900,7 +2900,7 @@ fn mcp_answers_a_real_client_transcript_on_stdio() {
         ]
     );
     assert_eq!(responses[0]["result"]["serverInfo"]["name"], "nerve");
-    assert_eq!(responses[1]["result"]["tools"].as_array().unwrap().len(), 1);
+    assert_eq!(responses[1]["result"]["tools"].as_array().unwrap().len(), 5);
     let answer = &responses[2]["result"];
     assert_eq!(answer["isError"], false);
     assert_eq!(
@@ -2915,6 +2915,112 @@ fn mcp_answers_a_real_client_transcript_on_stdio() {
         "nerve mcp must be silent on stderr in a successful session"
     );
     assert_eq!(database_digest(&root), before);
+}
+
+/// Slice 8b-ii, acceptance criterion 2: **every** tool answers over real stdio.
+///
+/// The in-process tests in `nerve-server` drive the loop over a cursor. This drives the shipped
+/// binary, on a repository with real coverage, and checks the two answers that must not be
+/// flattened — `nerve_impact`'s unresolved account and `nerve_gaps`'s `totals` — as a client
+/// would read them off the wire.
+#[test]
+fn mcp_answers_every_tool_on_stdio_and_keeps_the_two_absences_apart() {
+    let (_dir, root) = indexed_fixture("ts-coverage");
+    let path = root.to_str().unwrap();
+    assert_eq!(code(&run(&["coverage", "coverage/lcov.info", path])), 0);
+    let before = database_digest(&root);
+
+    let (responses, output) = mcp_session(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli-test","version":"1"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nerve_search","arguments":{"query":"area OR NEAR/3 *"}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"nerve_path","arguments":{"from":"src/shapes.ts#Rectangle.perimeter","to":"src/math.ts#add"}}}"#,
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"nerve_impact","arguments":{"selector":"src/math.ts#add"}}}"#,
+            r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"nerve_gaps","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"nerve_gaps","arguments":{"under":"../../etc"}}}"#,
+        ],
+    );
+
+    assert_eq!(code(&output), 0);
+    assert_eq!(responses.len(), 7, "{responses:#?}");
+    assert_eq!(responses[1]["result"]["tools"].as_array().unwrap().len(), 5);
+
+    // An FTS5 operator-laden query is answered, not a syntax error and not a crash.
+    let search = &responses[2]["result"];
+    assert_eq!(search["isError"], false, "{search}");
+    assert_eq!(search["structuredContent"]["tool"], "nerve_search");
+    assert_eq!(
+        search["structuredContent"]["evidence"]["carries_assertions"],
+        false
+    );
+
+    // An ordered chain, hop by hop.
+    let paths = &responses[3]["result"]["structuredContent"];
+    assert_eq!(paths["tool"], "nerve_path");
+    assert_eq!(paths["evidence"]["state"], "present");
+    assert!(!paths["repository_content"]["paths"][0]["hops"][0]["relation"].is_null());
+
+    // The unresolved account, present whatever its counts.
+    let impact = &responses[4]["result"]["structuredContent"];
+    assert_eq!(impact["tool"], "nerve_impact");
+    for field in ["sites", "assertions", "targets", "by_category"] {
+        assert!(
+            !impact["evidence"]["unresolved"][field].is_null(),
+            "the unresolved account is missing {field}: {impact}"
+        );
+    }
+
+    // Coverage was ingested here, so `totals` is a tally and the state is not `coverage_absent`.
+    let gaps = &responses[5]["result"]["structuredContent"];
+    assert_eq!(gaps["tool"], "nerve_gaps");
+    assert_eq!(gaps["evidence"]["coverage"], "present");
+    assert_eq!(gaps["evidence"]["answerable"], true);
+    assert_ne!(gaps["evidence"]["state"], "coverage_absent");
+    assert!(!gaps["evidence"]["totals"]["gaps"].is_null());
+    assert_eq!(
+        gaps["evidence"]["totals_are_null_because"],
+        serde_json::Value::Null
+    );
+
+    // A traversal-shaped path prefix is refused as a refusal, on the tool that takes no selector.
+    assert_eq!(responses[6]["error"]["data"]["reason"], "path_refused");
+    assert_eq!(responses[6]["error"]["data"]["argument"], "under");
+
+    assert!(
+        String::from_utf8(output.stderr).unwrap().is_empty(),
+        "nerve mcp must be silent on stderr in a successful session"
+    );
+    assert_eq!(database_digest(&root), before);
+}
+
+/// The other half of the distinction, on a repository that never ingested coverage.
+#[test]
+fn mcp_gaps_reports_an_unmeasured_repository_as_unmeasured_and_not_as_covered() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    let (responses, output) = mcp_session(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli-test","version":"1"}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"nerve_gaps","arguments":{}}}"#,
+        ],
+    );
+    assert_eq!(code(&output), 0);
+    let gaps = &responses[1]["result"]["structuredContent"];
+    assert_eq!(responses[1]["result"]["isError"], false);
+    assert_eq!(gaps["evidence"]["state"], "coverage_absent");
+    assert_eq!(gaps["evidence"]["coverage"], "absent");
+    assert_eq!(gaps["evidence"]["answerable"], false);
+    // Null, not zero. A zero here would report an unmeasured repository as fully covered.
+    assert_eq!(gaps["evidence"]["totals"], serde_json::Value::Null);
+    assert!(gaps["evidence"]["totals"]["gaps"].is_null());
+    assert!(gaps["evidence"]["totals_are_null_because"]
+        .as_str()
+        .unwrap()
+        .contains("Null is not zero"));
+    assert_eq!(gaps["evidence"]["rows_total"], 0);
 }
 
 #[test]

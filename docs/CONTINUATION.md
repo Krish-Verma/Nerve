@@ -8,22 +8,22 @@
 
 | | |
 |---|---|
-| **Last slice commit** | `124747b` — `feat: Slice 8b-i — a path now names what is at it`. A docs commit may sit on top; `git log --oneline -3` is authoritative. |
+| **Last slice commit** | Slice 8b-ii — `feat: Slice 8b-ii — four more MCP tools`. Hash recorded by the follow-up docs commit; `git log --oneline -3` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 8b-i** — selector resolution by entity kind |
-| **Next slice** | **Slice 8b-ii** — the rest of the MCP tool surface, on a selector layer that is now correct. Then 9–14, validation. |
-| **Roadmap status** | **INCOMPLETE.** 8b-ii, 9–14 and real-world validation not started. |
+| **Last completed slice** | **Slice 8b-ii** — the rest of the MCP tool surface. **Row 8 complete.** |
+| **Next slice** | **Slice 9 — Python.** Then 10–14, validation, final audit. |
+| **Roadmap status** | **INCOMPLETE.** 9–14 and real-world validation not started. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
 
-## Verification state at the Slice 8b-i commit
+## Verification state at the Slice 8b-ii commit
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace --no-fail-fast                   → 911 passed, 0 failed, 2 ignored
+cargo test --workspace --no-fail-fast                   → 970 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
 ```
 
@@ -239,14 +239,11 @@ across `types.ts` and `App.tsx:144`) are the model.
 
 ## Remaining roadmap
 
-| | |
-|---|---|
-Rows 7c, 8a and 8b-i are **complete** and no longer listed here; `docs/ROADMAP.md` is authoritative.
+Rows 1–8 are **complete** and no longer listed here; `docs/ROADMAP.md` is authoritative.
 
 | | |
 |---|---|
-| **8b-ii** | **Next.** The rest of the MCP tool surface — `search`, `path`, `impact`, `gaps`, each earning its place on a materially-different-contract test. The T7/T8 envelope exists and is tested; each tool must be shown to stay inside it. **The selector layer is now correct** (8b-i), so document and ADR evidence is reachable — and 8b-i's T7 re-attack on the newly-reachable document surface is the pattern to repeat for each tool. |
-| 9 | Python. **`tree-sitter-python 0.25.0`, MIT, matches the workspace `tree-sitter = "0.25"` — checked 2026-08-02.** Do **not** use `tree-sitter-stack-graphs-python`: stack-graphs is a code-navigation engine and CLAUDE.md §1 forbids depending on a competing code-intelligence engine. Bare grammar only, as TS/JS does it. Follow `resolve.rs`'s precedent: relative and in-repo absolute imports resolve, everything dynamic is recorded as `Unresolved` rather than guessed. |
+| **9** | **Next.** Python. **`tree-sitter-python 0.25.0`, MIT, matches the workspace `tree-sitter = "0.25"` — checked 2026-08-02.** Do **not** use `tree-sitter-stack-graphs-python`: stack-graphs is a code-navigation engine and CLAUDE.md §1 forbids depending on a competing code-intelligence engine. Bare grammar only, as TS/JS does it. Follow `resolve.rs`'s precedent: relative and in-repo absolute imports resolve, everything dynamic is recorded as `Unresolved` rather than guessed. |
 | 10 | Framework rules |
 | 11 | Test call tracing. **T9 gate.** |
 | 12 | Git history / temporal layer |
