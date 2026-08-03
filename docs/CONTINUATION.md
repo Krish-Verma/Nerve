@@ -8,12 +8,12 @@
 
 | | |
 |---|---|
-| **Last slice commit** | **Slice 11a-i** (`871aef3`) — the hostile-fixture gaps closed. Since then: the acceptance package, the T9 restatement, UI Entry 5, the validation-plan extension, and the 11b and 12a plans. `git log --oneline -10` is authoritative. |
+| **Last slice commit** | **Slice 12a** (`e2ecb23`) — Git object access. Row 11 closed earlier in the same session (11a-i `871aef3`, 11b `dcff528`). `git log --oneline -15` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
 | **Last completed slice** | **Slice 12a** — Git object access. **Rows 1–11 and 12a are complete.** |
 | **Next action** | **Slice 12b** — the historical model on top of 12a's reader: commit entities, first/last seen, moves, rename *hypotheses* kept separate from identity links, change frequency, labelled co-change. **The storage strategy must be measured, not assumed** — duplicating the graph per commit needs proof. This is the first slice in row 12 that adds entities, a schema migration and a CLI surface, so it needs its own plan first. Then 13, 14, validation execution, the final audit. |
-| **Roadmap status** | **INCOMPLETE.** 11a landed with gaps; 11b, 12–14, real-world validation, the acceptance package and the final audit are not done. |
+| **Roadmap status** | **INCOMPLETE.** Rows 1–11 and 12a are done. **12b, 13, 14, the real-world validation run and the final backend audit are not.** The acceptance package now exists and passes 35/35, which gates what is built and is not a claim of completeness. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
@@ -22,10 +22,12 @@ no repair. See `docs/reports/restart-recovery-report.md`.
 
 | | |
 |---|---|
-| `scripts/final_acceptance.sh` | **Runnable.** Last result **34 passed, 0 failed, 1 skipped**. Distinguishes `PASS` / `FAIL` / `REFUSED` / `NOT BUILT` / `SKIPPED`, and **fails if `nerve affected` or `nerve trace-tests` ever exists** so a boundary cannot be crossed quietly |
+| `scripts/final_acceptance.sh` | **Runnable.** Last result **35 passed, 0 failed, 0 skipped**. Distinguishes `PASS` / `FAIL` / `REFUSED` / `NOT BUILT` / `SKIPPED`, and **fails if `nerve affected` or `nerve trace-tests` ever exists** so a boundary cannot be crossed quietly |
 | `docs/FINAL-ACCEPTANCE.md` | What the script gates, what it cannot, and the two refusals with their decisions named |
 | `docs/plans/slice-11b-python-tracer.md` | 11b's spec. A **pytest plugin**, not a bare tracer — `sys.monitoring` reports code objects and cannot know which test is running |
-| `docs/plans/slice-12a-git-object-access.md` | 12a's design. `.git` becomes untrusted input; four bounds, and the inflate is bounded **as it streams** |
+| `docs/plans/slice-12a-git-object-access.md` | 12a's design, **plus three corrections the implementation proved against the code** — `selector_shape` is a selector guard and the wrong tool for a filesystem path; the plan's root check cannot be passed in; and the worktree case is served by `commondir`, not alternates |
+| `crates/nerve-index/src/gitobj/` | The reader. Zero entities, zero rows, schema unchanged. `StoreLimits` is where its honesty lives: shallow, promisor, refused packs and refused alternates are **reported**, never inferred from an empty result |
+| `tracers/python/nerve_trace/` | The trace producer. **Not part of the Nerve product** — no Rust source may name it, asserted by `crates/nerve-cli/tests/no_tracer_reference.rs` and probe-verified |
 | `docs/plans/slice-15-real-world-validation.md` | Extended past its TypeScript-only corpus. Python repositories, `jedi` as oracle, and the endpoint oracle's awkward property: **it must execute repository code, which Nerve refuses to do**, and the gap between the two *is* the measurement |
 | `docs/THREAT-MODEL.md` | T9 **restated** for traces rather than extended — its control *"coverage may only produce `COVERS` — never a call edge"* cannot cover a trace, which legitimately produces one. T10's dependency count corrected 100 → 101 |
 | `docs/UI-BACKEND-HANDOFF.md` Entry 5 | Traces. Four ways a view can be wrong while looking reasonable |
@@ -43,7 +45,7 @@ no repair. See `docs/reports/restart-recovery-report.md`.
   cannot be a self-test subject for a symbol query; `apps/nerve-web` is what lets this repository index
   itself at all.
 
-## Verification state at the Slice 11a-i commit
+## Verification state at the Slice 12a commit
 
 ```
 cargo fmt --all -- --check                              → clean
@@ -56,7 +58,12 @@ scripts/final_acceptance.sh                             → 35 passed, 0 failed,
 Cargo.lock                                              → 106 packages (101 + flate2's five)
 ```
 
-`Cargo.lock` is at **101** packages and Slice 10 added none.
+`Cargo.lock` is at **106** packages. It was 101 through Slice 11b — which added none, being pure standard
+library Python — and 12a added `flate2` plus four transitive crates. The **measured** delta was +5
+against an estimated +3: `crc32fast` arrives for a gzip CRC Nerve never reads, and `simd-adler32`
+because `flate2`'s `miniz_oxide` feature turns on `miniz_oxide/simd`, which is not a `miniz_oxide`
+default. All five are pure Rust — zero `.c`/`.h`/`.cc` files, verified — and all five are recorded in
+`third_party/LICENSES.md`.
 
 **Schema is at v5.** `module_facts.framework_version` was added by 10a with `DEFAULT ''`. Any
 future extractor added to a language family needs a slot of its own — reusing one is the defect
