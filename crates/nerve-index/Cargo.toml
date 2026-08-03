@@ -11,6 +11,7 @@ description = "Nerve indexing pipeline: discovery, parsing, extraction, persiste
 nerve-core.workspace = true
 nerve-store.workspace = true
 blake3.workspace = true
+flate2.workspace = true
 ignore.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -9,7 +9,11 @@
 use std::path::{Path, PathBuf};
 
 /// Resolve the real git directory for `root`, handling worktrees where `.git` is a file.
-fn git_dir(root: &Path) -> Option<PathBuf> {
+///
+/// Public since Slice 12a: [`crate::gitobj::ObjectStore::open`] takes a resolved git directory, and
+/// this is the resolution it reuses rather than reimplementing. A linked worktree's `.git` is a file
+/// containing `gitdir: …`, and there is one correct way to read that.
+pub fn git_dir(root: &Path) -> Option<PathBuf> {
     let dot_git = root.join(".git");
     let metadata = std::fs::metadata(&dot_git).ok()?;
     if metadata.is_dir() {

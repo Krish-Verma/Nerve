@@ -103,11 +103,35 @@ repository still carrying one gets told so.
 **Multi-pack-index and commit-graph are ignored, not read.** Both are caches of what the objects
 already say. Reading them would be an optimisation whose failure mode is disagreeing with the source.
 
-**Alternates are followed exactly one hop.** `objects/info/alternates` can chain; one hop covers the
-shared-object-store worktree case that motivates the feature, and an unbounded chain is a path-traversal
-surface pointed at arbitrary directories. Each alternate goes through the **same** path guard as every
-other path Nerve reads (`nerve_store::selector_shape` and the repository root check), and one refused
-is counted rather than skipped.
+**Alternates are followed exactly one hop.** `objects/info/alternates` can chain; an unbounded chain is
+a path-traversal surface pointed at arbitrary directories. Each alternate goes through the same path
+rules Nerve applies everywhere else, and one refused is counted rather than skipped.
+
+### Three corrections the implementation proved, recorded here rather than in a footnote
+
+**1. `nerve_store::selector_shape` is the wrong guard, and this plan named it.** It is a *selector*
+guard: `select.rs:365` splits a `kind:body` qualifier off the front before applying
+`traversal_refusal` to the remainder. A filesystem path read out of `alternates` has no qualifier and
+should not be parsed as though it might. The authoritative filesystem guard is
+`discover::canonical_child` — which `docs/THREAT-MODEL.md` T2 already says outright: *"`canonical_child`
+remains the authoritative filesystem guard"*. Its rules are what apply: refuse non-UTF-8 and C0
+control characters, canonicalize, require containment.
+
+**2. This plan's "repository root check" cannot be passed in, because §2 fixes the signature as
+`open(git_dir: &Path)`** with no root parameter — and in the worktree case `git_dir` is *itself*
+outside the repository. The containment root is therefore derived as the parent of the **common** git
+directory. **Consequence, stated rather than discovered later:** a real `git clone --shared` or
+`--reference` alternate points outside that root and is therefore refused-and-counted rather than
+followed. That contradicts the claim above that one hop "covers the shared-object-store case". The
+refusal is kept, because it is the safe direction and it is *reported* through
+`StoreLimits.alternates_refused`; loosening it is one function.
+
+**3. The worktree case is served by `commondir`, not by alternates, and this plan omitted it.** A
+linked worktree's private directory (`.git/worktrees/<name>/`) holds `HEAD`, `index` and `commondir`
+and has **no `objects/` at all**. Without following `commondir` the store opens successfully and finds
+nothing — which reads as *"this repository has no history"*, the exact failure shape
+`slice-12-git-object-access-analysis.md` §3 warns about, and §5's fixture row would have passed over an
+empty store. One hop, guarded, `commondir-refused` counted.
 
 ## 5. Fixtures
 
@@ -145,6 +169,14 @@ attack that tests nothing.
 1. `flate2` with `rust_backend` added; `git diff Cargo.lock` **measured** and every added package
    recorded in `third_party/LICENSES.md` with its exact version and licence. The analysis estimated +3;
    the estimate is not the record.
+
+   **Measured: +5, and the estimate was wrong.** `101 → 106`: `flate2 1.1.9`, `miniz_oxide 0.8.9`,
+   `adler2 2.0.1`, plus two the estimate missed — `crc32fast 1.5.0`, which `flate2`'s `miniz_oxide`
+   feature enables unconditionally for gzip CRC that Nerve never reads, and `simd-adler32 0.3.10`,
+   which arrives because that feature also turns on `miniz_oxide/simd` and is **not** a `miniz_oxide`
+   default. Both are checksum crates, both pure Rust. Verified independently: zero `.c`/`.h`/`.cc`
+   files across all five, and `crc32fast`'s build script does nothing but read `rustc --version` and
+   emit one `cargo:rustc-cfg`.
 2. `default-features = false, features = ["rust_backend"]` — asserted by a test that reads
    `Cargo.toml`, because the default feature set pulls a C backend and the point is that there is no C.
 3. Every fixture row above passes, and the bomb fixture is generated from `MAX_OBJECT_BYTES`.

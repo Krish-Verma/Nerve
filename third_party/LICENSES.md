@@ -20,7 +20,7 @@ CLAUDE.md §1 ("permissively licensed foundational libraries") and nothing more.
 
 ## Licensing posture
 
-All 96 transitive dependencies are permissively licensed. Nothing is copyleft-encumbered for
+All 101 transitive dependencies are permissively licensed. Nothing is copyleft-encumbered for
 distribution purposes:
 
 - `r-efi 6.0.0` offers `MIT OR Apache-2.0 OR LGPL-2.1-or-later`; we take MIT. It is a UEFI
@@ -29,6 +29,9 @@ distribution purposes:
   permissive data licence covering the Unicode character tables.
 - `foldhash 0.1.5` is Zlib; `arrayref 0.3.9` is BSD-2-Clause. Both are permissive.
 - `blake3` and `constant_time_eq` offer CC0-1.0 among their options.
+- `adler2 2.0.1` offers `0BSD OR MIT OR Apache-2.0`; we take MIT. 0BSD is permissive with no
+  attribution requirement at all.
+- `miniz_oxide 0.8.9` offers `MIT OR Zlib OR Apache-2.0`; we take MIT.
 
 `libsqlite3-sys` vendors SQLite itself, which is **public domain**.
 
@@ -39,6 +42,7 @@ distribution purposes:
 | `anyhow` | 1.0.104 | MIT OR Apache-2.0 | nerve-cli | Error context at the binary boundary |
 | `blake3` | 1.8.5 | CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception | nerve-core, nerve-index | Entity/occurrence/assertion ids, content hashes, state merkle |
 | `clap` | 4.6.4 | MIT OR Apache-2.0 | nerve-cli | Command-line parsing (derive feature) |
+| `flate2` | 1.1.9 | MIT OR Apache-2.0 | nerve-index | zlib inflate for Git objects (Slice 12a). `default-features = false, features = ["rust_backend"]` — pure Rust, no C |
 | `ignore` | 0.4.31 | Unlicense OR MIT | nerve-index | Directory walk honouring `.gitignore`, `.ignore`, `.nerveignore` |
 | `rusqlite` | 0.37.0 | MIT | nerve-store | SQLite bindings; `bundled` feature statically links SQLite with FTS5 |
 | `serde` | 1.0.229 | MIT OR Apache-2.0 | all | Serialization derives |
@@ -98,6 +102,53 @@ code-navigation engine* — a competing code-intelligence implementation — and
 would make Nerve's answers someone else's. Nerve resolves Python names itself
 (`crates/nerve-index/src/pyresolve.rs`), as it already does for TS/JS.
 
+### The Slice 12a decompressor, and what it cost
+
+Every Git object is zlib-deflated — measured, `78 01`, in
+`docs/plans/slice-12-git-object-access-analysis.md` §2 — and neither the standard library nor any
+of the 101 packages already here has an inflate. So reading Git history at all required exactly one
+new capability, and the question was which dependency to spend on it.
+
+**`flate2 1.1.9`, `MIT OR Apache-2.0`, with `default-features = false, features = ["rust_backend"]`.**
+The feature selection is load-bearing rather than tidy: every other backend `flate2` offers
+(`zlib`, `zlib-ng`, `zlib-ng-compat`, `cloudflare_zlib`, `libz-sys`, `miniz-sys`) is a C library with
+a build script, and `rust_backend` is `miniz_oxide`, which is pure Rust.
+`crates/nerve-index/tests/gitobj.rs::the_inflate_backend_is_pure_rust` asserts the selection from
+the manifest **and** asserts that no C zlib appears in `Cargo.lock`, so a C backend arriving
+transitively is caught even if the feature list still reads correctly.
+
+**Measured cost: `Cargo.lock` went from 101 to 106 `[[package]]` entries — five crates, not the
+three the analysis estimated.** `git diff Cargo.lock`, in full:
+
+| Crate | Version | License | Why it is here |
+|---|---|---|---|
+| `flate2` | 1.1.9 | MIT OR Apache-2.0 | The inflate itself |
+| `miniz_oxide` | 0.8.9 | MIT OR Zlib OR Apache-2.0 | The pure-Rust DEFLATE implementation `rust_backend` selects |
+| `adler2` | 2.0.1 | 0BSD OR MIT OR Apache-2.0 | The Adler-32 checksum in a zlib wrapper; a dependency of `miniz_oxide` |
+| `simd-adler32` | 0.3.10 | MIT | The same checksum, vectorised. **Not estimated**: `miniz_oxide`'s `simd` feature is not a default, but `flate2` enables it, so it is compiled |
+| `crc32fast` | 1.5.0 | MIT OR Apache-2.0 | gzip's CRC-32. **Not estimated**: unused by Nerve, which reads only zlib streams, but `flate2`'s `miniz_oxide` feature enables it unconditionally and it is not separable |
+
+The two the estimate missed are both checksum crates pulled in by feature unification rather than by
+choice, which is exactly why `CLAUDE.md` §1 asks for the measurement instead of the estimate.
+
+`crc32fast` has a **build script**, and it was inspected rather than assumed: it runs
+`rustc --version` and emits one `cargo:rustc-cfg` for a stabilised ARM CRC-32 intrinsic. There is no
+C compilation and no C source — `find` for `*.c`, `*.h`, `*.cc` across all five crates returns
+nothing. A build script that probes the compiler is the same category as `cc`, which has been in the
+tree since the first tree-sitter grammar; it is build-time only, and
+`crates/nerve-cli/tests/no_subprocess.rs` scans `crates/*/src/**`, which is Nerve's own product code.
+
+**`gix` and `git2` were both rejected**, and the reasoning is in
+`docs/plans/slice-12-git-object-access-analysis.md` §5. In short: `gix` is a facade over ~30
+sub-crates and would have grown the tree by roughly half, including `gix-url` and transport code;
+`git2` links `libgit2`, which ships its own HTTP transport. Keeping a network-capable Git
+implementation in the tree and asserting by test that it is never used is a weaker guarantee than not
+having one. Nerve reads the packfile format itself instead
+(`crates/nerve-index/src/gitobj/`), which is a documented, stable file format of the same kind this
+codebase already reads by hand.
+
+**Net: 96 → 101 third-party crates; `Cargo.lock` 101 → 106 packages. All five permissive.**
+
 ### Notes on version pinning
 
 `tree-sitter-typescript 0.23.2` is the newest release compatible with `tree-sitter 0.25.10`;
@@ -109,6 +160,7 @@ would make Nerve's answers someone else's. Nerve resolves Python names itself
 
 | Crate | Version | License |
 |---|---|---|
+| `adler2` | 2.0.1 | 0BSD OR MIT OR Apache-2.0 (we take MIT) |
 | `aho-corasick` | 1.1.4 | Unlicense OR MIT |
 | `anstream` | 1.0.0 | MIT OR Apache-2.0 |
 | `anstyle` | 1.0.14 | MIT OR Apache-2.0 |
@@ -132,6 +184,7 @@ would make Nerve's answers someone else's. Nerve resolves Python names itself
 | `colorchoice` | 1.0.5 | MIT OR Apache-2.0 |
 | `constant_time_eq` | 0.4.2 | CC0-1.0 OR MIT-0 OR Apache-2.0 |
 | `cpufeatures` | 0.3.0 | MIT OR Apache-2.0 |
+| `crc32fast` | 1.5.0 | MIT OR Apache-2.0 |
 | `crossbeam-deque` | 0.8.7 | MIT OR Apache-2.0 |
 | `crossbeam-epoch` | 0.9.20 | MIT OR Apache-2.0 |
 | `crossbeam-utils` | 0.8.22 | MIT OR Apache-2.0 |
@@ -141,6 +194,7 @@ would make Nerve's answers someone else's. Nerve resolves Python names itself
 | `fallible-streaming-iterator` | 0.1.9 | MIT/Apache-2.0 |
 | `fastrand` | 2.5.0 | Apache-2.0 OR MIT |
 | `find-msvc-tools` | 0.1.9 | MIT OR Apache-2.0 |
+| `flate2` | 1.1.9 | MIT OR Apache-2.0 |
 | `foldhash` | 0.1.5 | Zlib |
 | `getrandom` | 0.4.3 | MIT OR Apache-2.0 |
 | `globset` | 0.4.19 | Unlicense OR MIT |
@@ -158,6 +212,7 @@ would make Nerve's answers someone else's. Nerve resolves Python names itself
 | `linux-raw-sys` | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | `log` | 0.4.33 | MIT OR Apache-2.0 |
 | `memchr` | 2.8.3 | Unlicense OR MIT |
+| `miniz_oxide` | 0.8.9 | MIT OR Zlib OR Apache-2.0 (we take MIT) |
 | `once_cell` | 1.21.4 | MIT OR Apache-2.0 |
 | `once_cell_polyfill` | 1.70.2 | MIT OR Apache-2.0 |
 | `pkg-config` | 0.3.33 | MIT OR Apache-2.0 |
@@ -178,6 +233,7 @@ would make Nerve's answers someone else's. Nerve resolves Python names itself
 | `shlex` | 2.0.1 | MIT OR Apache-2.0 |
 | `signal-hook` | 0.4.4 | MIT OR Apache-2.0 |
 | `signal-hook-registry` | 1.4.8 | MIT OR Apache-2.0 |
+| `simd-adler32` | 0.3.10 | MIT |
 | `smallvec` | 1.15.2 | MIT OR Apache-2.0 |
 | `streaming-iterator` | 0.1.9 | MIT OR Apache-2.0 |
 | `strsim` | 0.11.1 | MIT |
@@ -206,8 +262,9 @@ would make Nerve's answers someone else's. Nerve resolves Python names itself
 | `winnow` | 1.0.4 | MIT |
 | `zmij` | 1.0.23 | MIT |
 
-Total: 96 third-party crates (`nerve-core`, `nerve-store`, `nerve-index`, `nerve-server` and
-`nerve-cli` are this workspace and are excluded).
+Total: 101 third-party crates (`nerve-core`, `nerve-store`, `nerve-index`, `nerve-server` and
+`nerve-cli` are this workspace and are excluded). `Cargo.lock` therefore holds 106 `[[package]]`
+entries; the authority for that number is `grep -c '^name = ' Cargo.lock`, not this line.
 
 ## npm — `apps/nerve-web`, the visual explorer (Slice 4b)
 

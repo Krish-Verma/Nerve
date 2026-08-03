@@ -24,6 +24,11 @@ nerve-server = { path = "crates/nerve-server" }
 anyhow = "1"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
+# `default-features = false` plus an explicit `rust_backend` is load-bearing, not tidiness:
+# every other backend flate2 offers (`zlib`, `zlib-ng`, `cloudflare_zlib`, `libz-sys`) is a C
+# library with a build script. `rust_backend` is `miniz_oxide`, which is pure Rust. Asserted by
+# `crates/nerve-index/tests/gitobj.rs::the_inflate_backend_is_pure_rust`.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 ignore = "0.4"
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

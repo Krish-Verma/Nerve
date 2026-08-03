@@ -143,7 +143,7 @@ depth and limit capped, entity ids matched against the closed id format); bounde
 with explicit continuation; no argument reaches SQL as text — the existing pattern of binding
 parameters and inlining only closed-vocabulary literals holds.
 
-### T9 — Untrusted coverage / trace input (A1) — **Slice 6 and 11 gate**
+### T9 — Untrusted coverage / trace / `.git` object input (A1) — **Slice 6, 11 and 12 gate**
 
 A coverage report is a file in the repository and therefore attacker-controlled. It must not be
 able to assert arbitrary edges.
@@ -202,12 +202,56 @@ the word "trace" to it; the control has to be restated in terms a trace can actu
 the user's explicit invocation, and no Rust source references it — asserted by test. This is why T1
 survives a slice whose subject matter is test execution.
 
+#### `.git` object data is a third kind of untrusted input, and its control is different again (Slice 12a)
+
+Until Slice 12a, Nerve read `.git` for two plain-text ref files only (`crates/nerve-index/src/gitinfo.rs`).
+`crates/nerve-index/src/gitobj/` reads the object database, which changes the shape of the threat:
+**compressed data whose output size is self-described is an amplification vector, and a delta chain is
+a graph a hostile pack can make cyclic.** Neither the coverage control ("may only produce `COVERS`")
+nor the trace control ("may only produce `TEST_OBSERVED_CALL`") transfers, because 12a produces **no
+relation at all** — it is a reader with no write path, no entity kind and no schema change.
+
+The controls are resource bounds and a closed refusal vocabulary
+(`nerve_index::gitobj::form`, 37 tags), each with a named test that fails if the bound is removed:
+
+| control | value | what it stops |
+|---|---|---|
+| `MAX_OBJECT_BYTES` | 64 MiB, applied **while inflating** | a decompression bomb. Peak heap is measured with a tracking global allocator in `crates/nerve-index/tests/gitobj_bomb.rs`: a bomb declaring 8x the bound must be refused with peak growth under 2x it, which an inflate-then-check implementation cannot satisfy |
+| `MAX_DELTA_DEPTH` | 64 (Git's own default `pack.depth` is 50) | an over-long chain **and** a cyclic `REF_DELTA`, by one mechanism rather than two |
+| `MAX_PACK_COUNT` | 256, across the store | a directory of thousands of `.idx` files |
+| declared-size disagreement | refuse | a loose object, pack entry or delta whose stated and actual sizes differ. **Neither value is trusted.** This is also what stands in for the SHA-1 verification 12a deliberately does not do |
+| `MAX_IDX_BYTES` | 512 MiB, checked from file metadata | a `.idx` sized to be an allocation. Never read |
+| alternates guard | shape, containment, one hop, counted | `objects/info/alternates` names a directory. It must carry no control byte, must resolve to an existing directory, must resolve **inside the repository root**, and its own alternates are refused. Nerve does not read another repository's object store because a file in this one asked it to |
+
+**Absence is reported rather than inferred.** `StoreLimits` carries the shallow boundary, the promisor
+flag, refused alternates, refused packs and unsupported index versions, because *"there are no more
+commits"* and *"I cannot see further"* are different answers — the same discipline as
+`bound`/`stale`/`unverified` in Slice 11a. A partial clone's missing object would need a network fetch
+to resolve, which §2 of `CLAUDE.md` forbids, so the honest report is the limit.
+
+**A SHA-256 repository is refused with the format named**, not read as SHA-1. The failure mode being
+avoided is minting 20-byte prefixes of real 32-byte object ids and treating them as identities.
+
+**Nerve runs no `git`.** The packfile format is read directly, for the reason `no_subprocess.rs`
+already names. The fixture-creation script (`scripts/make_gitobj_fixtures.sh`) does run `git`, once, on
+a developer's machine; no Rust source references it, asserted by
+`crates/nerve-index/tests/gitobj.rs::no_rust_source_references_the_fixture_script`.
+
 ### T10 — Supply chain and regression (A1, A5)
 
-**Controls (implemented):** 101 dependencies, all permissive, recorded in
+**Controls (implemented):** 106 dependencies, all permissive, recorded in
 `third_party/LICENSES.md`; no telemetry, no analytics, no external LLM. The count is stated here
 because it is meant to be *checked*, and it drifted from 100 without anyone noticing — the authority is
 `grep -c '^name = ' Cargo.lock`, not this line. Slices 10, 11a and 11a-i each added none.
+
+**Slice 12a added five**, and the measurement is why the number moved rather than the estimate:
+`flate2 1.1.9` plus `miniz_oxide 0.8.9`, `adler2 2.0.1`, `simd-adler32 0.3.10` and `crc32fast 1.5.0`.
+The analysis estimated three; feature unification pulled two checksum crates the estimate did not
+predict. All five are permissive, none contains a line of C, and the one build script among them
+(`crc32fast`) runs `rustc --version` to probe for a stabilised intrinsic. `gix` and `git2` were
+rejected on this row's grounds specifically: both ship an HTTP transport, and a network-capable Git
+implementation in the tree that a test asserts is never used is a weaker guarantee than not having
+one. See `third_party/LICENSES.md`, "The Slice 12a decompressor, and what it cost".
 
 `no_network.rs` asserts **no outbound network client** — HTTP/RPC clients, TLS, async runtimes
 that exist to drive them, telemetry, analytics, update checkers and crash reporters — across

@@ -24,6 +24,14 @@
 //! tracer and Nerve reads the artifact, so `crates/nerve-cli/tests/no_subprocess.rs` keeps passing
 //! untouched and `nerve trace-tests` does not exist.
 //!
+//! [`gitobj`] is a third reader of the same shape, added by Slice 12a: it reads Git objects — loose
+//! objects, `.idx` v2, packfile entries and delta chains — and **writes nothing at all**. No entity,
+//! no row, no schema change, no command. Slice 12b builds the historical model on top of it. It is
+//! in this crate rather than a sixth one because [`gitinfo`] already reads `.git/HEAD` and
+//! `.git/packed-refs` here, so reading Git is already an indexing concern; and it reads the format
+//! itself rather than depending on a Git implementation, because every such implementation ships a
+//! network transport that `crates/nerve-cli/tests/no_network.rs` exists to keep out of the tree.
+//!
 //! This crate emits **observations only**. It cannot write `assertion_state`: that table is
 //! rebuilt by [`nerve_store::rebuild_assertion_state`] as a pure function of what was
 //! observed.
@@ -44,6 +52,7 @@ pub mod extract;
 pub mod facts;
 pub mod fsstruct;
 pub mod gitinfo;
+pub mod gitobj;
 pub mod incremental;
 pub mod init;
 pub mod inspect;
@@ -85,6 +94,11 @@ pub use facts::{
 pub use fsstruct::{
     FsEntry, EXTRACTOR_ID as FILESYSTEM_EXTRACTOR_ID,
     EXTRACTOR_VERSION as FILESYSTEM_EXTRACTOR_VERSION,
+};
+pub use gitobj::{
+    ObjectStore as GitObjectStore, Oid as GitOid, StoreLimits as GitStoreLimits,
+    MAX_DELTA_DEPTH as GIT_MAX_DELTA_DEPTH, MAX_OBJECT_BYTES as GIT_MAX_OBJECT_BYTES,
+    MAX_PACK_COUNT as GIT_MAX_PACK_COUNT,
 };
 pub use incremental::{
     classify, invalidation_set, propose_moves, ChangeKind, ChangeSet, MoveCandidate, MoveProposal,

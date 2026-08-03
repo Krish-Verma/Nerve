@@ -1,0 +1,183 @@
+{
+  "note": "Written before crates/nerve-index/src/gitobj/ existed. Every row states what the reader must do, in the reader's own closed refusal vocabulary (gitobj::form). crates/nerve-index/tests/gitobj.rs reads this file and asserts every row; a row nothing asserts is a lie, so the gate also asserts that the set of case names here and the set it covers are equal.",
+  "bounds": {
+    "MAX_OBJECT_BYTES": 67108864,
+    "MAX_DELTA_DEPTH": 64,
+    "MAX_PACK_COUNT": 256
+  },
+  "cases": [
+    {
+      "case": "real-pack-non-delta-entry",
+      "input": "packed/objects/pack/*.pack + *.idx (committed, produced by scripts/make_gitobj_fixtures.sh)",
+      "required_outcome": "ok-some",
+      "asserts": "Every depth-0 entry in inventory.json reconstructs to exactly the type and byte length Git recorded. Lookup goes through the .idx fanout, not a linear scan of the pack."
+    },
+    {
+      "case": "real-pack-delta-entry",
+      "input": "the same pack",
+      "required_outcome": "ok-some",
+      "asserts": "Every entry in inventory.json with depth > 0 reconstructs to the type and byte length Git recorded. inventory.json must contain at least one such entry and at least one with depth >= 2, so a fixture that stopped exercising OFS_DELTA fails rather than passing quietly."
+    },
+    {
+      "case": "loose-all-four-types",
+      "input": "loose/objects/<xx>/<38> (committed, one commit, one tree, one blob, one annotated tag)",
+      "required_outcome": "ok-some",
+      "asserts": "Each loose object's declared type and size match inventory.json, and the four types are all four of Commit, Tree, Blob, Tag."
+    },
+    {
+      "case": "object-absent-from-the-store",
+      "input": "an oid no object file and no .idx contains",
+      "required_outcome": "ok-none",
+      "asserts": "Ok(None) is 'not present in this store'. It is not an error and it is not a refusal; a partial clone makes it ordinary."
+    },
+    {
+      "case": "truncated-pack",
+      "input": "derived in the test: the committed pack, cut short mid-entry",
+      "required_outcome": "err",
+      "form": "pack-truncated",
+      "asserts": "Refused and counted. No partially reconstructed object is returned, and the reader does not panic."
+    },
+    {
+      "case": "corrupt-idx-bad-magic",
+      "input": "derived in the test: the committed .idx with its 4 magic bytes overwritten",
+      "required_outcome": "pack-skipped",
+      "form": "idx-bad-magic",
+      "asserts": "The pack is refused and counted at open time; the store still opens and still serves whatever else it has. It must NOT be reported as version 1: a v2 index with its magic overwritten is not an old index, and saying so would state something false. StoreLimits.unsupported_index_versions stays empty."
+    },
+    {
+      "case": "corrupt-idx-version-1",
+      "input": "generated in the test: a real .idx v1 — no magic, a fanout, then a 4-byte offset plus a 20-byte id per object, then two checksums",
+      "required_outcome": "pack-skipped",
+      "form": "idx-unsupported-version",
+      "asserts": "Refused with the version *stated*: StoreLimits.unsupported_index_versions contains 1. Superseded in 2007; a repository still carrying one is told so rather than silently skipped. The version is stated only when the v1 layout actually checks out, which is what separates this case from corrupt-idx-bad-magic."
+    },
+    {
+      "case": "corrupt-idx-version-3",
+      "input": "derived in the test: the committed .idx with its version field set to 3",
+      "required_outcome": "pack-skipped",
+      "form": "idx-unsupported-version",
+      "asserts": "StoreLimits.unsupported_index_versions contains 3. An unknown future version is refused, never read as v2."
+    },
+    {
+      "case": "corrupt-idx-fanout-not-monotonic",
+      "input": "derived in the test: the committed .idx with one fanout entry lowered below its predecessor",
+      "required_outcome": "pack-skipped",
+      "form": "idx-fanout-not-monotonic",
+      "asserts": "The fanout table is cumulative and therefore non-decreasing. A decreasing one would make the binary-search range invalid, so it is refused rather than clamped."
+    },
+    {
+      "case": "corrupt-idx-truncated",
+      "input": "derived in the test: the committed .idx cut short",
+      "required_outcome": "pack-skipped",
+      "form": "idx-truncated",
+      "asserts": "The declared object count and the file length must agree exactly, including the 64-bit offset overflow table and the two trailing checksums."
+    },
+    {
+      "case": "ref-delta-missing-base",
+      "input": "a synthetic pack built in the test whose only entry is a REF_DELTA naming an oid nothing holds",
+      "required_outcome": "ok-none",
+      "form": "delta-base-missing",
+      "asserts": "Ok(None) and counted. Not a panic, not an error, and never a partially reconstructed object."
+    },
+    {
+      "case": "delta-chain-past-max-depth",
+      "input": "a synthetic pack built in the test: MAX_DELTA_DEPTH + 1 chained OFS_DELTA entries over one base",
+      "required_outcome": "err",
+      "form": "delta-depth-exceeded",
+      "asserts": "Refused at the bound. A cyclic chain is caught by the same bound rather than by separate cycle detection."
+    },
+    {
+      "case": "delta-cycle",
+      "input": "a synthetic pack built in the test: a REF_DELTA whose base is itself",
+      "required_outcome": "err",
+      "form": "delta-depth-exceeded",
+      "asserts": "Terminates. The depth bound is the control; there is no second mechanism for the same hazard."
+    },
+    {
+      "case": "decompression-bomb",
+      "input": "GENERATED IN THE TEST from MAX_OBJECT_BYTES. Never committed: fixtures/trace-hostile shipped placeholders nothing expanded, and four attacks tested nothing while the suite reported them passing (Slice 11a-i).",
+      "required_outcome": "err",
+      "form": "object-too-large",
+      "asserts": "Refused *during* inflate. The test measures peak heap allocation with a tracking global allocator and requires it to stay under 2 x MAX_OBJECT_BYTES while the bomb declares 8 x MAX_OBJECT_BYTES. Inflate-then-check-length would have to allocate the whole 8x to reach the check."
+    },
+    {
+      "case": "loose-declared-size-disagrees",
+      "input": "generated in the test: a loose object whose header declares a size the inflated stream does not have",
+      "required_outcome": "err",
+      "form": "loose-declared-size-disagrees",
+      "asserts": "Refused rather than either value being trusted. Neither the header nor the stream wins."
+    },
+    {
+      "case": "loose-header-malformed",
+      "input": "generated in the test: no NUL terminator, an unknown type word, a non-numeric size",
+      "required_outcome": "err",
+      "form": "loose-header-malformed",
+      "asserts": "Each refused with a stated reason; an unknown type word is loose-unknown-type."
+    },
+    {
+      "case": "pack-count-past-the-bound",
+      "input": "generated in the test: MAX_PACK_COUNT + 1 .idx files in one objects/pack directory",
+      "required_outcome": "packs-capped",
+      "form": "pack-count-exceeded",
+      "asserts": "Exactly MAX_PACK_COUNT packs are loaded and the excess is counted. A directory of thousands of .idx files is not a repository Nerve needs to serve, and it is told so rather than being walked."
+    },
+    {
+      "case": "worktree-dot-git-is-a-file",
+      "input": "generated in the test: a linked-worktree layout, .git a file containing 'gitdir: <path>'",
+      "required_outcome": "ok-some",
+      "asserts": "Resolves through gitinfo's existing resolution rather than a second implementation of it, and then follows the worktree's `commondir` to reach the shared objects directory. A linked worktree has no objects/ of its own, so a store that only resolved the path would open successfully and find nothing."
+    },
+    {
+      "case": "alternates-one-entry",
+      "input": "generated in the test: objects/info/alternates naming one directory inside the repository",
+      "required_outcome": "ok-some",
+      "asserts": "One hop is followed and StoreLimits.alternates_followed is 1. An object only the alternate holds is readable."
+    },
+    {
+      "case": "alternates-chain",
+      "input": "generated in the test: the alternate has its own objects/info/alternates",
+      "required_outcome": "ok-none",
+      "form": "alternate-chain-refused",
+      "asserts": "The second hop is refused and counted, not skipped: StoreLimits.alternates_followed is 1 and alternates_refused is 1. An unbounded chain is a path-traversal surface aimed at arbitrary directories."
+    },
+    {
+      "case": "alternates-outside-the-repository",
+      "input": "generated in the test: objects/info/alternates naming a directory outside the repository root",
+      "required_outcome": "ok-none",
+      "form": "alternate-escapes-repository-root",
+      "asserts": "Refused and counted. Nerve does not read another repository's object store because a file in this one asked it to."
+    },
+    {
+      "case": "alternates-hostile-shape",
+      "input": "generated in the test: an empty line, a control character, a non-existent path, and the store's own objects directory",
+      "required_outcome": "ok-none",
+      "form": "alternate-refused-shape",
+      "asserts": "Each refused and counted. The control-character rule is the same one discover::canonical_child applies and for the same reason."
+    },
+    {
+      "case": "shallow-clone",
+      "input": "generated in the test: .git/shallow listing one boundary commit",
+      "required_outcome": "limits-reported",
+      "asserts": "StoreLimits.shallow is Some with that oid. It is a boundary, not a root: 'there are no more commits' and 'I cannot see further' are different answers."
+    },
+    {
+      "case": "no-shallow-file",
+      "input": "an ordinary repository",
+      "required_outcome": "limits-reported",
+      "asserts": "StoreLimits.shallow is None, which means 'not shallow' rather than 'no boundary commits'. Some(vec![]) would be a different claim and is never produced."
+    },
+    {
+      "case": "promisor-partial-clone",
+      "input": "generated in the test: a remote marked promisor in .git/config, and separately a .promisor file beside a pack",
+      "required_outcome": "limits-reported",
+      "asserts": "StoreLimits.promisor is true. A missing object may exist on the remote, and fetching it would need the network CLAUDE.md section 2 forbids, so the honest report is that this store cannot see everything."
+    },
+    {
+      "case": "sha256-object-format",
+      "input": "generated in the test: .git/config with extensions.objectFormat = sha256",
+      "required_outcome": "open-refused",
+      "form": "unsupported-object-format",
+      "asserts": "open() refuses and names the format. The failure mode being avoided is reading a SHA-256 repository as SHA-1 and producing 20-byte prefixes of real object ids."
+    }
+  ]
+}
