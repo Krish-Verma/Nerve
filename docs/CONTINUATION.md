@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| **Last slice commit** | Slice 9b — `feat: Slice 9b — Python references`. Hash recorded by the follow-up docs commit; `git log --oneline -3` is authoritative. |
+| **Last slice commit** | `6e0412e` — `feat: Slice 9b — Python references, and a cache key that would have hidden them`. A docs commit may sit on top; `git log --oneline -3` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
 | **Last completed slice** | **Slice 9b** — Python references (`py-reference`). **Row 9 complete.** |

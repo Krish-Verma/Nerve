@@ -199,7 +199,7 @@ code but ran the third mutation probe and the upgrade-path experiment directly.
 
 ## Commit
 
-Hash recorded by the follow-up docs commit.
+`6e0412e` — *feat: Slice 9b — Python references, and a cache key that would have hidden them*.
 
 ## Next slice
 
