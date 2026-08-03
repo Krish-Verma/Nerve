@@ -8,24 +8,30 @@
 
 | | |
 |---|---|
-| **Last slice commit** | `6e0412e` — `feat: Slice 9b — Python references, and a cache key that would have hidden them`. A docs commit may sit on top; `git log --oneline -3` is authoritative. |
+| **Last slice commit** | `286ab59` — `feat: Slice 10b — Express, and the same upgrade trap one language over`. A docs commit sits on top (`575fc5f`); `git log --oneline -3` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 9b** — Python references (`py-reference`). **Row 9 complete.** |
-| **Next slice** | **Slice 10 — Framework rules.** Then 11–14, validation, final audit. |
-| **Roadmap status** | **INCOMPLETE.** 10–14 and real-world validation not started. |
+| **Last completed slice** | **Slice 10b** — Express routes (`ts-js-framework`). **Row 10 complete.** |
+| **Next slice** | **Slice 11 — test-observed calls.** A plan is already written and committed: `docs/plans/slice-11-test-observed-calls.md`. Then 12–14, validation, final audit. |
+| **Roadmap status** | **INCOMPLETE.** 11–14, real-world validation, the acceptance package and the final audit are all not started. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
 
-## Verification state at the Slice 9b commit
+## Verification state at the Slice 10b commit
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace --no-fail-fast                   → 1058 passed, 0 failed, 2 ignored
+cargo test --workspace --no-fail-fast                   → 1116 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
 ```
+
+`Cargo.lock` is at **101** packages and Slice 10 added none.
+
+**Schema is at v5.** `module_facts.framework_version` was added by 10a with `DEFAULT ''`. Any
+future extractor added to a language family needs a slot of its own — reusing one is the defect
+described under "Decisions already made".
 
 **Use `--no-fail-fast`.** Plain `cargo test` halts at the first failing target and understates a
 mutation's blast radius — measured in Slice 7b: 3 reported against 16 actual.
@@ -243,12 +249,53 @@ Rows 1–9 are **complete** and no longer listed here; `docs/ROADMAP.md` is auth
 
 | | |
 |---|---|
-| **10** | **Next.** Framework rules — routes, events, DI. **9a records decorators as structural metadata on the decorated symbol and 9b walks a decorator's *arguments* but emits no call edge for the decorator itself** — that metadata is this slice's input. Heuristic rules must stay explicitly heuristic and out of conservative evidence policies by default. |
-| 11 | Test call tracing. **T9 gate.** |
-| 12 | Git history / temporal layer |
+| **10** | ✅ **Complete** as 10a + 10b. HTTP routes only: FastAPI, Flask, Express. `EntityKind::Endpoint`, `Relation::ServedBy`, schema v5, `FRAMEWORK_RULE` emitted for the first time. **Events, DI, Django, NestJS and pytest fixtures were each rejected with a reason** in `docs/plans/slice-10-framework-rules.md` §2 — read that before "finishing" row 10, because it is finished as scoped. |
+| **11** | **Next.** Test-observed calls. **A plan is written and committed** — `docs/plans/slice-11-test-observed-calls.md`. Its central decision is argued from repository evidence and should not be relitigated casually: **`nerve trace-tests` is refused**, and tracing is **ingest-only**, because `crates/nerve-cli/tests/no_subprocess.rs` forbids process creation in `crates/*/src/**` and its own module doc names "no test runners" as the thing it exists to refuse. Two shipped precedents chose the same way: coverage ingests LCOV rather than running tests, and `gitinfo.rs` reads `.git/HEAD` rather than spawning `git`. The cost is a Python tracer package under `tracers/python/` — new non-Rust product surface, stated rather than hidden. |
+| 12 | Git history / temporal layer. **One decisive fact measured this session: there is no compression library in `Cargo.lock` (101 packages, checked).** Git objects are zlib-deflated, so reading a commit object at all requires a new dependency — `flate2` with the pure-Rust `miniz_oxide` backend is the small option; `gix` is 50+ crates. Packfiles additionally need `.idx` parsing and OFS/REF delta reconstruction, since most commits in a real repository are packed. **Budget for this honestly, and expect to split the row.** `gitinfo.rs`'s precedent binds: no `git` subprocess. |
 | 13 | Cross-repository contracts |
 | 14 | Human-confirmed memory |
-| **Validation** | Real-world accuracy — plan and corpus already chosen: `docs/plans/slice-15-real-world-validation.md`. Runs after Slice 9. **Network access for the corpus checkout was verified available on 2026-08-01** (`git ls-remote` against GitHub succeeds). |
+| **Validation** | Real-world accuracy — plan and corpus already chosen: `docs/plans/slice-15-real-world-validation.md`. **Needs extending, not rewriting**: it predates Python and framework support, so its corpus table is TypeScript-only and its category list has no Python or framework rows. Network access for the corpus checkout was verified available on 2026-08-01 (`git ls-remote` against GitHub succeeds). |
+| **Acceptance** | `docs/FINAL-ACCEPTANCE.md` and `scripts/final_acceptance.sh` **do not exist yet**. Note when writing them: the CLI has **13** commands, and `sync`, `affected`, `trace-tests`, `history` and `memory` are **not** among them. `affected` is *refused* by ADR-0008 rather than missing, and `trace-tests` is refused by the Slice 11 plan — the script must encode a refusal as a pass, not as a gap. |
+| **Final audit** | Clean-checkout build, command matrix, repository matrix, ~24 audit categories. Not started. |
+
+---
+
+## What Slice 10 delivered, and the three traps it closed
+
+**10a (`4e4239a`) — a route handler stopped looking exactly like dead code.** Measured on the 9b
+binary first: `nerve impact` on a live `GET /users/{user_id}` handler and on a genuinely dead
+function printed **byte-identical** answers. Closed by making the `Endpoint` the *source* of
+`SERVED_BY` — forced, not chosen, because impact is a reverse closure — and by adding `SERVED_BY` to
+`impact::DEFAULT_RELATIONS`. **The dead case is asserted to stay dead**, so a change that made
+everything look reachable cannot pass.
+
+**10b (`286ab59`) — Express, its own extractor id.** Zero `py-framework` observations in a
+repository with no Python: the 5d-i invariant restated a third time.
+
+### Three traps, all of a kind this project keeps hitting
+
+1. **The cache-slot upgrade trap, twice.** `module_facts` had two version columns reused
+   positionally, and Slice 9b shipped a defect where two extractors shared a version string so an
+   existing index hit the cache forever. **10a added the third slot and, for the first time,
+   committed the regression test** — 9b's was found by hand and never written, because every test
+   builds a fresh index and a fresh index cannot observe an upgrade. 10b then created the *same*
+   defect one language over (10a wrote `''` for TS/JS; 10b made that wrong) and committed that test
+   too. **Both language upgrade paths now have a test. Before this session neither did.**
+2. **A vacuous test, found by a reviewing agent.** The lambda-handler test asserted only
+   `endpoints.is_empty()` and passed because the walker never read `app.get(...)(...)` at all. Third
+   vacuity trap on this project, after two T7 false passes. **When a test asserts an absence, assert
+   the tally too.**
+3. **A tally member with no producer.** A `decorator-form` count was drafted, and making it fire
+   needed a special case whose only purpose was feeding the counter. Removed. If a form in an
+   `unsupported_by_form` map has no construct that produces it, the map is documentation, not a gate.
+
+### The rule that governs both extractors
+
+**Nothing is counted where nothing is known.** `app-not-local` counts a *real* route the rule
+declines (the receiver is imported, so the binding is in another file). But an untraceable receiver —
+`@cache.get("/x")` — emits nothing **and counts nothing**, because Nerve has no reason to think it
+was meant to be a route and a missed-route tally would be a false claim in the opposite direction
+from a false positive. Both `negative.py` and `negative.ts` assert zero of each.
 
 ---
 
