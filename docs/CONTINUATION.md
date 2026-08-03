@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| **Last slice commit** | Slice 7c-ii — `feat: Slice 7c-ii — nerve doctor`. `git log --oneline -3` is authoritative; a docs commit records the hash. |
+| **Last slice commit** | `e91909f` — `feat: Slice 7c-ii — nerve doctor, which has to work when everything else does not`. A docs commit may sit on top; `git log --oneline -3` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
 | **Last completed slice** | **Slice 7c-ii** — `nerve doctor`. **Slice 7 is now complete.** |
