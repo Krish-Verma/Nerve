@@ -155,10 +155,59 @@ resolved through the same path guard. A report
 naming a file outside the root, or a symbol that does not exist, is **rejected and counted**, not
 silently trusted.
 
+#### The coverage control does not transfer to a trace, and that is the point (Slice 11a)
+
+*"May only produce `COVERS` — never a call edge"* is the load-bearing sentence above, and a trace
+artifact **legitimately produces a call edge**. So this section cannot simply be extended by adding
+the word "trace" to it; the control has to be restated in terms a trace can actually satisfy.
+
+| | coverage | trace |
+|---|---|---|
+| what the artifact claims | these lines executed | this frame called that frame |
+| relation produced | `COVERS`, from a `CoverageRun` | `TEST_OBSERVED_CALL`, between two symbols |
+| per-test attribution | **none** — LCOV carries no test names | yes, on the evidence (`environment.runs[].tests`) |
+| directness | `Inferred` | `Resolved` |
+| what a hostile artifact wants | to make co-execution read as a call | to make a call it invented read as observed |
+
+**The controls for a trace, all implemented and gated per artifact by
+`each_hostile_artifact_produces_its_declared_refusal`:**
+
+- **A trace may produce `TEST_OBSERVED_CALL` and nothing else**, asserted over the whole of
+  `Relation::ALL` (`the_trace_extractor_asserts_no_relation_but_test_observed_call`) — the same shape
+  of assertion as coverage's, against a different single relation.
+- **`TEST_OBSERVED_CALL` is deliberately absent from `impact::DEFAULT_RELATIONS`.** This has a
+  security reading as well as an evidential one: a hostile artifact that could inject an edge into the
+  default impact closure would change what `nerve impact` tells a user to review before a change. An
+  edge nobody asked for cannot silently widen a blast radius.
+- **Coverage and trace evidence never share an assertion**
+  (`coverage_and_trace_evidence_never_share_an_assertion`). Two symbols running during one test still
+  says nothing about who invoked whom, and a trace edge must come from a trace rather than from
+  co-occurrence — ADR-0005 restated for a new relation.
+- **The artifact cannot add a path or a symbol to the graph.** An unindexed path is `file-not-indexed`;
+  a path that changed since indexing is `file-changed-since-index` rather than mapped through stale
+  extents; a line inside no symbol is counted, never attached to the nearest one.
+- **Repository-state binding is three-valued and cannot be upgraded by assertion.** An attacker
+  supplying a plausible 40-hex commit and 64-hex merkle for a tree that is not this one gets `stale` —
+  never `bound`, never `unverified` (`state-substitution.jsonl`).
+- **Inertness rather than rejection for text that merely looks dangerous.** FTS5 operators, SQL
+  fragments and prompt-injection payloads in a `run_id` are legal strings, and they are stored as bound
+  parameters, echoed without control characters, bounded in length, and reach no MCP surface outside
+  the `repository_content` region (T7). Refusing them would reject legal artifacts; the per-artifact
+  fixture table now asserts these produce **no** refusal, so a future over-eager guard fails a test.
+- **Run identity is checked repository-wide.** A replayed `run_id` is reported once and overwrites
+  nothing; see `docs/plans/slice-11a-trace-ingestion.md` §7 for why the earlier site-scoped check was
+  in the wrong place.
+
+**Nerve produces no trace itself.** The producer (`tracers/python/`) runs in the user's test process by
+the user's explicit invocation, and no Rust source references it — asserted by test. This is why T1
+survives a slice whose subject matter is test execution.
+
 ### T10 — Supply chain and regression (A1, A5)
 
-**Controls (implemented):** 100 dependencies, all permissive, recorded in
-`third_party/LICENSES.md`; no telemetry, no analytics, no external LLM.
+**Controls (implemented):** 101 dependencies, all permissive, recorded in
+`third_party/LICENSES.md`; no telemetry, no analytics, no external LLM. The count is stated here
+because it is meant to be *checked*, and it drifted from 100 without anyone noticing — the authority is
+`grep -c '^name = ' Cargo.lock`, not this line. Slices 10, 11a and 11a-i each added none.
 
 `no_network.rs` asserts **no outbound network client** — HTTP/RPC clients, TLS, async runtimes
 that exist to drive them, telemetry, analytics, update checkers and crash reporters — across
@@ -235,7 +284,7 @@ responsive, because the accept/read pool is separate from the query workers.
 | Visual UI (Slice 4b) | T5 rendering rules | ✅ implemented — no `dangerouslySetInnerHTML`/`innerHTML`/`eval` (lint-enforced, mutation-verified), 0 CSP violations across 31 pages |
 | Documents (Slice 5) | T7 | ✅ implemented and attack-verified (Slice 5a) — exhaustive, not a spot check: no observation on a document path carries any source type outside `{DOCUMENT_STATED, FILESYSTEM_OBSERVED}`, mutation-verified. Amended by Slice 5d-i (ADR-0007) |
 | Test evidence — coverage (Slice 6b) | T9 | ✅ implemented and attack-verified — traversal and symlink escape refused and counted with zero content leakage; unindexed file rejected without creating an entity; line outside any symbol counted; every 6a resource bound refuses whole; a file changed since indexing refused rather than mapped through stale extents. **Zero call-shaped relations from the coverage extractor, asserted over `Relation::ALL`** (ADR-0005) |
-| Test evidence — tracing (Slice 11) | T9 | ⬜ required before Slice 11 ships |
+| Test evidence — tracing (Slice 11a, 11a-i) | T9 | ✅ implemented and attack-verified — **but T9's coverage control does not transfer, and the restated one is above.** Fifteen hostile artifacts, one concern each, now asserted **per artifact and bidirectionally**: eleven must produce their declared refusal and four must produce **none**, because they are inert rather than invalid. That bidirectionality is not decoration — the previous test asserted an *aggregate* (≥6 distinct forms across the set), which four artifacts whose payload placeholders were never expanded satisfied for free. Verified: traversal refused in all three spellings (`../`, `..\`, absolute/UNC); an artifact naming another repository refused whole; an unknown *header* key refused whole while an unknown *record* key is counted and the record kept; every resource bound refuses at its own granularity (artifact whole, one line, one field); malformed UTF-8 refused per line; a plausible-but-wrong repository state binds `stale` and never `bound`; a replayed `run_id` reported once repository-wide and overwriting nothing; and `TEST_OBSERVED_CALL` absent from the default impact closure so an injected edge cannot widen a blast radius. **Nerve produced none of it** — `no_subprocess.rs` and `no_network.rs` are byte-untouched across the whole of row 11 |
 | MCP transport + `nerve_investigate` (Slice 8a) | T7, T8 | ✅ implemented and attack-verified. **T8:** every argument bounded before use, no argument reaching SQL as text, a traversal-shaped selector refused *as a refusal* rather than disguised as "not found", a symlink-swapped indexed file reporting freshness `refused` with no byte of the secret in the response, and three independent response bounds (row cap, per-assertion observation cap, and a 128 KiB ceiling measured on the text a client actually reads) with exact continuation. **T7:** every repository-derived value confined to one `repository_content` field, labelled three ways, and held there by a property test that walks the whole response and asserts no string inside the field appears outside it. Orchestrator-verified: an injected Markdown **heading** surfaces 7 times and every occurrence is inside a labelled region |
 | Selectors, all three surfaces (Slice 8b-i) | T2, T7 | ✅ implemented and attack-verified. **T2:** one shared syntactic refusal for CLI, HTTP and MCP; before it, two of the three disguised a refusal as a miss. Both directions verified — `../../etc/passwd`, `/etc/passwd`, `..\..\windows`, `a\..\b`, `docs/..\..\x` refused; `./docs/architecture.md`, `docs/./architecture.md`, `a..b.ts`, `a\b.ts` **not** refused, so the check does not over-refuse a legal path. **T7:** this slice made `Document` entities reachable by path through MCP for the first time, widening the T7 surface, so it was re-attacked rather than assumed — an injected level-1 heading surfaces 4 times, every occurrence inside `repository_content`, 0 leaks. `selectors.alternatives` was placed **inside** the untrusted subtree because it carries repository names and paths |
 | MCP remaining tools (Slice 8b-ii) | T7, T8 | ✅ implemented and attack-verified. Five tools; 8a's envelope **extracted into `mcp/tool.rs`** so the property is stated once rather than copied four times, and `envelope()` is the only way a tool builds a result. **T7:** the property test now covers all five, with two anti-vacuity assertions built into its helper (*"nothing was labelled"* / *"hostile content never reached the answer"*) — the trap that produced a false pass twice on this project. A mutation leaking `search`'s top hit fails it, and a **counterfactual run confirmed the investigate-only spot check still passed under the same mutation**, so the failure comes from the extension. **T8:** every argument validated in one place before reaching the application layer; an undeclared argument is refused, not ignored; traversal refused on every selector-taking tool — orchestrator probe disabling the shared refusal fails **7 tests, one per tool**. Adversarial stdio: SQL-injection string and FTS5 operators answered without panic, 5000-byte query refused, database byte-identical, 0 bytes stderr. **Known gap, verified not exploitable today:** the T7 walker scans JSON *values*, not object *keys*; every dynamic key in a live response is an `EntityKind` or `Relation` from a closed compile-time vocabulary |
