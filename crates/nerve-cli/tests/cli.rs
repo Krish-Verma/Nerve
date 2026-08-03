@@ -414,12 +414,17 @@ fn every_json_output_parses_and_carries_its_required_keys() {
         nerve_index::PYTHON_FRAMEWORK_EXTRACTOR_VERSION
     );
     assert_eq!(runs[5]["files_processed"], 0);
-    assert_eq!(runs[6]["extractor_id"], "md-structural");
+    assert_eq!(runs[6]["extractor_id"], "ts-js-framework");
+    assert_eq!(
+        runs[6]["extractor_version"],
+        nerve_index::TS_FRAMEWORK_EXTRACTOR_VERSION
+    );
+    assert_eq!(runs[7]["extractor_id"], "md-structural");
     // Slice 5d-ii: `SUPERSEDES` edges from the four explicit supersession fields. The version
     // moved with the behaviour and in the same commit as it, because that is what makes every
     // document re-scan once on this build rather than keep a graph the current rules would not
     // produce.
-    assert_eq!(runs[6]["extractor_version"], "1.2.0");
+    assert_eq!(runs[7]["extractor_version"], "1.2.0");
     require_keys(&runs[0], &["run_id", "state_id", "status"]);
 
     let search = json(&run(&["search", "area", "--path", root, "--json"]));

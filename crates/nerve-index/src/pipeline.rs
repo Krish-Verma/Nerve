@@ -141,6 +141,7 @@ use crate::pystruct::{self, PyImportForm, PyImportSite, PyModuleExtraction};
 use crate::pysurface::{PyModuleSurface, PySurfaceIndex};
 use crate::refs::{self, RefTarget, ReferenceExtraction};
 use crate::resolve;
+use crate::tsframework::{self, TsFrameworkExtraction};
 
 /// Every extractor `nerve index` runs, and therefore every extractor whose evidence it may
 /// withdraw when it re-extracts a file.
@@ -148,7 +149,7 @@ use crate::resolve;
 /// `coverage` is deliberately absent: it is ingested by a separate, explicitly invoked command
 /// (`docs/plans/slice-06-test-evidence.md` §A.4), and an index run neither produces nor replaces
 /// it. The list is used exactly once, at the withdrawal in [`index_repository_with`].
-pub const INDEX_EXTRACTOR_IDS: [&str; 7] = [
+pub const INDEX_EXTRACTOR_IDS: [&str; 8] = [
     fsstruct::EXTRACTOR_ID,
     EXTRACTOR_ID,
     refs::EXTRACTOR_ID,
@@ -158,6 +159,7 @@ pub const INDEX_EXTRACTOR_IDS: [&str; 7] = [
     // decorator was deleted; a framework extractor missing from this list would leave stale routes
     // in the graph forever.
     pyframework::EXTRACTOR_ID,
+    tsframework::EXTRACTOR_ID,
     docs::EXTRACTOR_ID,
 ];
 
@@ -926,6 +928,29 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         );
     }
 
+    // Express routes. Read from the same tree the structural pass parsed, but as its own extractor
+    // with its own id and version — a TypeScript fact stamped `py-framework` would be a false
+    // statement about where the evidence came from (Slice 5d-i).
+    let mut ts_framework_extractions: BTreeMap<String, TsFrameworkExtraction> = BTreeMap::new();
+    for file in &loaded {
+        let Some(extraction) = extractions.get(&file.rel_path) else {
+            continue;
+        };
+        let Some(language) = file.language() else {
+            continue;
+        };
+        ts_framework_extractions.insert(
+            file.rel_path.clone(),
+            tsframework::extract_framework(
+                &config.project_id,
+                &file.rel_path,
+                &file.source,
+                language,
+                extraction,
+            )?,
+        );
+    }
+
     // ---- whole-repository view, from fresh work plus cache -------------------------------
     //
     // Reported totals describe the repository, not the fraction of it this run touched, so the
@@ -945,9 +970,15 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
                 _ => match (
                     extractions.get(&file.rel_path),
                     reference_extractions.get(&file.rel_path),
+                    ts_framework_extractions.get(&file.rel_path),
                 ) {
-                    (Some(extraction), Some(references)) => {
-                        ModuleFacts::from_extraction(extraction, references, &file.source)
+                    (Some(extraction), Some(references), Some(framework)) => {
+                        ModuleFacts::from_extraction(
+                            extraction,
+                            references,
+                            framework,
+                            &file.source,
+                        )
                     }
                     _ => cached_facts(&previous, &file.rel_path),
                 },
@@ -1017,10 +1048,6 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
                 .or_insert(0) += count;
         }
     }
-    let endpoints: usize = python_framework_extractions
-        .values()
-        .map(|extraction| extraction.endpoints.len())
-        .sum();
 
     let module_exports: BTreeMap<String, BTreeMap<String, String>> = facts_by_path
         .iter()
@@ -1107,6 +1134,30 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     let reference_batch = build_reference_graph(&config.project_id, &reference_targets);
     reference_batch
         .verify_declared_source_types(refs::EXTRACTOR_ID, &refs::DECLARED_SOURCE_TYPES)?;
+
+    // Both languages, one number: an endpoint is an endpoint whichever rule declared it.
+    let endpoints: usize = python_framework_extractions
+        .values()
+        .map(|extraction| extraction.endpoints.len())
+        .sum::<usize>()
+        + ts_framework_extractions
+            .values()
+            .map(|extraction| extraction.endpoints.len())
+            .sum::<usize>();
+
+    let ts_framework_targets: Vec<(&LoadedFile, &TsFrameworkExtraction)> = loaded
+        .iter()
+        .filter_map(|file| {
+            ts_framework_extractions
+                .get(&file.rel_path)
+                .map(|extraction| (file, extraction))
+        })
+        .collect();
+    let ts_framework_batch = build_ts_framework_graph(&ts_framework_targets);
+    ts_framework_batch.verify_declared_source_types(
+        tsframework::EXTRACTOR_ID,
+        &tsframework::DECLARED_SOURCE_TYPES,
+    )?;
 
     let document_targets: Vec<DocumentTarget<'_>> = loaded
         .iter()
@@ -1391,6 +1442,30 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
             status.as_str(),
         )?;
 
+        // `ts-js-framework` sits after `ts-js-reference` for the same reason `py-framework` sits
+        // after `py-reference`.
+        let ts_framework_run = nerve_store::begin_extractor_run(
+            &tx,
+            &repo_id,
+            &state_id,
+            tsframework::EXTRACTOR_ID,
+            tsframework::EXTRACTOR_VERSION,
+        )?;
+        rows_written += nerve_store::persist_batch(
+            &tx,
+            &repo_id,
+            ts_framework_run,
+            &ts_framework_batch,
+            &mut touched,
+        )?;
+        nerve_store::finish_extractor_run(
+            &tx,
+            ts_framework_run,
+            ts_js_loaded as i64,
+            ts_js_failed as i64,
+            status.as_str(),
+        )?;
+
         // `md-structural` runs unconditionally, exactly as the others do. A run over a
         // repository with no documents records that Nerve looked and found none, which is a
         // fact; making the row conditional on content would make its absence ambiguous.
@@ -1467,7 +1542,11 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
                     pyframework::EXTRACTOR_VERSION,
                 )
             } else {
-                (EXTRACTOR_VERSION, refs::EXTRACTOR_VERSION, "")
+                (
+                    EXTRACTOR_VERSION,
+                    refs::EXTRACTOR_VERSION,
+                    tsframework::EXTRACTOR_VERSION,
+                )
             };
             rows_written += nerve_store::upsert_module_facts(
                 &tx,
@@ -1626,7 +1705,7 @@ fn load_previous_modules(
         } else {
             row.structural_version == EXTRACTOR_VERSION
                 && row.reference_version == refs::EXTRACTOR_VERSION
-                && row.framework_version.is_empty()
+                && row.framework_version == tsframework::EXTRACTOR_VERSION
         };
         let reusable = facts.is_some() && versions_match;
         previous.insert(
@@ -2503,6 +2582,67 @@ fn build_python_framework_graph(targets: &[(&LoadedFile, &PyFrameworkExtraction)
                     "path": endpoint.path,
                     // Stated on every observation, because this is the claim a reader is most
                     // likely to over-read.
+                    "proves": "the source declares this endpoint and names this symbol as its \
+                               handler; not that the route is reachable, permitted by middleware, \
+                               or unreplaced by dynamic configuration",
+                }),
+            );
+        }
+    }
+
+    builder.batch
+}
+
+/// Turn Express route registrations into `Endpoint` entities and `SERVED_BY` assertions.
+///
+/// The TypeScript/JavaScript twin of [`build_python_framework_graph`], and separate for the same
+/// reason the extractors are: the `extractor_id` on every observation must name what produced it.
+fn build_ts_framework_graph(targets: &[(&LoadedFile, &TsFrameworkExtraction)]) -> GraphBatch {
+    let mut builder = GraphBuilder::new(tsframework::EXTRACTOR_ID, tsframework::EXTRACTOR_VERSION);
+
+    for (file, extraction) in targets.iter().copied() {
+        let rel_path = file.rel_path.as_str();
+        let hash = file.content_hash.as_str();
+
+        for endpoint in &extraction.endpoints {
+            builder.add_entity(EntityRecord {
+                entity_id: endpoint.entity_id.clone(),
+                kind: EntityKind::Endpoint,
+                name: endpoint.address.clone(),
+                scope_path: rel_path.to_string(),
+                language: None,
+                meta: Some(
+                    serde_json::json!({
+                        "endpoint_kind": EndpointKind::HttpRoute.as_str(),
+                        "framework": tsframework::FRAMEWORK,
+                        "method": endpoint.method,
+                        // The **declared** path. No mount prefix from `app.use("/v1", router)`.
+                        "path": endpoint.path,
+                        "rule_id": tsframework::RULE_ID,
+                        "declarations_in_module": extraction
+                            .ambiguous_addresses
+                            .get(&endpoint.address)
+                            .copied()
+                            .unwrap_or(1),
+                    })
+                    .to_string(),
+                ),
+            });
+            builder.add_occurrence(&endpoint.entity_id, rel_path, endpoint.span, hash);
+
+            builder.claim(
+                &endpoint.entity_id,
+                Relation::ServedBy,
+                &endpoint.handler_entity_id,
+                Evidence::FRAMEWORK,
+                rel_path,
+                endpoint.span,
+                hash,
+                serde_json::json!({
+                    "framework": tsframework::FRAMEWORK,
+                    "rule_id": tsframework::RULE_ID,
+                    "method": endpoint.method,
+                    "path": endpoint.path,
                     "proves": "the source declares this endpoint and names this symbol as its \
                                handler; not that the route is reachable, permitted by middleware, \
                                or unreplaced by dynamic configuration",

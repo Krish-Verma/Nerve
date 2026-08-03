@@ -343,6 +343,10 @@ fn every_extractor_run_is_recorded_per_index() {
                 "py-framework".to_string(),
                 nerve_index::PYTHON_FRAMEWORK_EXTRACTOR_VERSION.to_string()
             ),
+            (
+                "ts-js-framework".to_string(),
+                nerve_index::TS_FRAMEWORK_EXTRACTOR_VERSION.to_string()
+            ),
             ("md-structural".to_string(), "1.2.0".to_string()),
         ]
     );

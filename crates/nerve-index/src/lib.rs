@@ -1,8 +1,8 @@
 //! Nerve indexing pipeline.
 //!
 //! Discovery and ignore rules, path safety, tree-sitter parsing, the `fs-structural`,
-//! `ts-js-structural`, `ts-js-reference`, `py-structural`, `py-reference`, `py-framework`,
-//! `md-structural` and `coverage` extractors, lexical binding, export closure, specifier
+//! `ts-js-structural`, `ts-js-reference`, `ts-js-framework`, `py-structural`, `py-reference`,
+//! `py-framework`, `md-structural` and `coverage` extractors, lexical binding, export closure, specifier
 //! resolution, a hand-written Markdown block scanner, the `init` / `index` / `coverage`
 //! application entry points, and the query-time file prober that gives `nerve why` its freshness
 //! answer without loosening any of those path rules.
@@ -53,6 +53,7 @@ pub mod pystruct;
 pub mod pysurface;
 pub mod refs;
 pub mod resolve;
+pub mod tsframework;
 
 pub use bind::{Binding, BindingTable, ThisResolution};
 pub use config::Config;
@@ -117,4 +118,9 @@ pub use pysurface::{PyModuleSurface, PySurfaceIndex};
 pub use refs::{
     extract_references, RefTarget, ReferenceExtraction, ReferenceSite, UnresolvedReason,
     EXTRACTOR_ID as REFERENCE_EXTRACTOR_ID, EXTRACTOR_VERSION as REFERENCE_EXTRACTOR_VERSION,
+};
+pub use tsframework::{
+    extract_framework as extract_ts_framework, TsEndpoint, TsFrameworkExtraction,
+    DECLARED_RELATIONS as TS_FRAMEWORK_RELATIONS, EXTRACTOR_ID as TS_FRAMEWORK_EXTRACTOR_ID,
+    EXTRACTOR_VERSION as TS_FRAMEWORK_EXTRACTOR_VERSION, FRAMEWORK as TS_FRAMEWORK_NAME,
 };

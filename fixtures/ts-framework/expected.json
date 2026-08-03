@@ -1,0 +1,80 @@
+{
+  "_format": "Slice 10b ts-js-framework ground truth. Written BEFORE the resolver, as in 5d-ii, 9a, 9b and 10a. Where the implementation and this file disagree, this file is the claim to argue against.",
+
+  "_endpoint": "`address` is the entity name, which is what FTS5 tokenises. `path` is the DECLARED path: no prefix from `app.use(\"/v1\", router)` is composed in, because that is a fact in another statement — and often another file — and a wrong URL is worse than a partial one.",
+
+  "resolved": {
+    "express": [
+      { "module": "routes.ts",  "address": "GET /users",        "method": "GET",    "path": "/users",        "handler": "listUsers",         "handler_kind": "function" },
+      { "module": "routes.ts",  "address": "GET /users/:id",    "method": "GET",    "path": "/users/:id",    "handler": "readUser",          "handler_kind": "function" },
+      { "module": "routes.ts",  "address": "POST /users",       "method": "POST",   "path": "/users",        "handler": "createUser",        "handler_kind": "function" },
+      { "module": "routes.ts",  "address": "DELETE /users/:id", "method": "DELETE", "path": "/users/:id",    "handler": "readUser",          "handler_kind": "function" },
+      { "module": "routes.ts",  "address": "GET /items",        "method": "GET",    "path": "/items",        "handler": "listUsers",         "handler_kind": "function" },
+
+      { "module": "aliased.ts", "address": "GET /aliased",         "method": "GET",  "path": "/aliased",         "handler": "aliasedHandler",   "handler_kind": "function" },
+      { "module": "aliased.ts", "address": "POST /aliased-router", "method": "POST", "path": "/aliased-router",  "handler": "routerHandler",    "handler_kind": "function" },
+      { "module": "aliased.ts", "address": "GET /twice",           "method": "GET",  "path": "/twice",           "handler": "firstDeclaration", "handler_kind": "function" },
+      { "module": "aliased.ts", "address": "GET /twice",           "method": "GET",  "path": "/twice",           "handler": "secondDeclaration","handler_kind": "function" }
+    ]
+  },
+
+  "_forbidden": "Endpoints that must NEVER exist. Each is a specific wrong answer a plausible implementation would produce. Checked BEFORE set equality, because Slice 9a found a forbidden list behind set equality is unreachable and never fires.",
+  "forbidden": [
+    { "address": "GET /v1/items",         "why": "A router mount prefix composed into the declared path. `app.use(\"/v1\", router)` is a separate statement and this fixture does not even contain it." },
+    { "address": "GET /not-a-route",      "why": "`cache` is `new Cache()`, not an Express application. Matching the call's spelling finds this." },
+    { "address": "POST /also-not-a-route","why": "Same receiver, second method name." },
+    { "address": "GET /still-not-a-route","why": "A local class literally named Router is still not express.Router." },
+    { "address": "GET /object-literal",   "why": "An object literal with a `get` property." },
+    { "address": "GET /map-get",          "why": "`Map.prototype.get` with one argument. A one-argument call is not a registration." },
+    { "address": "GET /anything",         "why": "`app.all` is not an HTTP method. Expanding it into eight endpoints would assert eight declarations where the source made one." },
+    { "address": "GET /computed/items",   "why": "`PREFIX + \"/items\"` evaluated. Nerve does not evaluate expressions." },
+    { "address": "GET /inline",           "why": "An inline arrow function has no entity, so there is no target for the edge." },
+    { "address": "POST /inline-expression","why": "Same, for a function expression." },
+    { "address": "GET /member",           "why": "`handlers.list` is a member expression, not a locally declared name." },
+    { "address": "GET /method-handler",   "why": "`Views.handle` is a member expression. It IS a declared static method, but resolving it means resolving the receiver first, which this rule does not do — see known_false_negatives." },
+    { "address": "GET /imported",         "why": "`app` is imported from another module. Emitting this needs cross-module value tracking, the stated lower bound." },
+    { "address": "POST /imported-too",    "why": "Same, second registration." }
+  ],
+
+  "_unsupported_by_form": "Every construct Nerve read and declined, counted by form. The gate asserts this map exactly, so a new unreadable form cannot appear silently and the precision denominator stays auditable. Same three forms 10a uses; `methods-not-literal` is Flask-specific and correctly absent.",
+  "unsupported_by_form": {
+    "app-not-local": 2,
+    "path-not-literal": 2,
+    "handler-not-a-symbol": 4
+  },
+
+  "_ambiguous": "Declarations the source really does make twice. Both edges are kept; the ambiguity is reported rather than resolved by choosing one.",
+  "ambiguous": [
+    { "module": "aliased.ts", "address": "GET /twice", "declarations": 2 }
+  ],
+
+  "_known_false_negatives": "Routes a human can see and Nerve does not record. Asserted ABSENT, so an FN cannot be quietly 'fixed' by a guess — promoting one has to be a deliberate change to this file.",
+  "known_false_negatives": [
+    { "address": "GET /imported",       "reason": "app-not-local: the binding proving `app` is an Express app is in routes.ts." },
+    { "address": "POST /imported-too",  "reason": "app-not-local, same as above." },
+    { "address": "GET /computed/items", "reason": "path-not-literal: evaluating `PREFIX + \"/items\"` is expression evaluation, and recording the operand text would be a guess at the address." },
+    { "address": "GET /inline",         "reason": "handler-not-a-symbol: an inline arrow is a callable with no entity, so no target exists." },
+    { "address": "GET /member",         "reason": "handler-not-a-symbol: `handlers.list` names a property, not a declared symbol." },
+    { "address": "GET /method-handler", "reason": "handler-not-a-symbol: `Views.handle` is a real static method, and this is the most defensible FN in the set. Resolving it needs the receiver resolved first; the Python rule declines the same shape, and doing it on one language only would make the relation mean different things per language." }
+  ],
+
+  "_not_a_route": "Symbols that must have NO incoming SERVED_BY edge. A control against a rule that attaches endpoints too eagerly.",
+  "not_a_route": [
+    { "module": "routes.ts",   "symbol": "notARoute" },
+    { "module": "negative.ts", "symbol": "handler" }
+  ],
+
+  "_gates": [
+    "1. Every entry in `resolved` exists, with exactly the stated address, handler and handler kind.",
+    "2. No entry in `forbidden` exists. Checked FIRST.",
+    "3. Nothing in `not_a_route` has an incoming SERVED_BY edge.",
+    "4. Every entry in `known_false_negatives` is ABSENT.",
+    "5. `unsupported_by_form` matches exactly.",
+    "6. FP = 0 and FN = 0 beyond the declared ones.",
+    "7. Express is reported as its OWN table, never summed with FastAPI or Flask.",
+    "8. Every SERVED_BY observation carries FRAMEWORK_RULE / DIRECT and extractor id ts-js-framework.",
+    "9. No ts-js-framework observation carries a relation other than SERVED_BY, asserted over Relation::ALL.",
+    "10. negative.ts contributes zero endpoints AND zero unsupported counts.",
+    "11. Zero py-framework observations in a repository with no Python — the 5d-i invariant, restated."
+  ]
+}

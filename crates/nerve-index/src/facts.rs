@@ -462,6 +462,7 @@ impl ModuleFacts {
     pub fn from_extraction(
         extraction: &ModuleExtraction,
         references: &ReferenceExtraction,
+        framework: &crate::tsframework::TsFrameworkExtraction,
         source: &str,
     ) -> ModuleFacts {
         let mut import_specifiers: BTreeSet<String> = BTreeSet::new();
@@ -499,9 +500,11 @@ impl ModuleFacts {
                 has_syntax_error: extraction.has_syntax_error,
                 unmodelled_call_sites: references.unmodelled_call_sites,
                 unmodelled_by_form: references.unmodelled_by_form.clone(),
-                // Empty by construction, not by omission: Slice 10a's framework rules are Python
-                // only, and `ts-js-framework` is Slice 10b. When it lands this stops being empty.
-                framework_unsupported_by_form: BTreeMap::new(),
+                framework_unsupported_by_form: framework
+                    .unsupported_by_form
+                    .iter()
+                    .map(|(form, count)| ((*form).to_string(), *count))
+                    .collect(),
             },
             document: DocumentCounters::default(),
             // Empty by construction: a TypeScript module contributes nothing to Python's
@@ -590,6 +593,7 @@ mod tests {
                 let facts = ModuleFacts::from_extraction(
                     extraction,
                     &ReferenceExtraction::default(),
+                    &crate::tsframework::TsFrameworkExtraction::default(),
                     "export function helper() {}\nexport default helper;\n",
                 );
                 let round_tripped = ModuleFacts::from_json(&facts.to_json().unwrap())
@@ -648,7 +652,12 @@ mod tests {
         )
         .unwrap();
 
-        let facts = ModuleFacts::from_extraction(&extraction, &references, source);
+        let facts = ModuleFacts::from_extraction(
+            &extraction,
+            &references,
+            &crate::tsframework::TsFrameworkExtraction::default(),
+            source,
+        );
         assert_eq!(
             facts.import_specifiers,
             vec!["./a".to_string(), "./b".to_string()]
@@ -684,11 +693,13 @@ mod tests {
         let facts_one = ModuleFacts::from_extraction(
             &one,
             &ReferenceExtraction::default(),
+            &crate::tsframework::TsFrameworkExtraction::default(),
             "function f() { return 1; }\n",
         );
         let facts_two = ModuleFacts::from_extraction(
             &two,
             &ReferenceExtraction::default(),
+            &crate::tsframework::TsFrameworkExtraction::default(),
             "function f() { return 2; }\n",
         );
         assert_eq!(facts_one.symbols[0].name, facts_two.symbols[0].name);

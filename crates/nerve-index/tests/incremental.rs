@@ -1991,6 +1991,9 @@ fn a_single_file_edit_costs_a_fraction_of_a_full_index() {
 /// Python file with no route in it makes that extractor write nothing. The route is what proves an
 /// endpoint is withdrawn when its decorator is edited away, which is the only thing standing
 /// between a deleted route and a graph that still serves it.
+///
+/// And Slice 10b added `ts-js-framework`, so an Express route is written in too — `md-docs` has
+/// TypeScript but declares no routes, and without one that extractor writes nothing either.
 #[test]
 fn every_extractor_an_index_run_writes_is_one_it_also_withdraws() {
     let (_dir, root) = named_fixture_copy("md-docs");
@@ -2013,6 +2016,17 @@ fn every_extractor_an_index_run_writes_is_one_it_also_withdraws() {
          @app.get(\"/scale\")\n\
          def run(value):\n\
          \x20   return scale(value)\n",
+    );
+    write(
+        &root,
+        "src/server.ts",
+        "import express from \"express\";\n\
+         \n\
+         const app = express();\n\
+         \n\
+         export function handle(): void {}\n\
+         \n\
+         app.get(\"/health\", handle);\n",
     );
     nerve_index::init_with_project_id(&root, Some(TEST_PROJECT_ID)).unwrap();
     index(&root);
@@ -2167,5 +2181,67 @@ fn the_framework_cache_slot_does_not_make_documents_churn() {
         second.incremental.files_re_extracted, 0,
         "an empty framework slot is the correct value for a family with no framework extractor, \
          not a cache miss"
+    );
+}
+
+/// The same upgrade path for TypeScript, which Slice 10b brought into scope.
+///
+/// 10a left `framework_version` empty for TS/JS because there was no rule yet. 10b gives it one, so
+/// **every TS/JS row written by a 10a build now holds a value that is no longer correct** — and the
+/// consequence is the same as the Python case: hit the cache forever, emit no route evidence, ever.
+///
+/// Two slices, two languages, the same defect shape, and the same simulation. The third instance of
+/// this class on the project; the first two were found by hand and only one had a test until now.
+#[test]
+fn an_index_written_before_the_express_rule_re_extracts_its_typescript_files() {
+    let (_dir, root) = named_fixture_copy("ts-framework");
+    nerve_index::init_with_project_id(&root, Some(TEST_PROJECT_ID)).unwrap();
+    let first = index(&root);
+    assert!(first.endpoints > 0, "the fixture must declare routes");
+
+    // Simulate a Slice 10a-era row: the two versions it knew, and `''` in the framework slot,
+    // because 10a genuinely wrote `''` for TypeScript.
+    {
+        let conn = open_db(&root);
+        let rewritten = conn
+            .execute(
+                "UPDATE module_facts SET framework_version = ''
+                  WHERE language != 'python' AND language != 'markdown'",
+                [],
+            )
+            .unwrap();
+        assert!(
+            rewritten > 0,
+            "no TS/JS rows were rewritten, so this test simulates nothing"
+        );
+    }
+
+    let second = index(&root);
+    assert!(
+        second.incremental.files_re_extracted > 0,
+        "a pre-10b index hit the cache and skipped Express extraction; files_re_extracted was {}",
+        second.incremental.files_re_extracted
+    );
+    assert!(
+        second.endpoints > 0,
+        "re-extraction produced no endpoints, so the upgrade lost the routes"
+    );
+
+    let conn = open_db(&root);
+    let served: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM assertion a
+               JOIN observation o ON o.assertion_id = a.assertion_id
+              WHERE o.extractor_id = 'ts-js-framework' AND a.relation = 'SERVED_BY'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(served > 0, "no SERVED_BY evidence survived the upgrade");
+
+    let third = index(&root);
+    assert_eq!(
+        third.incremental.files_re_extracted, 0,
+        "with all three versions current and no file changed, nothing should be re-extracted"
     );
 }
