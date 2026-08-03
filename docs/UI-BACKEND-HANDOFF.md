@@ -443,3 +443,94 @@ requires in order to pass:
 
 No styling, no layout, no navigation, no views. There is **no Endpoints view** — building one is the
 user's call.
+
+---
+
+## Entry 5 — Slice 11a: test-observed calls, and three values where you expect two
+
+**Slices 11a, 11a-i** · new relation, new evidence source type, no new endpoint ·
+**no UI exists for any of it**
+
+### What landed
+
+`nerve trace import` reads a `nerve-trace/v1` artifact that a user's own tracer produced and asserts
+`TEST_OBSERVED_CALL` between the two frames of each observed call. **Nerve runs no tests** — the
+producer (`tracers/python/`) runs in the user's process, by the user's explicit invocation.
+
+**There is no new HTTP endpoint.** Import is a write path and is CLI-only. Trace observations appear
+through the endpoints that already exist — `/api/why`, `/api/entity`, `/api/neighbourhood` — because
+they are observations like any other and those endpoints are generic over the evidence model.
+
+### The four things a view must get right
+
+**1. `TEST_OBSERVED_CALL` is deliberately *not* in the default impact closure.**
+
+`/api/impact` returns a closure over `CONTAINS`, `IMPORTS`, `CALLS`, `REFERENCES` and `SERVED_BY`. It
+does **not** include `TEST_OBSERVED_CALL`, and that is a decision rather than an omission — see
+`docs/plans/slice-11a-trace-ingestion.md` §8. A trace says *one run took this edge*; a blast radius
+built on it would grow and shrink with which tests happened to run. There is also a security reading in
+`docs/THREAT-MODEL.md` T9: an artifact is untrusted input, and an edge it could inject into the default
+closure would change what Nerve tells a user to review before a change.
+
+So: if a view offers a relation filter, `TEST_OBSERVED_CALL` must be **opt-in and labelled**, and an
+impact view must not imply trace edges were considered. Contrast `SERVED_BY`, which *is* in the default
+set — Entry 4 explains why the two decisions differ.
+
+**2. The evidence names a set of runs, not a run.**
+
+`observation.environment` holds `runs[]`, an array, because `idx_observation_identity` has no column
+that could hold a second row per test: two tests reaching one callee from one line are **one
+observation** naming both. A view rendering "which test observed this" must render a **list**.
+
+The derived scalars on that object — `completion_state`, `repository_binding` — are the **weakest**
+value across contributing runs, not the first one's. A site observed by one complete run and one
+interrupted run reads as `partial`. Do not recompute them from `runs[0]`.
+
+**3. `repository_binding` has three values, and `unverified` is not `stale`.**
+
+| value | means | do not render as |
+|---|---|---|
+| `bound` | the artifact names this exact tree, verified | — |
+| `stale` | the artifact names a **different** tree | anything reassuring |
+| `unverified` | the artifact named **no** tree, so nothing was checked | `stale`, or a failure |
+
+`unverified` is the absence of a check, not a failed check. This is the same three-valued shape as
+`CoverageEvidence::Absent` and `gaps totals: null` in the standing contract note above: **absence of
+verification is not verification of absence.** A two-state badge here would be a lie in one direction
+or the other.
+
+An attacker cannot upgrade a binding by asserting a state: a plausible 40-hex commit and 64-hex merkle
+for a tree that is not this one yields `stale`, never `bound`.
+
+**4. `count` is not a frequency.**
+
+A record's `count` is how many times **one run** took that edge. It is not a claim about runs in
+general, and two runs' counts are recorded per run rather than summed into a total. Never label it
+"called N times" without naming the run.
+
+### The sentence the CLI prints, and why a view needs its own version
+
+```
+A trace is existential evidence: it says this run took these edges, not
+that every run does, and absence of an edge is absence of observation.
+```
+
+**Absence of a `TEST_OBSERVED_CALL` edge means nothing was observed, not that no call exists.** An
+untraced repository has zero trace edges and a fully-traced one has some; a view that draws "no
+observed calls" the way it draws "no callers" would turn missing instrumentation into an apparent fact
+about the code. This is `gaps`' `null`-versus-`0` problem in a new place.
+
+### Frontend edits the backend made
+
+**4 added lines**, all vocabulary entries `crates/nerve-server/tests/ui_vocabulary.rs` requires:
+
+- `apps/nerve-web/src/api/types.ts` — `'TEST_OBSERVED_CALL'` in `RELATIONS`
+- `apps/nerve-web/src/format.ts` — its verb pair, `['was observed calling', 'was observed called by']`
+
+The passive, hedged verb is deliberate and matches `SERVED_BY`'s reasoning in Entry 4: `calls` would
+assert a static fact from a single observation. `TEST_CALL_TRACE` already had a gloss in
+`SOURCE_TYPES` — *"A call observed during a test run, through instrumentation"* — so nothing was added
+for it.
+
+No styling, no layout, no navigation, no views. **There is no trace view, no run picker and no test-to-
+symbol view** — building them is the user's call.
