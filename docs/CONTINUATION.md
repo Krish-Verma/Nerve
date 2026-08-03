@@ -8,22 +8,22 @@
 
 | | |
 |---|---|
-| **Last slice commit** | `286ab59` — `feat: Slice 10b — Express, and the same upgrade trap one language over`. A docs commit sits on top (`575fc5f`); `git log --oneline -3` is authoritative. |
+| **Last slice commit** | `0aa5942` — `feat: Slice 11a — trace ingestion`. **Slice 11a is NOT complete: three measured gaps are recorded below.** `git log --oneline -3` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 10b** — Express routes (`ts-js-framework`). **Row 10 complete.** |
-| **Next slice** | **Slice 11 — test-observed calls.** A plan is already written and committed: `docs/plans/slice-11-test-observed-calls.md`. Then 12–14, validation, final audit. |
-| **Roadmap status** | **INCOMPLETE.** 11–14, real-world validation, the acceptance package and the final audit are all not started. |
+| **Last completed slice** | **Slice 10b** — Express routes. **Row 10 complete.** Slice 11a is landed and green but has an open gap list. |
+| **Next action** | **Close the three Slice 11a gaps** (below), then 11b (the Python tracer), then 12a/12b, 13, 14, validation, acceptance, audit. |
+| **Roadmap status** | **INCOMPLETE.** 11a landed with gaps; 11b, 12–14, real-world validation, the acceptance package and the final audit are not done. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
 
-## Verification state at the Slice 10b commit
+## Verification state at the Slice 11a commit
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace --no-fail-fast                   → 1116 passed, 0 failed, 2 ignored
+cargo test --workspace --no-fail-fast                   → 1168 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
 ```
 
@@ -296,6 +296,60 @@ declines (the receiver is imported, so the binding is in another file). But an u
 `@cache.get("/x")` — emits nothing **and counts nothing**, because Nerve has no reason to think it
 was meant to be a route and a missed-route tally would be a false claim in the opposite direction
 from a false positive. Both `negative.py` and `negative.ts` assert zero of each.
+
+---
+
+## Slice 11a — landed, green, and NOT complete
+
+`0aa5942`. `nerve trace import` reads a versioned NDJSON artifact; Nerve never runs the tests.
+`no_subprocess.rs` and `no_network.rs` are **byte-untouched**, which is the whole point.
+
+### The three gaps. Fix these before calling row 11 done
+
+`fixtures/trace-hostile/README.md` declares an expected refusal form for all 14 hostile artifacts.
+**Three do not produce one**, verified by `no_hostile_artifact_contributes_evidence_from_a_hostile_record`:
+
+| artifact | README claims | actual | why |
+|---|---|---|---|
+| `duplicate-run-id.jsonl` | `run-id-conflict` counted | **no refusal** | `RUN_ID_CONFLICT` is detected **per call site** — `merge_runs` only compares runs already stored on the observation it is about to restate — and the artifact replays a run id on a *different* edge, so no stored observation ever sees it. A repository-wide check needs a pre-write query for the run id. |
+| `malformed-utf8.jsonl` | `invalid-utf8-line` | **no refusal** | the invalid bytes do not reach a counted refusal. Not diagnosed further. |
+| `oversized-string.jsonl` | `string-too-long` | **no refusal** | not diagnosed further. |
+
+**`fts5-syntax.jsonl` and `prompt-injection.jsonl` also count no refusal, and that is correct** — they
+are **inert, not invalid**. FTS5 operators and instruction text are legal strings in a `run_id`;
+refusing them would refuse a legal artifact. `hostile_artifact_text_is_inert_and_bounded` carries
+their real assertion: schema intact, no control characters echoed, output bounded.
+
+Also: `every_refusal_form_is_produced_by_some_fixture` passes on an **aggregate** threshold (≥6 forms
+across the whole set), which is why it did not catch the three above. **Tighten it to per-artifact**
+when fixing them — that weak threshold is the reason the gaps were found by a different test.
+
+### Corrections to the Slice 11 plan, all verified — do not relitigate
+
+1. **Endpoints are `(caller, callee)`, never `(test, callee)`.** Verified on the database:
+   `parse → tokenize` and `parse_all → parse`. The Slice 11 plan would have asserted
+   `test_basic → tokenize`, a call the test never made.
+2. **`Directness::Resolved`.** `Direct` overclaims (the artifact names a location, not a symbol);
+   `Inferred` underclaims (unlike coverage, the *relation* is stated outright).
+3. **No `TraceRun` entity, no schema change.** `coverage.rs:17` — `CoverageRun` exists because it had
+   to be an *endpoint*; a trace run is provenance, and `observation.environment` already exists.
+4. **`idx_observation_identity` has no `environment` column** (`schema.rs:257`, verified on the
+   bytes), so two tests at one call site are **one row**. Plan §2.1's claim that they would be two
+   observations was false. The ingestion restates the **union** in `environment.runs[]`.
+5. **`TEST_OBSERVED_CALL` is deliberately NOT in `impact::DEFAULT_RELATIONS`** — the opposite of
+   10a's `SERVED_BY` decision, and for a stated reason: a registration is static and present on
+   every run, a trace observation is existential. It is also a **security** control: T9's written
+   rule ("coverage may only produce `COVERS`, never a call edge") does not transfer to a trace,
+   which legitimately produces a call edge — so excluding it means an attacker who can write an
+   artifact cannot change what `nerve impact` says by default.
+
+### Slice 12 is analysed but not started
+
+`docs/plans/slice-12-git-object-access-analysis.md` (`324df34`) settles the dependency question with
+measurements: no compression library among the 101 packages; a loose object here begins `78 01`;
+Nerve's own `.git` has **1342 loose objects and zero packfiles**, which is misleading because a clone
+is always packed. `flate2`/`rust_backend` plus an independent packfile reader, over `gix` and `git2`.
+Row 12 must split into 12a (object access) and 12b (historical model).
 
 ---
 
