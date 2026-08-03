@@ -961,24 +961,41 @@ fn graph_commands_need_an_index() {
 /// SQL live in `nerve-store`, so the Slice 4 server and Slice 8 MCP tools reuse them unchanged.
 #[test]
 fn the_cli_contains_no_traversal_or_query_logic() {
-    const MAIN: &str = include_str!("../src/main.rs");
-    for forbidden in [
-        "SELECT ",
-        "INSERT INTO",
-        "FROM assertion",
-        "JOIN ",
-        "ORDER BY",
-        "prepare(",
-        "query_row",
-        "rusqlite",
-        "VecDeque",
-        "BinaryHeap",
-        "blake3",
-    ] {
-        assert!(
-            !MAIN.contains(forbidden),
-            "nerve-cli must not contain {forbidden:?}"
-        );
+    // Every module of the binary, not only `main.rs`: the invariant is about the crate, and
+    // scanning one file would let it be escaped by adding a second one.
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut modules: Vec<PathBuf> = std::fs::read_dir(&src)
+        .expect("nerve-cli/src must be readable")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .collect();
+    modules.sort();
+    assert!(
+        modules.len() >= 3,
+        "expected to scan the whole crate, found {modules:?}"
+    );
+
+    for module in &modules {
+        let text = std::fs::read_to_string(module).expect("module must be readable");
+        for forbidden in [
+            "SELECT ",
+            "INSERT INTO",
+            "FROM assertion",
+            "JOIN ",
+            "ORDER BY",
+            "prepare(",
+            "query_row",
+            "rusqlite",
+            "VecDeque",
+            "BinaryHeap",
+            "blake3",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "nerve-cli must not contain {forbidden:?} ({})",
+                module.display()
+            );
+        }
     }
 
     const MANIFEST: &str = include_str!("../Cargo.toml");
@@ -2305,4 +2322,511 @@ fn check_writes_nothing_to_the_database() {
         "nerve check must not write to the index it was asked to judge"
     );
     assert_eq!(before, after, "the database bytes must be identical");
+}
+
+// ---- doctor ------------------------------------------------------------------------------
+//
+// `doctor`'s whole point is that it runs on a **broken** installation, so every broken state
+// below is constructed on disk rather than mocked: garbage bytes in the database file, a schema
+// row from the future, a migration row removed, a config that is not TOML, a repository copied
+// out from under its recorded root. The assertion that matters in each is the same one: a
+// report came back, it named the problem, and the process did not panic.
+
+/// Copy a whole tree, `.nerve/` included — which `copy_tree` deliberately skips.
+fn copy_tree_with_index(source: &Path, destination: &Path) {
+    std::fs::create_dir_all(destination).unwrap();
+    for entry in std::fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        let from = entry.path();
+        let to = destination.join(entry.file_name());
+        if from.is_dir() {
+            copy_tree_with_index(&from, &to);
+        } else {
+            std::fs::copy(&from, &to).unwrap();
+        }
+    }
+}
+
+/// The finding with this id, or a panic naming what was reported instead.
+fn finding<'a>(value: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+    value["findings"]
+        .as_array()
+        .expect("findings must be an array")
+        .iter()
+        .find(|finding| finding["id"] == id)
+        .unwrap_or_else(|| {
+            panic!(
+                "no finding {id:?} in {}",
+                serde_json::to_string_pretty(value).unwrap()
+            )
+        })
+}
+
+fn doctor(root: &Path) -> serde_json::Value {
+    json(&run(&["doctor", root.to_str().unwrap(), "--json"]))
+}
+
+/// The `--json` vocabulary, pinned. A caller branches on `id`, so renaming one silently is a
+/// breaking change and this is what refuses it.
+const DOCTOR_IDS: [&str; 11] = [
+    "nerve_dir",
+    "database_file",
+    "database_permissions",
+    "database_integrity",
+    "schema_version",
+    "migration_history",
+    "fts_consistency",
+    "config_file",
+    "recorded_root",
+    "index_present",
+    "unfinished_runs",
+];
+
+#[test]
+fn doctor_reports_a_healthy_installation_and_exits_zero() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    let output = run(&["doctor", root.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stdout(&output));
+
+    let value = doctor(&root);
+    assert_eq!(value["counts"]["fatal"], 0);
+    assert_eq!(value["counts"]["warning"], 0);
+    assert_eq!(value["counts"]["skipped"], 0);
+    assert_eq!(value["counts"]["ok"], DOCTOR_IDS.len());
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["error"], serde_json::Value::Null);
+}
+
+/// Nothing installed at all. This is the report, not a reason to refuse one.
+#[test]
+fn doctor_reports_a_missing_installation_without_panicking() {
+    let (_dir, root) = fixture_copy();
+    let output = run(&["doctor", root.to_str().unwrap()]);
+    assert_eq!(code(&output), 2, "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("there is no .nerve directory"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("nerve init"),
+        "the finding must say what to do: {}",
+        stdout(&output)
+    );
+
+    let value = doctor(&root);
+    assert_eq!(finding(&value, "nerve_dir")["severity"], "fatal");
+    assert_eq!(
+        finding(&value, "database_integrity")["severity"],
+        "skipped",
+        "a check that could not run is never reported as one that passed"
+    );
+    assert_eq!(
+        value["findings"].as_array().unwrap().len(),
+        DOCTOR_IDS.len(),
+        "every check is still accounted for"
+    );
+}
+
+/// Garbage bytes where the database should be. A doctor that panicked here would be useless
+/// precisely when it is needed.
+#[test]
+fn doctor_reports_a_corrupt_database_without_panicking() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    for sidecar in ["nerve.db-wal", "nerve.db-shm"] {
+        let _ = std::fs::remove_file(root.join(".nerve").join(sidecar));
+    }
+    std::fs::write(
+        root.join(".nerve/nerve.db"),
+        b"this is not a database, it is a pile of bytes\n",
+    )
+    .unwrap();
+
+    let output = run(&["doctor", root.to_str().unwrap()]);
+    assert_eq!(code(&output), 2, "{}", stdout(&output));
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("panicked"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value = doctor(&root);
+    let integrity = finding(&value, "database_integrity");
+    assert_eq!(integrity["severity"], "fatal");
+    assert!(
+        integrity["found"]
+            .as_str()
+            .unwrap()
+            .contains("not a database"),
+        "{integrity}"
+    );
+    assert!(integrity["remedy"].is_string(), "{integrity}");
+    assert_eq!(
+        finding(&value, "database_file")["severity"],
+        "ok",
+        "the file is there and its bytes read fine; it is simply not a database"
+    );
+    assert_eq!(finding(&value, "schema_version")["severity"], "skipped");
+}
+
+/// A database written by a newer Nerve is intact. Reporting it as damage would send the user
+/// to delete an index that is perfectly good and merely ahead of this binary.
+#[test]
+fn doctor_reports_a_schema_from_the_future_as_a_newer_nerve_not_as_damage() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    {
+        let conn = open_index(&root);
+        conn.execute_batch(&format!(
+            "INSERT INTO schema_version (version, applied_at, description)
+             VALUES ({}, '2030-01-01T00:00:00Z', 'written by a later slice')",
+            nerve_store::SCHEMA_VERSION + 1
+        ))
+        .unwrap();
+    }
+
+    let value = doctor(&root);
+    let schema = finding(&value, "schema_version");
+    assert_eq!(schema["severity"], "fatal");
+    let found = schema["found"].as_str().unwrap();
+    assert!(found.contains("newer Nerve"), "{found}");
+    assert!(
+        !found.contains("corrupt") && !found.contains("damage"),
+        "a future schema is not damage: {found}"
+    );
+    assert!(
+        schema["remedy"].as_str().unwrap().contains("upgrade Nerve"),
+        "{schema}"
+    );
+    assert_eq!(
+        finding(&value, "database_integrity")["severity"],
+        "ok",
+        "the file itself is sound"
+    );
+    assert_eq!(code(&run(&["doctor", root.to_str().unwrap()])), 2);
+}
+
+/// A schema behind this build is a pending migration, which one command fixes. A warning is not
+/// a failure, so this exits 0.
+#[test]
+fn doctor_reports_a_schema_behind_this_build_as_a_warning_and_still_exits_zero() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    {
+        let conn = open_index(&root);
+        conn.execute_batch(
+            "DELETE FROM schema_version
+              WHERE version = (SELECT MAX(version) FROM schema_version)",
+        )
+        .unwrap();
+    }
+
+    let value = doctor(&root);
+    assert_eq!(finding(&value, "schema_version")["severity"], "warning");
+    assert!(finding(&value, "schema_version")["remedy"]
+        .as_str()
+        .unwrap()
+        .contains("nerve index"));
+    assert_eq!(value["counts"]["fatal"], 0);
+    assert_eq!(
+        code(&run(&["doctor", root.to_str().unwrap()])),
+        0,
+        "warnings do not fail doctor"
+    );
+}
+
+/// A migration step that was never applied, under a version that claims it was. `migrate` only
+/// replays steps above the recorded maximum, so nothing will ever fill the gap.
+#[test]
+fn doctor_reports_a_migration_that_was_never_applied() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    {
+        let conn = open_index(&root);
+        conn.execute_batch("DELETE FROM schema_version WHERE version = 2")
+            .unwrap();
+    }
+
+    let value = doctor(&root);
+    assert_eq!(finding(&value, "schema_version")["severity"], "ok");
+    let history = finding(&value, "migration_history");
+    assert_eq!(history["severity"], "fatal");
+    assert!(
+        history["found"].as_str().unwrap().contains("2"),
+        "{history}"
+    );
+    assert_eq!(code(&run(&["doctor", root.to_str().unwrap()])), 2);
+}
+
+/// An index that started and never reported finishing leaves a half-written graph.
+#[test]
+fn doctor_reports_an_interrupted_index() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    {
+        let conn = open_index(&root);
+        conn.execute_batch(
+            "UPDATE extractor_run
+                SET status = 'running', finished_at = NULL
+              WHERE run_id = (SELECT MAX(run_id) FROM extractor_run)",
+        )
+        .unwrap();
+    }
+
+    let output = run(&["doctor", root.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "an interrupted index is recoverable");
+    assert!(
+        stdout(&output).contains("interrupted"),
+        "{}",
+        stdout(&output)
+    );
+
+    let value = doctor(&root);
+    let runs = finding(&value, "unfinished_runs");
+    assert_eq!(runs["severity"], "warning");
+    assert!(
+        runs["remedy"].as_str().unwrap().contains("--full"),
+        "{runs}"
+    );
+}
+
+/// The config is loaded before a single file is read — it carries the size ceiling and the
+/// secret deny-list — so a config that does not parse breaks indexing outright.
+#[test]
+fn doctor_reports_an_unparseable_config_without_panicking() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    std::fs::write(root.join(".nerve/config.toml"), "this is not = toml [[[\n").unwrap();
+
+    let output = run(&["doctor", root.to_str().unwrap()]);
+    assert_eq!(code(&output), 2, "{}", stdout(&output));
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("panicked"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value = doctor(&root);
+    let config = finding(&value, "config_file");
+    assert_eq!(config["severity"], "fatal");
+    assert!(
+        config["found"].as_str().unwrap().contains("does not parse"),
+        "{config}"
+    );
+    assert!(
+        config["remedy"].as_str().unwrap().contains("project_id"),
+        "deleting the config mints a new project_id and orphans the index: {config}"
+    );
+    assert_eq!(
+        finding(&value, "database_integrity")["severity"],
+        "ok",
+        "a broken config does not stop the database being inspected"
+    );
+}
+
+/// A copied repository keeps the root its index was recorded against. Confusing, and reported.
+#[test]
+fn doctor_reports_a_repository_that_no_longer_matches_its_recorded_root() {
+    let (dir, root) = indexed_fixture("ts-basic");
+    let copy = dir.path().join("copied-elsewhere");
+    copy_tree_with_index(&root, &copy);
+
+    let value = doctor(&copy);
+    let recorded = finding(&value, "recorded_root");
+    assert_eq!(recorded["severity"], "warning");
+    let found = recorded["found"].as_str().unwrap();
+    assert!(found.contains("moved or copied"), "{found}");
+    assert!(
+        found.contains(root.to_str().unwrap()),
+        "the recorded root is named so the reader can see which is which: {found}"
+    );
+    assert_eq!(
+        code(&run(&["doctor", copy.to_str().unwrap()])),
+        0,
+        "a copied repository still answers; it is a warning, not a failure"
+    );
+
+    // And when the recorded root is not merely different but gone.
+    std::fs::rename(&root, dir.path().join("renamed")).unwrap();
+    let moved = doctor(&copy);
+    assert_eq!(finding(&moved, "recorded_root")["severity"], "warning");
+    assert!(finding(&moved, "recorded_root")["found"]
+        .as_str()
+        .unwrap()
+        .contains("no longer exists"));
+}
+
+/// The full-text index is maintained by triggers. When it drifts, `nerve search` quietly
+/// misses rows, which is the kind of failure a user reports as "search is broken".
+#[test]
+fn doctor_reports_a_full_text_index_that_drifted_from_the_entity_table() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    {
+        let conn = open_index(&root);
+        conn.execute_batch(
+            "INSERT INTO entity_fts(entity_fts, rowid, name, scope_path)
+             SELECT 'delete', rowid, name, scope_path FROM entity LIMIT 1",
+        )
+        .unwrap();
+    }
+
+    let value = doctor(&root);
+    let fts = finding(&value, "fts_consistency");
+    assert_eq!(fts["severity"], "warning");
+    assert!(
+        fts["found"].as_str().unwrap().contains("full-text index"),
+        "{fts}"
+    );
+    assert_eq!(code(&run(&["doctor", root.to_str().unwrap()])), 0);
+}
+
+/// `0600` on the database is a security control Slice 1 set deliberately (SECURITY.md).
+#[cfg(unix)]
+#[test]
+fn doctor_reports_a_database_readable_by_more_than_its_owner() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_dir, root) = indexed_fixture("ts-basic");
+    let db = root.join(".nerve/nerve.db");
+    assert_eq!(
+        std::fs::metadata(&db).unwrap().permissions().mode() & 0o777,
+        0o600,
+        "nerve init must still create the database owner-only"
+    );
+
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let value = doctor(&root);
+    let permissions = finding(&value, "database_permissions");
+    assert_eq!(permissions["severity"], "warning");
+    assert!(
+        permissions["found"].as_str().unwrap().contains("0644"),
+        "{permissions}"
+    );
+    assert!(
+        permissions["remedy"]
+            .as_str()
+            .unwrap()
+            .contains("chmod 600"),
+        "{permissions}"
+    );
+}
+
+/// An initialized but never-indexed repository is not a broken installation.
+#[test]
+fn doctor_reports_an_empty_index_as_a_warning() {
+    let (_dir, root) = fixture_copy();
+    assert_eq!(code(&run(&["init", root.to_str().unwrap()])), 0);
+
+    let value = doctor(&root);
+    assert_eq!(finding(&value, "index_present")["severity"], "warning");
+    assert_eq!(finding(&value, "database_integrity")["severity"], "ok");
+    assert_eq!(value["counts"]["fatal"], 0);
+    assert_eq!(code(&run(&["doctor", root.to_str().unwrap()])), 0);
+}
+
+#[test]
+fn doctor_json_carries_the_stable_id_vocabulary_and_a_remedy_for_everything_actionable() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    let value = doctor(&root);
+    require_keys(
+        &value,
+        &[
+            "command",
+            "ok",
+            "exit_code",
+            "error",
+            "root",
+            "nerve_dir",
+            "database_path",
+            "counts",
+            "findings",
+        ],
+    );
+    assert_eq!(value["command"], "doctor");
+
+    let findings = value["findings"].as_array().unwrap();
+    let ids: Vec<&str> = findings
+        .iter()
+        .map(|finding| finding["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids, DOCTOR_IDS,
+        "the id vocabulary is a contract: a caller branches on it"
+    );
+    for one in findings {
+        require_keys(
+            one,
+            &["id", "group", "severity", "checked", "found", "remedy"],
+        );
+        let severity = one["severity"].as_str().unwrap();
+        assert!(
+            ["ok", "warning", "fatal", "skipped"].contains(&severity),
+            "unknown severity {severity:?}"
+        );
+        if severity == "warning" || severity == "fatal" {
+            assert!(one["remedy"].is_string(), "{one} must say what to do");
+        }
+        assert!(!one["checked"].as_str().unwrap().is_empty());
+        assert!(!one["found"].as_str().unwrap().is_empty());
+    }
+
+    // The same shape when the installation is broken, so a script parses one thing.
+    let (_bare_dir, bare) = fixture_copy();
+    let broken = doctor(&bare);
+    let broken_ids: Vec<&str> = broken["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|finding| finding["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(broken_ids, DOCTOR_IDS);
+    assert_eq!(broken["ok"], false);
+    assert!(broken["error"].is_string());
+}
+
+#[test]
+fn doctor_exits_ten_when_the_path_is_not_a_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("not-a-directory.txt");
+    std::fs::write(&file, "x").unwrap();
+    assert_eq!(code(&run(&["doctor", file.to_str().unwrap()])), 10);
+    assert_eq!(
+        code(&run(&[
+            "doctor",
+            dir.path().join("nowhere").to_str().unwrap()
+        ])),
+        10
+    );
+}
+
+/// `doctor` diagnoses and never repairs. Asserted on the bytes, not on the absence of a call.
+#[test]
+fn doctor_writes_nothing_to_the_database() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    let path = root.to_str().unwrap();
+
+    // A state with something to be tempted to fix: an interrupted run and a drifted FTS index.
+    {
+        let conn = open_index(&root);
+        conn.execute_batch(
+            "UPDATE extractor_run SET status = 'running', finished_at = NULL
+              WHERE run_id = (SELECT MAX(run_id) FROM extractor_run);
+             INSERT INTO entity_fts(entity_fts, rowid, name, scope_path)
+             SELECT 'delete', rowid, name, scope_path FROM entity LIMIT 1;",
+        )
+        .unwrap();
+    }
+
+    let before = std::fs::read(root.join(".nerve/nerve.db")).unwrap();
+    let before_digest = database_digest(&root);
+
+    assert_eq!(code(&run(&["doctor", path])), 0);
+    assert_eq!(code(&run(&["doctor", path, "--json"])), 0);
+    assert_eq!(code(&run(&["doctor", path, "--quiet"])), 0);
+
+    assert_eq!(
+        database_digest(&root),
+        before_digest,
+        "nerve doctor must not write to the index it was asked to diagnose"
+    );
+    assert_eq!(
+        before,
+        std::fs::read(root.join(".nerve/nerve.db")).unwrap(),
+        "the database bytes must be identical"
+    );
 }

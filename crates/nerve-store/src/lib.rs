@@ -17,6 +17,7 @@
 
 pub mod db;
 pub mod derive;
+pub mod diagnose;
 pub mod dump;
 pub mod error;
 pub mod facts;
@@ -32,6 +33,7 @@ pub mod write;
 
 pub use db::{database_bytes, open, open_in_memory};
 pub use derive::{derive_assertion_state_for, rebuild_assertion_state};
+pub use diagnose::{diagnose, DatabaseDiagnostics};
 pub use dump::canonical_dump;
 pub use error::{Result, StoreError};
 pub use facts::{delete_module_facts, load_module_facts, upsert_module_facts, ModuleFactsRow};

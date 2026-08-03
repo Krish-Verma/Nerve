@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod doctor;
 mod exit;
 
 use std::path::{Path, PathBuf};
@@ -120,6 +121,27 @@ enum Command {
         /// moved between the two. The staleness is still reported, in the output and in `--json`.
         #[arg(long)]
         allow_stale: bool,
+    },
+    /// Diagnose the installation, the database and the configuration.
+    ///
+    /// `check` judges one thing — is the index current? — and answers with an exit code for CI.
+    /// `doctor` inspects many things and answers in prose, for a person whose tooling is
+    /// misbehaving. Each finding says what was checked, what was found, how bad it is, and what
+    /// to do about it.
+    ///
+    /// It runs on a broken installation on purpose: no database, a corrupt database, a schema
+    /// written by a newer Nerve and an unparseable config are its subject matter, not reasons to
+    /// bail out. Exit `0` unless something fatal was found, `2` if it was — a warning is not a
+    /// failure.
+    ///
+    /// It diagnoses and never repairs; there is no `--fix`. It makes no network call of any kind,
+    /// and it does not judge index freshness — that is `nerve check`'s question.
+    Doctor {
+        /// Repository root. Defaults to the current directory.
+        path: Option<PathBuf>,
+        /// Repository root. Equivalent to the positional form.
+        #[arg(long = "path", value_name = "PATH")]
+        path_flag: Option<PathBuf>,
     },
     /// Full-text search over entity names and scope paths.
     Search {
@@ -376,6 +398,10 @@ fn main() {
             &output,
             &path.or(path_flag).unwrap_or_else(|| PathBuf::from(".")),
             allow_stale,
+        ),
+        Command::Doctor { path, path_flag } => doctor::run(
+            &output,
+            &path.or(path_flag).unwrap_or_else(|| PathBuf::from(".")),
         ),
         Command::Search {
             query,

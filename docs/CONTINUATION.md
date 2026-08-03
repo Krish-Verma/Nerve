@@ -8,22 +8,22 @@
 
 | | |
 |---|---|
-| **Last slice commit** | `c2cf8fa` — `feat: Slice 7c-i — nerve check, and the staleness the freshness sweep could not see`. A docs commit may sit on top; `git log --oneline -3` is authoritative. |
+| **Last slice commit** | Slice 7c-ii — `feat: Slice 7c-ii — nerve doctor`. `git log --oneline -3` is authoritative; a docs commit records the hash. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 7c-i** — `nerve check`, the CI verdict and its exit codes |
-| **Next slice** | **Slice 7c-ii** — `nerve doctor` (diagnostics). Then 8–14, validation. |
-| **Roadmap status** | **INCOMPLETE.** 7c-ii, 8–14 and real-world validation not started. |
+| **Last completed slice** | **Slice 7c-ii** — `nerve doctor`. **Slice 7 is now complete.** |
+| **Next slice** | **Slice 8 — MCP.** One default investigation tool. **T7 + T8 gate.** Then 9–14, validation. |
+| **Roadmap status** | **INCOMPLETE.** 8–14 and real-world validation not started. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
 
-## Verification state at the Slice 7c-i commit
+## Verification state at the Slice 7c-ii commit
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace                                  → 795 passed, 0 failed, 2 ignored
+cargo test --workspace                                  → 821 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
 ```
 
@@ -155,6 +155,32 @@ left `current`/exit 0, while a real `.ts` gave `stale`/exit 4. `discover()` filt
 extension. Orchestrator mutation probe (make `untracked_files` never record an addition) failed 3
 tests.
 
+## What Slice 7c-ii delivered — and Slice 7 is now complete
+
+**`nerve doctor`** — 11 checks, **one finding per check on every run, in a fixed order**. A check
+that could not run is `severity: "skipped"` *with its cause*, never omitted and never reported as
+passing: otherwise a caller cannot tell *sound* from *never established*. Same absence-is-not-zero
+principle as 7a's coverage and 7b's unresolved account. Closed id vocabulary pinned by two tests.
+
+**No new exit code.** Fatal reuses `NO_INDEX = 2`, whose documented meaning is already "no index at
+the requested path, **or it is not healthy enough to answer**". Warnings exit 0.
+
+**Two findings from building it.** `SELECT count(*) FROM entity_fts` reads the *content* table and
+returns the entity count even after the index has drifted — the obvious FTS consistency check is
+guaranteed to report agreement. Established by probe; `entity_fts_docsize` used instead. And FTS5's
+own `integrity-check` is an `INSERT`, blocked by `query_only`.
+
+**The no-SQL-in-the-CLI guard only scanned `main.rs`**, so a new module would have evaded it. The
+queries went to `nerve_store::diagnose` and the guard was widened to the whole crate.
+
+`doctor` does not answer `check`'s question — freshness is neither reimplemented nor called; it
+prints a line pointing at `nerve check`.
+
+Orchestrator adversarial smoke tests, all no-panic: zero-byte `nerve.db` (SQLite accepts it as
+empty, so `schema_version` fires), `.nerve` as a file, `nerve.db` as a directory, and **`nerve.db`
+symlinked to `/etc/passwd` — refused with no content disclosed.** Orchestrator mutation probe
+(synthesise a complete migration list) failed 3 tests.
+
 ---
 
 ## The interface is frozen (2026-08-02)
@@ -176,7 +202,7 @@ across `types.ts` and `App.tsx:144`) are the model.
 
 | | |
 |---|---|
-| **7c-ii** | **Next.** `nerve doctor` — diagnostics for a human whose install misbehaves. Plan: `docs/plans/slice-07c-check-and-doctor.md` §7c-ii. |
+| **8** | **Next.** MCP — one default investigation tool. **T7 + T8 gate** (`docs/THREAT-MODEL.md`). |
 | 7c | `nerve check` (CI exit codes) + `nerve doctor` (diagnostics). |
 | 8 | MCP — one default investigation tool. **T7 + T8 gate.** |
 | 9 | Python |
@@ -298,6 +324,16 @@ recorded in `docs/plans/slice-15-real-world-validation.md`.
   correspondence. Found during 7a-iii, deliberately left.
 - **The CLI↔API agreement-test boilerplate is duplicated twice** (`gaps`, `overview`) — roughly 35
   lines of spawn/`Reaper` each. A third such test should hoist it into the shared harness.
+- **`nerve doctor` reports a `nerve.db` that is a *directory* as "is missing".** The verdict (fatal,
+  exit 2) and the remedy are right; the sentence is not, and `nerve_dir` gets the analogous case
+  right ("exists but is not a directory"). Cosmetic, but it is a diagnostic tool saying something
+  untrue about what it found. Reproduce: `mkdir .nerve/nerve.db`. Fix next time that file is open.
+- **`fixtures/ts-basic/.nerve/` exists in the working tree at schema 1**, a gitignored leftover from
+  an old example run. **Verified untracked** — `.gitignore:2` covers it, and the only tracked
+  `.nerve`-matching path under `fixtures/` is `fixtures/ts-incremental/.nerveignore`, a legitimate
+  fixture. Harmless to the repository, but `cp -R fixtures/ts-basic` carries a stale index, which is
+  why the test helper `copy_tree` skips `.nerve`. Left in place deliberately: a local regenerable
+  artifact in the user's tree is not something to delete unasked.
 - **`indexable()` in `nerve-index/src/inspect.rs` restates the pipeline loader's three conditions**
   (size ceiling, readable, UTF-8) rather than calling it. If the loader's rules change, `check`
   reports an addition indexing will not actually add. Documented at the function; nothing enforces
