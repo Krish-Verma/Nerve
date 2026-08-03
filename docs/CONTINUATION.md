@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| **Last slice commit** | Slice 9a — `feat: Slice 9a — Python structure`. Hash recorded by the follow-up docs commit; `git log --oneline -3` is authoritative. |
+| **Last slice commit** | `4e53d82` — `feat: Slice 9a — Python structure, and an import site that makes two claims`. A docs commit may sit on top; `git log --oneline -3` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
 | **Last completed slice** | **Slice 9a** — Python structure (`py-structural`) |

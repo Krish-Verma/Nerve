@@ -205,7 +205,7 @@ where TS's declarator-bound arrows are.
 
 ## Commit
 
-Hash recorded by the follow-up docs commit.
+`4e53d82` — *feat: Slice 9a — Python structure, and an import site that makes two claims*.
 
 ## Next slice
 
