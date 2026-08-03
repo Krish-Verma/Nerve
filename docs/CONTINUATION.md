@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| **Last slice commit** | Slice 7c-i — `feat: Slice 7c-i — nerve check`. `git log --oneline -3` is authoritative; a docs commit records the hash. |
+| **Last slice commit** | `c2cf8fa` — `feat: Slice 7c-i — nerve check, and the staleness the freshness sweep could not see`. A docs commit may sit on top; `git log --oneline -3` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
 | **Last completed slice** | **Slice 7c-i** — `nerve check`, the CI verdict and its exit codes |
