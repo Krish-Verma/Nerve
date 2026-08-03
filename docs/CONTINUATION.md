@@ -8,22 +8,22 @@
 
 | | |
 |---|---|
-| **Last slice commit** | `b40458d` — `feat: Slice 8b-ii — four more MCP tools, and one that stopped being needed`. A docs commit may sit on top; `git log --oneline -3` is authoritative. |
+| **Last slice commit** | Slice 9a — `feat: Slice 9a — Python structure`. Hash recorded by the follow-up docs commit; `git log --oneline -3` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 8b-ii** — the rest of the MCP tool surface. **Row 8 complete.** |
-| **Next slice** | **Slice 9 — Python.** Then 10–14, validation, final audit. |
-| **Roadmap status** | **INCOMPLETE.** 9–14 and real-world validation not started. |
+| **Last completed slice** | **Slice 9a** — Python structure (`py-structural`) |
+| **Next slice** | **Slice 9b** — `py-reference` with its own precision gate. Then 10–14, validation, final audit. |
+| **Roadmap status** | **INCOMPLETE.** 9b, 10–14 and real-world validation not started. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
 
-## Verification state at the Slice 8b-ii commit
+## Verification state at the Slice 9a commit
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace --no-fail-fast                   → 970 passed, 0 failed, 2 ignored
+cargo test --workspace --no-fail-fast                   → 1012 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
 ```
 

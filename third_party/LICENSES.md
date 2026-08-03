@@ -20,7 +20,7 @@ CLAUDE.md §1 ("permissively licensed foundational libraries") and nothing more.
 
 ## Licensing posture
 
-All 95 transitive dependencies are permissively licensed. Nothing is copyleft-encumbered for
+All 96 transitive dependencies are permissively licensed. Nothing is copyleft-encumbered for
 distribution purposes:
 
 - `r-efi 6.0.0` offers `MIT OR Apache-2.0 OR LGPL-2.1-or-later`; we take MIT. It is a UEFI
@@ -49,6 +49,7 @@ distribution purposes:
 | `toml` | 0.9.12 | MIT OR Apache-2.0 | nerve-index | `.nerve/config.toml` |
 | `tree-sitter` | 0.25.10 | MIT | nerve-index | Incremental parser runtime |
 | `tree-sitter-javascript` | 0.25.0 | MIT | nerve-index | JavaScript / JSX grammar |
+| `tree-sitter-python` | 0.25.0 | MIT | nerve-index | Python grammar (Slice 9a) |
 | `tree-sitter-typescript` | 0.23.2 | MIT | nerve-index | TypeScript and TSX grammars |
 | `tempfile` | 3.27.0 | MIT OR Apache-2.0 | dev-dependency | Temporary directories in tests |
 
@@ -82,12 +83,27 @@ crates for one signal.
 
 **Net: 89 → 95 crates, all `MIT OR Apache-2.0`.**
 
+### The Slice 9a Python grammar, and what it cost
+
+`tree-sitter-python 0.25.0`, **MIT**, from the same `tree-sitter` organisation as the two
+grammars already here. Measured cost: the workspace went from **100 to 101** `[[package]]`
+entries in `Cargo.lock` — 95 to 96 third-party crates. **One crate, and only one**: its two
+dependencies, `tree-sitter-language 0.1.7` and `cc 1.4.0`, were already in the tree, and its
+`0.25` line matches `tree-sitter 0.25.10` so no existing grammar needed a version bump.
+
+**`tree-sitter-stack-graphs-python` was rejected on clean-room grounds**, and the distinction is
+the one CLAUDE.md §1 draws. A bare grammar is a *parser*: it turns bytes into a syntax tree and
+answers no question about what a name means. Stack-graphs is a *name-resolution and
+code-navigation engine* — a competing code-intelligence implementation — and depending on one
+would make Nerve's answers someone else's. Nerve resolves Python names itself
+(`crates/nerve-index/src/pyresolve.rs`), as it already does for TS/JS.
+
 ### Notes on version pinning
 
 `tree-sitter-typescript 0.23.2` is the newest release compatible with `tree-sitter 0.25.10`;
-`tree-sitter-javascript` is at 0.25.0. Both expose grammars as `LanguageFn` constants
-(`LANGUAGE_TYPESCRIPT`, `LANGUAGE_TSX`, `LANGUAGE`) rather than the older
-`language_typescript()` functions, and both resolve through `tree-sitter-language 0.1.7`.
+`tree-sitter-javascript` and `tree-sitter-python` are at 0.25.0. All three expose grammars as
+`LanguageFn` constants (`LANGUAGE_TYPESCRIPT`, `LANGUAGE_TSX`, `LANGUAGE`) rather than the older
+`language_typescript()` functions, and all three resolve through `tree-sitter-language 0.1.7`.
 
 ## Complete transitive list
 
@@ -177,6 +193,7 @@ crates for one signal.
 | `tree-sitter` | 0.25.10 | MIT |
 | `tree-sitter-javascript` | 0.25.0 | MIT |
 | `tree-sitter-language` | 0.1.7 | MIT |
+| `tree-sitter-python` | 0.25.0 | MIT |
 | `tree-sitter-typescript` | 0.23.2 | MIT |
 | `unicode-ident` | 1.0.24 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | `utf8parse` | 0.2.2 | Apache-2.0 OR MIT |
@@ -189,7 +206,7 @@ crates for one signal.
 | `winnow` | 1.0.4 | MIT |
 | `zmij` | 1.0.23 | MIT |
 
-Total: 95 third-party crates (`nerve-core`, `nerve-store`, `nerve-index`, `nerve-server` and
+Total: 96 third-party crates (`nerve-core`, `nerve-store`, `nerve-index`, `nerve-server` and
 `nerve-cli` are this workspace and are excluded).
 
 ## npm — `apps/nerve-web`, the visual explorer (Slice 4b)

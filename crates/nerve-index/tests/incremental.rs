@@ -1416,6 +1416,106 @@ fn incremental_and_full_agree_under_a_seeded_edit_sequence() {
         ]
     );
 
+    // ---- the Python sequence (Slice 9a, acceptance criterion 6) ------------------------------
+    //
+    // Extending this harness rather than starting a second one is the point: the property that
+    // matters is *"an incremental re-index equals a from-scratch index of the same tree"*, and it
+    // is one property over one database, not one per language. The Python tree is written into
+    // the same repository the source and document sequences already built, so every step below
+    // re-indexes a mixed tree.
+    //
+    // Scripted rather than sampled, for the reason the link sequence is: Python's dependency on
+    // the file set has a shape TypeScript's does not. `pkg/util.py` and `pkg/util/__init__.py`
+    // are two different answers to one specifier, and a package outranks a module — so creating
+    // an `__init__.py` moves an already-resolved import without touching the importer's bytes.
+    const PY_PKG_INIT: &str = "pysrc/__init__.py";
+    const PY_UTIL: &str = "pysrc/util.py";
+    const PY_APP: &str = "pysrc/app.py";
+    const PY_UTIL_PACKAGE: &str = "pysrc/util/__init__.py";
+
+    write(&root, PY_PKG_INIT, "\"\"\"pysrc.\"\"\"\n");
+    write(&root, PY_UTIL, "def scale(value):\n    return value * 2\n");
+    write(
+        &root,
+        PY_APP,
+        "from .util import scale\nimport pysrc.absent\n\n\ndef run(value):\n    return scale(value)\n",
+    );
+    index(&root);
+
+    let mut python_steps: Vec<&'static str> = Vec::new();
+    let check_python = |label: &'static str, steps: &mut Vec<&'static str>| {
+        let outcome = index(&root);
+        let actual = dump_json(&root);
+        let (_reference_dir, expected) = dump_of_a_from_scratch_index(&root);
+        assert_eq!(
+            actual, expected,
+            "incremental and full disagree after {label}\n\
+             re-extracted {} file(s), resolution-changed {}",
+            outcome.incremental.files_re_extracted, outcome.incremental.files_resolution_changed
+        );
+        steps.push(label);
+    };
+
+    // 1. The imported module is edited. Only its own bytes moved.
+    write(&root, PY_UTIL, "def scale(value):\n    return value * 3\n");
+    check_python("py-target-edited", &mut python_steps);
+
+    // 2. A file appears that satisfies a specifier which was resolving to nothing. `pysrc/app.py`
+    //    is byte-identical to the run before and its only edge to `pysrc.absent` points at an
+    //    `Unresolved` entity, so the graph walk cannot reach it — specifier re-resolution must.
+    write(&root, "pysrc/absent.py", "MARKER = 1\n");
+    check_python("py-dangling-import-satisfied", &mut python_steps);
+
+    // 3. A package appears that outranks the module a specifier already resolved to. Nothing in
+    //    the importer changed and its answer must move all the same.
+    write(
+        &root,
+        PY_UTIL_PACKAGE,
+        "\"\"\"pysrc.util, now a package.\"\"\"\n",
+    );
+    check_python("py-package-outranks-module", &mut python_steps);
+
+    // 4. The package goes away. Outranking is not a sticky state.
+    remove(&root, PY_UTIL_PACKAGE);
+    check_python("py-package-removed", &mut python_steps);
+
+    // 5. The imported module is deleted. The import becomes unresolved rather than vanishing.
+    remove(&root, PY_UTIL);
+    check_python("py-target-deleted", &mut python_steps);
+
+    // 6. A Python module moves. Its symbols keep their shape and their path does not.
+    write(
+        &root,
+        "pysrc/moved.py",
+        "def scale(value):\n    return value * 3\n",
+    );
+    check_python("py-target-moved", &mut python_steps);
+
+    assert_eq!(
+        python_steps,
+        vec![
+            "py-target-edited",
+            "py-dangling-import-satisfied",
+            "py-package-outranks-module",
+            "py-package-removed",
+            "py-target-deleted",
+            "py-target-moved",
+        ]
+    );
+
+    // The Python half of the tree must actually be in the graph, or every equality above holds
+    // between two empty answers.
+    {
+        let conn = open_db(&root);
+        assert!(
+            scalar(
+                &conn,
+                "SELECT count(*) FROM observation WHERE extractor_id = 'py-structural'"
+            ) > 0,
+            "py-structural contributed nothing, so the equivalence above proves nothing about it"
+        );
+    }
+
     assert!(
         applied.len() >= 20,
         "the property must be exercised over at least 20 edits, applied {}",
@@ -1878,11 +1978,26 @@ fn a_single_file_edit_costs_a_fraction_of_a_full_index() {
 /// with nothing failing to say so.
 ///
 /// So the list is checked against what an index run *actually wrote*, not against a second list
-/// someone would have to remember to update. `md-docs` is used because it contains both TypeScript
-/// and Markdown, so all four extractors fire on one tree.
+/// someone would have to remember to update. The tree is `md-docs` — TypeScript and Markdown —
+/// plus one Python module written in here rather than committed into the fixture, so that every
+/// extractor fires on one tree without changing what `documents.rs` measures over the same
+/// corpus.
 #[test]
 fn every_extractor_an_index_run_writes_is_one_it_also_withdraws() {
-    let ((_dir, root), _outcome) = common::indexed_named_fixture("md-docs");
+    let (_dir, root) = named_fixture_copy("md-docs");
+    write(
+        &root,
+        "src/tool.py",
+        "\"\"\"One Python module, so `py-structural` writes something here too.\"\"\"\n\
+         \n\
+         import os\n\
+         \n\
+         \n\
+         def run(value):\n\
+         \x20   return value\n",
+    );
+    nerve_index::init_with_project_id(&root, Some(TEST_PROJECT_ID)).unwrap();
+    index(&root);
     let conn = open_db(&root);
 
     let mut written: BTreeSet<String> = BTreeSet::new();
@@ -1909,11 +2024,11 @@ fn every_extractor_an_index_run_writes_is_one_it_also_withdraws() {
          behind. Add them to INDEX_EXTRACTOR_IDS in crates/nerve-index/src/pipeline.rs."
     );
 
-    // The fixture must keep exercising every extractor, or the check above passes vacuously for
+    // The tree must keep exercising every extractor, or the check above passes vacuously for
     // whichever one stopped firing.
     assert_eq!(
         written, withdrawn,
-        "md-docs no longer exercises every extractor in INDEX_EXTRACTOR_IDS, so this test would \
+        "the tree no longer exercises every extractor in INDEX_EXTRACTOR_IDS, so this test would \
          stop protecting the ones that went missing"
     );
 }

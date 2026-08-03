@@ -1,11 +1,17 @@
 //! Nerve indexing pipeline.
 //!
 //! Discovery and ignore rules, path safety, tree-sitter parsing, the `fs-structural`,
-//! `ts-js-structural`, `ts-js-reference`, `md-structural` and `coverage` extractors, lexical
-//! binding, export closure, specifier
+//! `ts-js-structural`, `ts-js-reference`, `py-structural`, `md-structural` and `coverage`
+//! extractors, lexical binding, export closure, specifier
 //! resolution, a hand-written Markdown block scanner, the `init` / `index` / `coverage`
 //! application entry points, and the query-time file prober that gives `nerve why` its freshness
 //! answer without loosening any of those path rules.
+//!
+//! Each language family has its **own** extractor id, and that is not organisational tidiness:
+//! an observation carries the id of whatever produced it, so a Python fact stamped
+//! `ts-js-structural` would be a false statement about where the evidence came from. Slice 5d-i
+//! was a corrective slice for exactly that, and [`pystruct`] exists so it cannot recur for
+//! Python.
 //!
 //! The `coverage` extractor is split in two on purpose: [`coverage`] is a pure LCOV reader with
 //! no way to reach the world, and [`coverage_ingest`] is the half that resolves paths, maps lines
@@ -39,6 +45,8 @@ pub mod lang;
 pub mod markdown;
 pub mod pipeline;
 pub mod probe;
+pub mod pyresolve;
+pub mod pystruct;
 pub mod refs;
 pub mod resolve;
 
@@ -70,13 +78,21 @@ pub use init::{init, init_with_project_id, InitOutcome};
 pub use inspect::{
     index_freshness, partial_parses, untracked_files, IndexFreshness, PartialParse, UntrackedFiles,
 };
-pub use lang::{path_is_document, FileKind, Language, DOCUMENT_EXTENSIONS, MARKDOWN_LANGUAGE};
+pub use lang::{
+    path_is_document, path_is_python, FileKind, Language, DOCUMENT_EXTENSIONS, MARKDOWN_LANGUAGE,
+    PYTHON_LANGUAGE,
+};
 pub use markdown::{scan as scan_markdown, DocumentScan, Heading, HeadingStyle, ScanCounters};
 pub use pipeline::{
     index_repository, index_repository_with, IncrementalReport, IndexOptions, IndexOutcome,
     RunStatus, INDEX_EXTRACTOR_IDS,
 };
 pub use probe::{RepositoryProber, SourceSnippet, MAX_SNIPPET_BYTES, MAX_SNIPPET_LINES};
+pub use pystruct::{
+    extract_module as extract_python_module, AllDeclaration, PyImportForm, PyImportSite,
+    PyModuleExtraction, PySymbol, EXTRACTOR_ID as PYTHON_EXTRACTOR_ID,
+    EXTRACTOR_VERSION as PYTHON_EXTRACTOR_VERSION,
+};
 pub use refs::{
     extract_references, RefTarget, ReferenceExtraction, ReferenceSite, UnresolvedReason,
     EXTRACTOR_ID as REFERENCE_EXTRACTOR_ID, EXTRACTOR_VERSION as REFERENCE_EXTRACTOR_VERSION,

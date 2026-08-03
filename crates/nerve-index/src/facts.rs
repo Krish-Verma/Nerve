@@ -162,6 +162,52 @@ pub struct ModuleFacts {
 }
 
 impl ModuleFacts {
+    /// The cache entry for a Python module.
+    ///
+    /// `exports` and `re_exports` stay empty, and that is a statement rather than a gap: they
+    /// exist to feed [`crate::exports::ExportIndex`], which answers "which module declares the
+    /// symbol behind this name?" for `ts-js-reference` — an extractor that never sees a `.py`
+    /// file. Slice 9b's `py-reference` will need an index of its own with Python's scoping rules
+    /// in it, and reusing this one would give Python TypeScript's answers.
+    ///
+    /// `import_specifiers` **is** filled, because it is what [`crate::incremental::classify`]
+    /// re-resolves when the file set moves: adding `pkg/mod.py` can make a previously unresolved
+    /// `pkg.mod` resolve in a module whose own bytes never changed, and no `IMPORTS` edge leads
+    /// to the new file for the graph walk to follow.
+    pub fn from_python(
+        extraction: &crate::pystruct::PyModuleExtraction,
+        source: &str,
+    ) -> ModuleFacts {
+        let import_specifiers: BTreeSet<String> = extraction
+            .imports
+            .iter()
+            // A dynamic import names no specifier, so there is nothing to re-resolve and
+            // nothing that a change to the file set could move.
+            .filter(|import| !import.raw_specifier.is_empty())
+            .map(|import| import.raw_specifier.clone())
+            .collect();
+
+        ModuleFacts {
+            import_specifiers: import_specifiers.into_iter().collect(),
+            symbols: extraction
+                .symbols
+                .iter()
+                .map(|symbol| CachedSymbol {
+                    entity_id: symbol.entity_id.clone(),
+                    kind: symbol.kind.as_str().to_string(),
+                    name: symbol.name.clone(),
+                    scope_path: symbol.scope_path.clone(),
+                    body_hash: body_hash(source, symbol.span),
+                })
+                .collect(),
+            counters: CachedCounters {
+                has_syntax_error: extraction.has_syntax_error,
+                ..CachedCounters::default()
+            },
+            ..ModuleFacts::default()
+        }
+    }
+
     /// The cache entry for a document. It imports nothing and exports nothing, so every
     /// cross-module field is empty by construction rather than by omission.
     pub fn from_document(extraction: &crate::docs::DocumentExtraction) -> ModuleFacts {

@@ -116,7 +116,7 @@ fn re_indexing_is_idempotent() {
     assert_eq!(dump_json(&root), dump_before, "logical graph changed");
     assert_eq!(
         count(&conn, "extractor_run"),
-        runs_before + 4,
+        runs_before + nerve_index::INDEX_EXTRACTOR_IDS.len() as i64,
         "extractor_run is a run log and grows by one row per extractor"
     );
 }
@@ -308,12 +308,13 @@ fn evidence_source_types_distinguish_read_from_resolved() {
 
 /// Every extractor is recorded, each with its own run row and version.
 ///
-/// `md-structural` runs even though `ts-basic` holds no documents: the row says Nerve looked and
-/// found none, which is a fact. A row that appeared only when a document existed would make its
-/// absence ambiguous between "no documents" and "documents were never scanned".
+/// `md-structural` and `py-structural` run even though `ts-basic` holds neither documents nor
+/// Python: the rows say Nerve looked and found none, which is a fact. A row that appeared only
+/// when a matching file existed would make its absence ambiguous between "none here" and "never
+/// looked for".
 ///
 /// `fs-structural` is first, and the order is load-bearing rather than cosmetic: it owns the
-/// `File` entity that the two extractors which do read files hang their occurrences off.
+/// `File` entity that the extractors which do read files hang their occurrences off.
 #[test]
 fn every_extractor_run_is_recorded_per_index() {
     let (_dir, root) = indexed_fixture();
@@ -330,23 +331,42 @@ fn every_extractor_run_is_recorded_per_index() {
             ("fs-structural".to_string(), "1.0.0".to_string()),
             ("ts-js-structural".to_string(), "1.1.0".to_string()),
             ("ts-js-reference".to_string(), "1.0.0".to_string()),
+            ("py-structural".to_string(), "1.0.0".to_string()),
             ("md-structural".to_string(), "1.2.0".to_string()),
         ]
     );
+    // The run log and the withdrawal list describe the same population. `INDEX_EXTRACTOR_IDS` is
+    // hand-maintained, and an extractor that runs without being on it leaves stale evidence
+    // behind on every re-extraction.
+    let mut ran: Vec<&str> = report
+        .runs
+        .iter()
+        .map(|run| run.extractor_id.as_str())
+        .collect();
+    ran.sort_unstable();
+    let mut withdrawn = nerve_index::INDEX_EXTRACTOR_IDS.to_vec();
+    withdrawn.sort_unstable();
+    assert_eq!(ran, withdrawn);
+
     assert_eq!(
         report.last_run.as_ref().unwrap().extractor_id,
         "md-structural"
     );
-    assert_eq!(
-        report
-            .runs
-            .iter()
-            .find(|run| run.extractor_id == "md-structural")
-            .unwrap()
-            .files_processed,
-        0,
-        "ts-basic has no documents"
-    );
+    for (extractor, why) in [
+        ("md-structural", "ts-basic has no documents"),
+        ("py-structural", "ts-basic has no Python"),
+    ] {
+        assert_eq!(
+            report
+                .runs
+                .iter()
+                .find(|run| run.extractor_id == extractor)
+                .unwrap()
+                .files_processed,
+            0,
+            "{why}"
+        );
+    }
     assert_eq!(
         report
             .runs

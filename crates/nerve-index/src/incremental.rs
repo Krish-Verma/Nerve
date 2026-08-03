@@ -56,7 +56,8 @@ use nerve_core::ids;
 use crate::docref;
 use crate::error::Result;
 use crate::facts::{CachedSymbol, ModuleFacts};
-use crate::lang::path_is_document;
+use crate::lang::{path_is_document, path_is_python};
+use crate::pyresolve;
 use crate::resolve;
 
 /// How one path differs from the previously indexed tree.
@@ -163,8 +164,13 @@ pub fn classify(
     }
 
     // Specifier re-resolution reads the set of **code** paths, because that is the only set
-    // `resolve` consults. Adding or deleting a document cannot move a specifier, so gating on
-    // the whole path set would re-resolve every cached module every time a README changed.
+    // either resolver consults. Adding or deleting a document cannot move a specifier, so gating
+    // on the whole path set would re-resolve every cached module every time a README changed.
+    //
+    // Which resolver is decided by the importer's own extension, not by the shape of the
+    // specifier. A Python module's `pkg.util` and a TypeScript module's `./util` are answered by
+    // different rules, and running one language's resolver over the other's specifiers would
+    // report "unchanged" for a file whose imports really did move.
     let before: BTreeSet<String> = code_paths(previous.keys());
     let after: BTreeSet<String> = code_paths(current.keys());
     if before != after {
@@ -173,9 +179,20 @@ pub fn classify(
                 continue;
             }
             let Some(facts) = &module.facts else { continue };
+            let python = path_is_python(path);
             let moved = facts.import_specifiers.iter().any(|specifier| {
-                resolve::resolve(path, specifier, &before)
-                    != resolve::resolve(path, specifier, &after)
+                if python {
+                    // Deliberately does **not** model the `sys.path` refusal the graph builder
+                    // applies. That refusal forces a `None` whatever the file set holds, so a
+                    // specifier this comparison calls "moved" can only ever be one the builder
+                    // was going to record as `Unresolved` twice over: the error is an extra
+                    // re-extraction, never a missed one.
+                    pyresolve::resolve(path, specifier, &before)
+                        != pyresolve::resolve(path, specifier, &after)
+                } else {
+                    resolve::resolve(path, specifier, &before)
+                        != resolve::resolve(path, specifier, &after)
+                }
             });
             if moved {
                 set.unchanged.remove(path);

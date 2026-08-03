@@ -1,0 +1,100 @@
+{
+  "_format": {
+    "purpose": "Ground truth for the Slice 9a structure harness (crates/nerve-index/tests/python.rs). Written before the resolver existed, as fixtures/ts-resolution/expected.json was. See README.md.",
+    "selector": "<rel_path>#<qualified_name>, where qualified_name is scope_path.name (or just name at module top level). <rel_path> on its own names that file's Module entity.",
+    "modules": "Every Module entity the corpus must contain, and the only ones it may contain. `package` is the __init__.py fact, recorded on meta rather than as a new EntityKind.",
+    "symbols": "Every Function/Class/Method entity outside broken.py, and the only ones there may be. Order is irrelevant; the sets must be equal.",
+    "imports": "Every Module IMPORTS Module edge the corpus must contain, and the only resolved ones it may contain.",
+    "unresolved": "Every edge to an Unresolved entity, and the only ones there may be. `category` is the UnresolvedCategory member; `name` is the entity name.",
+    "exports": "Every Module EXPORTS <symbol> edge. Python states its public surface only through __all__, so a module without one exports nothing.",
+    "forbidden": "Module IMPORTS Module edges that must not exist. Each is the plausible wrong answer for a negative fixture.",
+    "partial_parse": "The one file whose parse produces an ERROR node, and what must survive it."
+  },
+
+  "modules": [
+    { "path": "app.py", "package": false },
+    { "path": "broken.py", "package": false },
+    { "path": "negative.py", "package": false },
+    { "path": "nspkg/orphan.py", "package": false },
+    { "path": "pkg/__init__.py", "package": true },
+    { "path": "pkg/core.py", "package": false },
+    { "path": "pkg/sub/__init__.py", "package": true },
+    { "path": "pkg/sub/deep.py", "package": false },
+    { "path": "pkg/util.py", "package": false },
+    { "path": "syspath.py", "package": false },
+    { "path": "unsupported.py", "package": false }
+  ],
+
+  "symbols": [
+    { "selector": "app.py#run", "kind": "function" },
+    { "selector": "negative.py#local_scale", "kind": "function" },
+    { "selector": "nspkg/orphan.py#orphaned", "kind": "function" },
+    { "selector": "pkg/__init__.py#bootstrap", "kind": "function" },
+    { "selector": "pkg/core.py#tune", "kind": "function", "decorators": ["functools.lru_cache"] },
+    { "selector": "pkg/core.py#tune.inner", "kind": "function", "note": "nested; the enclosing function is the scope path" },
+    { "selector": "pkg/core.py#Engine", "kind": "class" },
+    { "selector": "pkg/core.py#Engine.__init__", "kind": "method", "note": "an ordinary Method, nothing special" },
+    { "selector": "pkg/core.py#Engine.make", "kind": "method", "decorators": ["staticmethod"] },
+    { "selector": "pkg/core.py#Engine.label", "kind": "method", "decorators": ["property"] },
+    { "selector": "pkg/core.py#Engine.start", "kind": "method", "async": true },
+    { "selector": "pkg/core.py#Turbo", "kind": "class" },
+    { "selector": "pkg/core.py#Turbo.start", "kind": "method" },
+    { "selector": "pkg/sub/deep.py#descend", "kind": "function" },
+    { "selector": "pkg/util.py#scale", "kind": "function" },
+    { "selector": "syspath.py#widened", "kind": "function" },
+    { "selector": "unsupported.py#load", "kind": "function" },
+    { "selector": "unsupported.py#load_builtin", "kind": "function" }
+  ],
+
+  "imports": [
+    { "from": "app.py", "specifier": "pkg.util", "to": "pkg/util.py", "note": "absolute in-repo, module file" },
+    { "from": "app.py", "specifier": "pkg", "to": "pkg/__init__.py", "note": "absolute in-repo, package init" },
+    { "from": "app.py", "specifier": "pkg.sub.deep", "to": "pkg/sub/deep.py", "note": "dotted absolute, two levels deep" },
+    { "from": "negative.py", "specifier": "pkg", "to": "pkg/__init__.py", "note": "the package resolves; the name it imports is not followed" },
+    { "from": "pkg/__init__.py", "specifier": ".core", "to": "pkg/core.py", "note": "single-dot relative" },
+    { "from": "pkg/core.py", "specifier": ".util", "to": "pkg/util.py", "note": "single-dot relative" },
+    { "from": "pkg/sub/deep.py", "specifier": "..util", "to": "pkg/util.py", "note": "double-dot relative" },
+    { "from": "pkg/sub/deep.py", "specifier": "..core", "to": "pkg/core.py", "note": "double-dot relative" },
+    { "from": "pkg/sub/deep.py", "specifier": ".", "to": "pkg/sub/__init__.py", "note": "`from . import x` names the current package" },
+    { "from": "unsupported.py", "specifier": "pkg.util", "to": "pkg/util.py", "note": "a wildcard still names a module; only the bound names are unknowable" },
+    { "from": "unsupported.py", "specifier": "pkg.core", "to": "pkg/core.py", "note": "a conditional import still names a module" },
+    { "from": "unsupported.py", "specifier": "pkg", "to": "pkg/__init__.py", "note": "a conditional import still names a module" }
+  ],
+
+  "unresolved": [
+    { "from": "app.py", "category": "module", "name": "os", "reason": "specifier names no indexed module" },
+    { "from": "app.py", "category": "module", "name": "nspkg", "reason": "namespace package" },
+    { "from": "negative.py", "category": "module", "name": "util", "reason": "specifier names no indexed module" },
+    { "from": "negative.py", "category": "module", "name": "core", "reason": "specifier names no indexed module" },
+    { "from": "negative.py", "category": "module", "name": "pkg.util.scale", "reason": "specifier names no indexed module" },
+    { "from": "pkg/core.py", "category": "module", "name": "functools", "reason": "specifier names no indexed module" },
+    { "from": "pkg/sub/deep.py", "category": "module", "name": "....", "reason": "relative specifier climbs above the repository root" },
+    { "from": "syspath.py", "category": "module", "name": "sys", "reason": "sys.path mutated" },
+    { "from": "syspath.py", "category": "module", "name": "pkg.util", "reason": "sys.path mutated" },
+    { "from": "unsupported.py", "category": "module", "name": "importlib", "reason": "specifier names no indexed module" },
+    { "from": "unsupported.py", "category": "value", "name": "wildcard:pkg.util", "reason": "wildcard import" },
+    { "from": "unsupported.py", "category": "value", "name": "conditional:pkg.core", "reason": "conditional import" },
+    { "from": "unsupported.py", "category": "value", "name": "conditional:pkg", "reason": "conditional import" },
+    { "from": "unsupported.py", "category": "value", "name": "dynamic:importlib.import_module", "reason": "dynamic import" },
+    { "from": "unsupported.py", "category": "value", "name": "dynamic:__import__", "reason": "dynamic import" }
+  ],
+
+  "exports": [
+    { "from": "pkg/__init__.py", "to": "pkg/__init__.py#bootstrap", "note": "the only __all__ entry naming a symbol this module defines" }
+  ],
+
+  "forbidden": [
+    { "from": "negative.py", "to": "pkg/util.py", "why": "`import util` must not resolve by basename to a module inside a package" },
+    { "from": "negative.py", "to": "pkg/core.py", "why": "neither `from core import Engine` nor `from pkg import core` may be guessed into the pkg.core submodule" },
+    { "from": "app.py", "to": "nspkg/orphan.py", "why": "a namespace package's contents are assembled at runtime and are not statically enumerable" },
+    { "from": "app.py", "to": "pkg/core.py", "why": "app.py imports pkg, not pkg.core; IMPORTS is one hop, never transitive" },
+    { "from": "syspath.py", "to": "pkg/util.py", "why": "the module mutates sys.path, so no absolute specifier in it can be claimed to name a repository file" },
+    { "from": "pkg/sub/deep.py", "to": "pkg/sub/deep.py", "why": "`from . import missing_sibling` names the package, never a sibling module that does not exist" }
+  ],
+
+  "partial_parse": {
+    "path": "broken.py",
+    "must_contain": ["broken.py#before"],
+    "note": "the file is flagged in parse health, the run still completes, and the symbols before the error survive"
+  }
+}

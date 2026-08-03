@@ -4,10 +4,22 @@
 //! be byte-identical across runs, and an ordered parallel merge is a later slice — introducing
 //! it alongside deletion and invalidation would confound two new causes of divergence.
 //!
-//! Four extractors run per index, each with its own `extractor_run` row and its own batch
+//! Five extractors run per index, each with its own `extractor_run` row and its own batch
 //! verified against its own declared source types. Keeping them separate is what makes a
 //! `DELETE FROM observation WHERE extractor_id = 'ts-js-reference'` a complete retraction of
 //! everything resolution claimed, with the structural graph untouched.
+//!
+//! # Python (Slice 9a)
+//!
+//! `py-structural` is the fifth, and it is a separate extractor rather than a branch inside
+//! `ts-js-structural` for the reason 5d-i established: an observation names what produced it, so
+//! a Python fact must never claim a TypeScript extractor read it. The split is total —
+//! [`crate::lang::Language::is_ts_js`] and [`crate::lang::Language::is_python`] partition the
+//! code files, a Python file never reaches [`crate::extract`] or [`crate::refs`], and a TS/JS
+//! file never reaches [`crate::pystruct`]. Python specifier resolution is
+//! [`crate::pyresolve`], which shares nothing with [`crate::resolve`] but its discipline: a
+//! specifier resolves only to a file that is in the index, and everything else is an
+//! `Unresolved` value with a reason.
 //!
 //! # Filesystem structure (Slice 5d-i)
 //!
@@ -112,7 +124,9 @@ use crate::facts::{self, ModuleFacts};
 use crate::fsstruct::{self, FsEntry};
 use crate::gitinfo;
 use crate::incremental::{self, MoveCandidate, PreviousModule};
-use crate::lang::{path_is_document, FileKind, Language, MARKDOWN_LANGUAGE};
+use crate::lang::{path_is_document, path_is_python, FileKind, Language, MARKDOWN_LANGUAGE};
+use crate::pyresolve;
+use crate::pystruct::{self, PyImportForm, PyImportSite, PyModuleExtraction};
 use crate::refs::{self, RefTarget, ReferenceExtraction};
 use crate::resolve;
 
@@ -122,10 +136,11 @@ use crate::resolve;
 /// `coverage` is deliberately absent: it is ingested by a separate, explicitly invoked command
 /// (`docs/plans/slice-06-test-evidence.md` §A.4), and an index run neither produces nor replaces
 /// it. The list is used exactly once, at the withdrawal in [`index_repository_with`].
-pub const INDEX_EXTRACTOR_IDS: [&str; 4] = [
+pub const INDEX_EXTRACTOR_IDS: [&str; 5] = [
     fsstruct::EXTRACTOR_ID,
     EXTRACTOR_ID,
     refs::EXTRACTOR_ID,
+    pystruct::EXTRACTOR_ID,
     docs::EXTRACTOR_ID,
 ];
 
@@ -542,6 +557,7 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     let mut loaded: Vec<LoadedFile> = Vec::new();
     let mut files_failed = 0usize;
     let mut documents_failed = 0usize;
+    let mut python_failed = 0usize;
     for file in &discovery.files {
         // A refusal is attributed to the extractor that would have read the file, so that a
         // document too large to scan is reported against `md-structural` and not against a
@@ -561,6 +577,9 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
             if file.kind.is_doc() {
                 documents_failed += 1;
             }
+            if file.kind.language().is_some_and(Language::is_python) {
+                python_failed += 1;
+            }
             continue;
         };
         loaded.push(LoadedFile {
@@ -573,7 +592,16 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     }
     loaded.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
     let documents_loaded = loaded.iter().filter(|file| file.kind.is_doc()).count();
-    let code_loaded = loaded.len() - documents_loaded;
+    // Per-extractor file tallies. An `extractor_run` row states how many files *that* extractor
+    // saw, so a repository holding both languages must not report every Python file against the
+    // TypeScript run — the same category error, one level up, that Slice 5d-i removed from the
+    // observation rows.
+    let python_loaded = loaded
+        .iter()
+        .filter(|file| file.language().is_some_and(Language::is_python))
+        .count();
+    let ts_js_loaded = loaded.len() - documents_loaded - python_loaded;
+    let ts_js_failed = files_failed - documents_failed - python_failed;
 
     // ---- repository state ----------------------------------------------------------------
     let mut pairs: Vec<(String, String)> = loaded
@@ -680,7 +708,10 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         }
     }
 
+    // Dispatch by language family, never by "is it code?". A file reaches exactly one structural
+    // extractor, and the two maps below are disjoint by construction.
     let mut extractions: BTreeMap<String, ModuleExtraction> = BTreeMap::new();
+    let mut python_extractions: BTreeMap<String, PyModuleExtraction> = BTreeMap::new();
     for file in &loaded {
         if !target_paths.contains(&file.rel_path) {
             continue;
@@ -688,10 +719,22 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         let Some(language) = file.language() else {
             continue;
         };
-        extractions.insert(
-            file.rel_path.clone(),
-            extract::extract_module(&config.project_id, &file.rel_path, language, &file.source)?,
-        );
+        if language.is_python() {
+            python_extractions.insert(
+                file.rel_path.clone(),
+                pystruct::extract_module(&config.project_id, &file.rel_path, &file.source)?,
+            );
+        } else {
+            extractions.insert(
+                file.rel_path.clone(),
+                extract::extract_module(
+                    &config.project_id,
+                    &file.rel_path,
+                    language,
+                    &file.source,
+                )?,
+            );
+        }
     }
 
     // ---- resolve document links ----------------------------------------------------------
@@ -700,7 +743,10 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     // guard: membership of the indexed path set decides the answer, and nothing here opens,
     // fetches or follows a destination. See `crate::docref` for why the guard is in the loop
     // even though its success is ignored.
-    let symbol_extents: BTreeMap<String, Vec<docref::SymbolExtent>> = extractions
+    // Both structural extractors contribute extents, so a `#L<n>` anchor into a `.py` file
+    // resolves to the symbol covering that line exactly as one into a `.ts` file does. The two
+    // maps are keyed by path and are disjoint, so the merge cannot lose or overwrite an entry.
+    let mut symbol_extents: BTreeMap<String, Vec<docref::SymbolExtent>> = extractions
         .iter()
         .map(|(rel_path, extraction)| {
             let extents = extraction
@@ -717,6 +763,20 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
             (rel_path.clone(), extents)
         })
         .collect();
+    for (rel_path, extraction) in &python_extractions {
+        let extents = extraction
+            .symbols
+            .iter()
+            .map(|symbol| docref::SymbolExtent {
+                entity_id: symbol.entity_id.clone(),
+                start_byte: symbol.span.start_byte,
+                end_byte: symbol.span.end_byte,
+                start_line: symbol.span.start_line,
+                end_line: symbol.span.end_line,
+            })
+            .collect();
+        symbol_extents.insert(rel_path.clone(), extents);
+    }
     let corpus = docref::Corpus {
         indexed: &all_indexed,
         symbols: &symbol_extents,
@@ -750,9 +810,14 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     // parsed modules for the invalidation set, and modules reconstructed from the cache for
     // everything else. A barrel chain in one file can reach a declaration in any other, and
     // that has to keep working when the other file was not re-parsed.
+    //
+    // Python is excluded, and not by oversight: the closure exists to answer "which module
+    // declares the symbol this specifier's name refers to?" for `ts-js-reference`, which never
+    // sees a `.py` file. Feeding Python modules in would put entries in the index that nothing
+    // reads and that a `ts-js` specifier could otherwise be resolved against.
     let export_sources: Vec<ModuleExtraction> = loaded
         .iter()
-        .filter(|file| !file.kind.is_doc())
+        .filter(|file| file.language().is_some_and(Language::is_ts_js))
         .map(|file| match extractions.get(&file.rel_path) {
             Some(extraction) => facts::export_source_of(extraction),
             None => cached_facts(&previous, &file.rel_path).as_export_source(&file.rel_path),
@@ -790,14 +855,17 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     for file in &loaded {
         let facts = match document_extractions.get(&file.rel_path) {
             Some(extraction) => ModuleFacts::from_document(extraction),
-            None => match (
-                extractions.get(&file.rel_path),
-                reference_extractions.get(&file.rel_path),
-            ) {
-                (Some(extraction), Some(references)) => {
-                    ModuleFacts::from_extraction(extraction, references, &file.source)
-                }
-                _ => cached_facts(&previous, &file.rel_path),
+            None => match python_extractions.get(&file.rel_path) {
+                Some(extraction) => ModuleFacts::from_python(extraction, &file.source),
+                None => match (
+                    extractions.get(&file.rel_path),
+                    reference_extractions.get(&file.rel_path),
+                ) {
+                    (Some(extraction), Some(references)) => {
+                        ModuleFacts::from_extraction(extraction, references, &file.source)
+                    }
+                    _ => cached_facts(&previous, &file.rel_path),
+                },
             },
         };
         facts_by_path.insert(file.rel_path.clone(), facts);
@@ -888,6 +956,18 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
 
     let batch = build_graph(&config.project_id, &targets, &module_exports, &indexed)?;
     batch.verify_declared_source_types(EXTRACTOR_ID, &DECLARED_SOURCE_TYPES)?;
+
+    let python_targets: Vec<(&LoadedFile, &PyModuleExtraction)> = loaded
+        .iter()
+        .filter_map(|file| {
+            python_extractions
+                .get(&file.rel_path)
+                .map(|extraction| (file, extraction))
+        })
+        .collect();
+    let python_batch = build_python_graph(&config.project_id, &python_targets, &indexed)?;
+    python_batch
+        .verify_declared_source_types(pystruct::EXTRACTOR_ID, &pystruct::DECLARED_SOURCE_TYPES)?;
 
     let reference_targets: Vec<(&LoadedFile, &ReferenceExtraction)> = loaded
         .iter()
@@ -1086,8 +1166,8 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         nerve_store::finish_extractor_run(
             &tx,
             structural_run,
-            code_loaded as i64,
-            (files_failed - documents_failed) as i64,
+            ts_js_loaded as i64,
+            ts_js_failed as i64,
             status.as_str(),
         )?;
 
@@ -1108,12 +1188,33 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         nerve_store::finish_extractor_run(
             &tx,
             reference_run,
-            code_loaded as i64,
-            (files_failed - documents_failed) as i64,
+            ts_js_loaded as i64,
+            ts_js_failed as i64,
             status.as_str(),
         )?;
 
-        // `md-structural` runs unconditionally, exactly as the other two do. A run over a
+        // `py-structural` runs unconditionally, for the same reason `md-structural` does: a row
+        // saying Nerve looked for Python and found none is a fact, and a row that appeared only
+        // when a `.py` file existed would make its absence ambiguous between "no Python here" and
+        // "Python was never looked for".
+        let python_run = nerve_store::begin_extractor_run(
+            &tx,
+            &repo_id,
+            &state_id,
+            pystruct::EXTRACTOR_ID,
+            pystruct::EXTRACTOR_VERSION,
+        )?;
+        rows_written +=
+            nerve_store::persist_batch(&tx, &repo_id, python_run, &python_batch, &mut touched)?;
+        nerve_store::finish_extractor_run(
+            &tx,
+            python_run,
+            python_loaded as i64,
+            python_failed as i64,
+            status.as_str(),
+        )?;
+
+        // `md-structural` runs unconditionally, exactly as the other three do. A run over a
         // repository with no documents records that Nerve looked and found none, which is a
         // fact; making the row conditional on content would make its absence ambiguous.
         let document_run = nerve_store::begin_extractor_run(
@@ -1167,12 +1268,16 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
                 .get(&file.rel_path)
                 .cloned()
                 .unwrap_or_default();
-            // A document's row records `md-structural`'s version in both version columns:
-            // one extractor produced the whole entry, so a bump to either TS/JS extractor must
-            // not invalidate every README, and a bump to `md-structural` must invalidate them
-            // all. `load_previous_modules` reads the columns back through the same rule.
+            // A row records the versions of the extractors that actually produced it, in both
+            // columns when one extractor produced the whole entry. A document is `md-structural`
+            // twice over and a Python module is `py-structural` twice over, so a bump to a TS/JS
+            // extractor must not invalidate every README or every `.py` file, and a bump to
+            // `py-structural` must invalidate exactly the Python ones.
+            // `load_previous_modules` reads the columns back through the same rule.
             let (structural_version, reference_version) = if file.kind.is_doc() {
                 (docs::EXTRACTOR_VERSION, docs::EXTRACTOR_VERSION)
+            } else if file.language().is_some_and(Language::is_python) {
+                (pystruct::EXTRACTOR_VERSION, pystruct::EXTRACTOR_VERSION)
             } else {
                 (EXTRACTOR_VERSION, refs::EXTRACTOR_VERSION)
             };
@@ -1300,10 +1405,11 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
 /// re-extracted.
 ///
 /// The versions compared depend on which extractor owns the row. A document is produced entirely
-/// by `md-structural`, so bumping a TypeScript extractor must not re-scan every document, and
-/// bumping `md-structural` must re-scan all of them. The row says which it is, through the
-/// `language` column and the path — both, so that a row rewritten by hand cannot smuggle a
-/// document past the TS/JS version check.
+/// by `md-structural` and a Python module entirely by `py-structural`, so bumping a TypeScript
+/// extractor must not re-scan either, and bumping `py-structural` must re-scan every `.py` file
+/// and nothing else. The row says which it is, through the `language` column and the path —
+/// both, so that a row rewritten by hand cannot smuggle a document or a Python module past the
+/// TS/JS version check.
 fn load_previous_modules(
     conn: &nerve_store::Connection,
     repo_id: &str,
@@ -1313,9 +1419,13 @@ fn load_previous_modules(
     for (rel_path, row) in rows {
         let facts = ModuleFacts::from_json(&row.facts);
         let is_document = path_is_document(&rel_path) || row.language == MARKDOWN_LANGUAGE;
+        let is_python = path_is_python(&rel_path) || row.language == crate::lang::PYTHON_LANGUAGE;
         let versions_match = if is_document {
             row.structural_version == docs::EXTRACTOR_VERSION
                 && row.reference_version == docs::EXTRACTOR_VERSION
+        } else if is_python {
+            row.structural_version == pystruct::EXTRACTOR_VERSION
+                && row.reference_version == pystruct::EXTRACTOR_VERSION
         } else {
             row.structural_version == EXTRACTOR_VERSION
                 && row.reference_version == refs::EXTRACTOR_VERSION
@@ -1700,6 +1810,366 @@ fn build_graph(
                     "type_only": import.type_only,
                 }),
             );
+        }
+    }
+
+    Ok(builder.batch)
+}
+
+/// Why a Python specifier did not resolve. Closed, because a reader who wants to know what a
+/// repository's imports actually reach needs to enumerate the refusals rather than guess them.
+mod py_reason {
+    /// The specifier names no file in the index: the standard library, an installed package, or
+    /// a package root Nerve does not model (a `src/` layout, `PYTHONPATH`, an editable install).
+    pub const NOT_INDEXED: &str =
+        "specifier names no indexed module (standard library, installed package, or a package \
+         root outside the repository)";
+    /// The specifier names a directory holding indexed files but no `__init__.py`.
+    pub const NAMESPACE_PACKAGE: &str =
+        "names a directory with no __init__.py: a namespace package, whose contents are \
+         assembled at import time from every sys.path entry of that name";
+    /// A relative specifier with more dots than the importer has parent packages.
+    pub const CLIMBS_ABOVE_ROOT: &str = "relative specifier climbs above the repository root";
+    /// The importing module rewrites `sys.path`.
+    pub const SYS_PATH_MUTATED: &str =
+        "sys.path mutated by the importing module, so no absolute specifier in it can be claimed \
+         to name a repository file; relative imports are unaffected";
+    /// A wildcard import.
+    pub const WILDCARD: &str =
+        "wildcard import: the names it binds live in the imported module's runtime namespace and \
+         are not knowable from this file";
+    /// An import that is not at module top level.
+    pub const CONDITIONAL: &str =
+        "conditional import: the statement is not at module top level, so whether it binds at \
+         module scope is not statically decidable";
+    /// `importlib.import_module(...)` or `__import__(...)`.
+    pub const DYNAMIC: &str = "dynamic import: the module is chosen at runtime";
+}
+
+/// The `Unresolved` name for the bindings an import site makes unknowable.
+///
+/// Prefixed by *why*, so that a wildcard and a conditional import of the same module are two
+/// findings rather than one, and so that the entity's name states its own reason.
+fn py_binding_name(site: &PyImportSite, prefix: &str) -> String {
+    match (&site.dynamic_callee, site.raw_specifier.as_str()) {
+        (Some(callee), _) => format!("{prefix}:{callee}"),
+        (None, specifier) => format!("{prefix}:{specifier}"),
+    }
+}
+
+/// Add one `Unresolved` entity and the `IMPORTS` edge that cites it.
+#[allow(clippy::too_many_arguments)]
+fn claim_unresolved_python_import(
+    builder: &mut GraphBuilder,
+    project_id: &str,
+    rel_path: &str,
+    content_hash: &str,
+    module_entity: &str,
+    category: UnresolvedCategory,
+    name: &str,
+    reason: &str,
+    site: &PyImportSite,
+    details: serde_json::Value,
+) {
+    let entity_id = ids::unresolved_id(project_id, rel_path, category, name);
+    builder.add_entity(EntityRecord {
+        entity_id: entity_id.clone(),
+        kind: EntityKind::Unresolved,
+        name: name.to_string(),
+        scope_path: rel_path.to_string(),
+        language: None,
+        meta: Some(
+            serde_json::json!({
+                "category": category.as_str(),
+                "importer": rel_path,
+                "raw_specifier": if site.raw_specifier.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::Value::String(site.raw_specifier.clone())
+                },
+                "reason": reason,
+            })
+            .to_string(),
+        ),
+    });
+    builder.add_occurrence(&entity_id, rel_path, site.span, content_hash);
+    builder.claim(
+        module_entity,
+        Relation::Imports,
+        &entity_id,
+        // Nothing was resolved. All the tree states is a statement, so `AST_DIRECT`.
+        Evidence::DIRECT,
+        rel_path,
+        site.span,
+        content_hash,
+        details,
+    );
+}
+
+/// The `details` payload shared by every Python import observation.
+///
+/// Uniform across the resolved and the unresolved shape, for the same reason `link_details` is:
+/// "which imports in this repository reach nothing?" must read the same keys whatever the answer
+/// was.
+fn py_import_details(
+    site: &PyImportSite,
+    resolved_path: Option<&str>,
+    reason: Option<&str>,
+) -> serde_json::Value {
+    let bindings: Vec<serde_json::Value> = site
+        .bindings
+        .iter()
+        .map(|binding| {
+            serde_json::json!({
+                "imported": binding.imported,
+                "local": binding.local,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "form": site.form.as_str(),
+        "raw_specifier": if site.raw_specifier.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(site.raw_specifier.clone())
+        },
+        "resolved_path": resolved_path,
+        "bindings": bindings,
+        "conditional": site.conditional,
+        "dynamic_callee": site.dynamic_callee,
+        "literal_argument": site.literal_argument,
+        "reason": reason,
+    })
+}
+
+/// Turn per-module Python extractions into entities, occurrences, assertions and observations.
+///
+/// A separate batch under a separate extractor run, exactly as `ts-js-reference` and
+/// `md-structural` are. What it emits:
+///
+/// - `File DEFINES Module`, 1:1 with a `.py` file, with packageness on the module's `meta`;
+/// - `Module DEFINES <symbol>` and `Class DEFINES <method>`;
+/// - `Module IMPORTS Module` for a specifier that names an indexed module, `AST_RESOLVED`;
+/// - `Module IMPORTS Unresolved` for one that does not, `AST_DIRECT`, with a closed-vocabulary
+///   reason;
+/// - `Module IMPORTS Unresolved` a **second** time for a site whose *bound names* are not
+///   knowable — a wildcard, a conditional import, a dynamic import. The two are separate claims
+///   about one statement: which module it names, and which names it binds. Recording only the
+///   first would silently assert that `from x import *` binds nothing;
+/// - `Module EXPORTS <symbol>` for each `__all__` entry naming a symbol this module defines.
+///
+/// **No `EXTENDS`, no `CALLS`, no `REFERENCES`** — Slice 9b's — and no `IMPLEMENTS` in any slice,
+/// because Python has no `implements` keyword to state one.
+fn build_python_graph(
+    project_id: &str,
+    targets: &[(&LoadedFile, &PyModuleExtraction)],
+    indexed: &BTreeSet<String>,
+) -> Result<GraphBatch> {
+    let mut builder = GraphBuilder::new(pystruct::EXTRACTOR_ID, pystruct::EXTRACTOR_VERSION);
+
+    for (file, extraction) in targets.iter().copied() {
+        let rel_path = file.rel_path.as_str();
+        let hash = file.content_hash.as_str();
+        let file_entity = ids::file_id(project_id, rel_path);
+        let module_entity = ids::module_id(project_id, rel_path);
+        let name = last_segment(rel_path);
+
+        builder.add_occurrence(&file_entity, rel_path, extraction.file_span, hash);
+
+        // File DEFINES Module, 1:1 for Python as for TS/JS.
+        //
+        // Packageness rides on `meta` rather than on a new `EntityKind`. A directory holding an
+        // `__init__.py` really is a package, but the vocabulary is mirrored in
+        // `apps/nerve-web/src/api/types.ts`, classified by `EntityKind::path_role` and pinned by
+        // two exhaustiveness tests — and the fact is already 1:1 with a file Nerve indexes, so a
+        // member would buy nothing a boolean does not.
+        builder.add_entity(EntityRecord {
+            entity_id: module_entity.clone(),
+            kind: EntityKind::Module,
+            name: file_stem(name).to_string(),
+            scope_path: rel_path.to_string(),
+            language: Some(file.kind.as_str().to_string()),
+            meta: Some(
+                serde_json::json!({
+                    "package": extraction.is_package,
+                    "sys_path_mutated": extraction.sys_path_mutated,
+                })
+                .to_string(),
+            ),
+        });
+        builder.add_occurrence(&module_entity, rel_path, extraction.file_span, hash);
+        builder.claim(
+            &file_entity,
+            Relation::Defines,
+            &module_entity,
+            Evidence::DIRECT,
+            rel_path,
+            extraction.file_span,
+            hash,
+            serde_json::json!({
+                "language": file.kind.as_str(),
+                "package": extraction.is_package,
+            }),
+        );
+
+        // Symbols.
+        for symbol in &extraction.symbols {
+            builder.add_entity(EntityRecord {
+                entity_id: symbol.entity_id.clone(),
+                kind: symbol.kind,
+                name: symbol.name.clone(),
+                scope_path: symbol.scope_path.clone(),
+                language: Some(file.kind.as_str().to_string()),
+                meta: symbol.meta.clone(),
+            });
+            builder.add_occurrence(&symbol.entity_id, rel_path, symbol.span, hash);
+
+            let (definer, detail) = match &symbol.owner_class {
+                Some(class_id) => (class_id.clone(), "class"),
+                None => (module_entity.clone(), "module"),
+            };
+            builder.claim(
+                &definer,
+                Relation::Defines,
+                &symbol.entity_id,
+                Evidence::DIRECT,
+                rel_path,
+                symbol.span,
+                hash,
+                serde_json::json!({
+                    "declaration_kind": symbol.kind.as_str(),
+                    "definer": detail,
+                    "scope_path": symbol.scope_path,
+                }),
+            );
+        }
+
+        // Exports. Python states a public surface exactly once, through `__all__`; a module
+        // without one exports nothing, and saying so is more honest than promoting every
+        // underscore-free top-level name on a naming convention.
+        for exported_name in extraction.exported_names() {
+            let Some(index) = extraction.top_level_symbol(exported_name) else {
+                // `__all__` lists a name this module imported rather than defined, or one it
+                // never binds at all. Slice 9a does not track bindings, so no edge is invented —
+                // the same refusal `ts-js-structural` makes for `export { somethingImported }`.
+                continue;
+            };
+            let symbol = &extraction.symbols[index];
+            builder.claim(
+                &module_entity,
+                Relation::Exports,
+                &symbol.entity_id,
+                Evidence::DIRECT,
+                rel_path,
+                symbol.span,
+                hash,
+                serde_json::json!({
+                    "export_kind": "__all__",
+                    "exported_name": exported_name,
+                }),
+            );
+        }
+
+        // Imports.
+        for site in &extraction.imports {
+            if site.form != PyImportForm::Dynamic {
+                let relative = pyresolve::is_relative(&site.raw_specifier);
+                // `sys.path` is consulted for absolute specifiers only; a relative import is
+                // resolved from `__package__` and is untouched by the rewrite.
+                let poisoned = extraction.sys_path_mutated && !relative;
+                let resolved = if poisoned {
+                    None
+                } else {
+                    pyresolve::resolve(rel_path, &site.raw_specifier, indexed)
+                };
+
+                match &resolved {
+                    Some(target_module) => builder.claim(
+                        &module_entity,
+                        Relation::Imports,
+                        &ids::module_id(project_id, target_module),
+                        Evidence::RESOLVED,
+                        rel_path,
+                        site.span,
+                        hash,
+                        py_import_details(site, Some(target_module), None),
+                    ),
+                    None => {
+                        let reason = if poisoned {
+                            py_reason::SYS_PATH_MUTATED
+                        } else if pyresolve::climbs_above_root(rel_path, &site.raw_specifier) {
+                            py_reason::CLIMBS_ABOVE_ROOT
+                        } else if pyresolve::is_namespace_package(
+                            rel_path,
+                            &site.raw_specifier,
+                            indexed,
+                        ) {
+                            py_reason::NAMESPACE_PACKAGE
+                        } else {
+                            py_reason::NOT_INDEXED
+                        };
+                        claim_unresolved_python_import(
+                            &mut builder,
+                            project_id,
+                            rel_path,
+                            hash,
+                            &module_entity,
+                            UnresolvedCategory::Module,
+                            &site.raw_specifier,
+                            reason,
+                            site,
+                            py_import_details(site, None, Some(reason)),
+                        );
+                    }
+                }
+            }
+
+            // The second claim: which names does this statement bind? A wildcard, a conditional
+            // site and a dynamic call each make that unknowable, and each is recorded on its own
+            // so that the finding survives the module edge resolving perfectly well.
+            //
+            // A dynamic import is exempt from the conditional finding, and not to reduce noise:
+            // `importlib.import_module(name)` is an **expression**, not a binding statement. It
+            // binds no name at module scope whether or not it is reached, so "whether this
+            // binding takes effect" is a question it never raises. Recording both would state a
+            // second finding about a binding that does not exist — and every dynamic import in
+            // practice sits inside a function, so the pair would always travel together and the
+            // conditional one would never mean anything.
+            let unknowable: [(bool, &str, &str); 3] = [
+                (
+                    site.form == PyImportForm::Wildcard,
+                    "wildcard",
+                    py_reason::WILDCARD,
+                ),
+                (
+                    site.conditional.is_some() && site.form != PyImportForm::Dynamic,
+                    "conditional",
+                    py_reason::CONDITIONAL,
+                ),
+                (
+                    site.form == PyImportForm::Dynamic,
+                    "dynamic",
+                    py_reason::DYNAMIC,
+                ),
+            ];
+            for (applies, prefix, reason) in unknowable {
+                if !applies {
+                    continue;
+                }
+                let name = py_binding_name(site, prefix);
+                claim_unresolved_python_import(
+                    &mut builder,
+                    project_id,
+                    rel_path,
+                    hash,
+                    &module_entity,
+                    UnresolvedCategory::Value,
+                    &name,
+                    reason,
+                    site,
+                    py_import_details(site, None, Some(reason)),
+                );
+            }
         }
     }
 

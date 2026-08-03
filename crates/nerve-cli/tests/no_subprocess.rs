@@ -169,8 +169,12 @@ fn terminating_the_current_process_is_still_allowed() {
 
 /// The end-to-end proof: index a repository whose content would execute if anything ran it.
 ///
-/// A package manifest with a hostile `postinstall`, and a source file that writes a marker on
-/// import. If either ever runs, the marker exists and this fails.
+/// A package manifest with a hostile `postinstall`, a source file that writes a marker on
+/// import, and — since Slice 9a — the Python equivalents: a `setup.py` whose side effects run at
+/// *parse* time under `python`, and a module with a top-level `os.system`. Python is the sharper
+/// case of the two, because a Python file has no build step to skip: importing it **is**
+/// executing it, so an extractor that reached for the interpreter for even one answer would trip
+/// this. If anything ever runs, the marker exists and this fails.
 #[test]
 fn indexing_a_repository_never_executes_its_contents() {
     let dir = tempfile::tempdir().unwrap();
@@ -203,6 +207,45 @@ fn indexing_a_repository_never_executes_its_contents() {
     )
     .unwrap();
 
+    // The Python half. `setup.py` is the file every packaging tool runs; `hostile.py` writes the
+    // marker at import time three different ways, one of which is a dynamic import — the form
+    // Nerve records as unresolved precisely because resolving it would mean running something.
+    std::fs::write(
+        root.join("setup.py"),
+        format!(
+            "import os\n\
+             import subprocess\n\
+             \n\
+             open({marker_arg:?}, 'w').write('executed')\n\
+             os.system('touch {marker_arg}')\n\
+             subprocess.run(['touch', {marker_arg:?}])\n\
+             \n\
+             \n\
+             def setup():\n\
+             \x20   return None\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/hostile.py"),
+        format!(
+            "\"\"\"Executing this module writes the marker three ways.\"\"\"\n\
+             import importlib\n\
+             import os\n\
+             \n\
+             os.system('touch {marker_arg}')\n\
+             importlib.import_module('os').system('touch {marker_arg}')\n\
+             \n\
+             from src.evil import looksHarmless\n\
+             \n\
+             \n\
+             class Harmless:\n\
+             \x20   def method(self):\n\
+             \x20       return 1\n"
+        ),
+    )
+    .unwrap();
+
     let binary = env!("CARGO_BIN_EXE_nerve");
     let path = root.to_str().unwrap();
     // `check` is in this loop because it reads repository bytes of its own: the untracked-file
@@ -222,6 +265,23 @@ fn indexing_a_repository_never_executes_its_contents() {
     assert!(
         !marker.exists(),
         "repository content executed during indexing — THREAT-MODEL T1 violated"
+    );
+
+    // The hostile files must actually have been *indexed*, or the assertion above holds because
+    // nothing read them rather than because reading them ran nothing.
+    let index_output = Command::new(binary)
+        .args(["index", path, "--full", "--json"])
+        .output()
+        .expect("nerve must run");
+    let report: serde_json::Value =
+        serde_json::from_slice(&index_output.stdout).expect("index --json must emit JSON");
+    assert!(
+        report["entities_by_kind"]["method"].as_u64().unwrap_or(0) >= 1,
+        "src/hostile.py contributed no method, so this proves nothing about Python: {report}"
+    );
+    assert!(
+        !marker.exists(),
+        "repository content executed during a full re-index — THREAT-MODEL T1 violated"
     );
 
     // `mcp` is in the loop too, and separately, because it is the one command whose *caller* is
