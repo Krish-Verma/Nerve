@@ -1,0 +1,94 @@
+{
+  "_format": "Slice 10a py-framework ground truth. Written BEFORE the resolver, per the discipline that has already won disagreements in 5d-ii, 9a and 9b. Where the implementation and this file disagree, this file is the claim to argue against — not the thing to edit.",
+
+  "_endpoint": "Each entry is one Endpoint entity and its SERVED_BY target. `address` is the entity name, which is what FTS5 tokenises. `path` is the DECLARED path: no prefix from APIRouter(prefix=...) or Blueprint registration is composed in, because composing it needs a fact from another file and a wrong URL is worse than a partial one.",
+
+  "resolved": {
+    "fastapi": [
+      { "module": "fastapi_app.py", "address": "GET /users",            "method": "GET",    "path": "/users",            "handler": "list_users",           "handler_kind": "function" },
+      { "module": "fastapi_app.py", "address": "GET /users/{user_id}",  "method": "GET",    "path": "/users/{user_id}",  "handler": "read_user",            "handler_kind": "function" },
+      { "module": "fastapi_app.py", "address": "POST /users",           "method": "POST",   "path": "/users",            "handler": "create_user",          "handler_kind": "function" },
+      { "module": "fastapi_app.py", "address": "DELETE /users/{user_id}", "method": "DELETE", "path": "/users/{user_id}", "handler": "delete_user",          "handler_kind": "function" },
+      { "module": "fastapi_app.py", "address": "GET /items",            "method": "GET",    "path": "/items",            "handler": "list_items",           "handler_kind": "function" },
+
+      { "module": "aliased.py",     "address": "GET /aliased",          "method": "GET",    "path": "/aliased",          "handler": "aliased_constructor",  "handler_kind": "function" },
+      { "module": "aliased.py",     "address": "GET /wrapped-below",    "method": "GET",    "path": "/wrapped-below",    "handler": "wrapper_below_route",   "handler_kind": "function" },
+      { "module": "aliased.py",     "address": "GET /wrapped-above",    "method": "GET",    "path": "/wrapped-above",    "handler": "wrapper_above_route",   "handler_kind": "function" },
+      { "module": "aliased.py",     "address": "GET /method-handler",   "method": "GET",    "path": "/method-handler",   "handler": "as_method",             "handler_kind": "method" },
+      { "module": "aliased.py",     "address": "GET /twice",            "method": "GET",    "path": "/twice",            "handler": "first_declaration",     "handler_kind": "function" },
+      { "module": "aliased.py",     "address": "GET /twice",            "method": "GET",    "path": "/twice",            "handler": "second_declaration",    "handler_kind": "function" },
+
+      { "module": "malformed.py",   "address": "GET /before-damage",    "method": "GET",    "path": "/before-damage",    "handler": "before_damage",         "handler_kind": "function" }
+    ],
+
+    "flask": [
+      { "module": "flask_app.py",   "address": "GET /health",           "method": "GET",    "path": "/health",           "handler": "health",   "handler_kind": "function" },
+      { "module": "flask_app.py",   "address": "POST /submit",          "method": "POST",   "path": "/submit",           "handler": "submit",   "handler_kind": "function" },
+      { "module": "flask_app.py",   "address": "GET /both",             "method": "GET",    "path": "/both",             "handler": "both",     "handler_kind": "function" },
+      { "module": "flask_app.py",   "address": "POST /both",            "method": "POST",   "path": "/both",             "handler": "both",     "handler_kind": "function" },
+      { "module": "flask_app.py",   "address": "GET /shorthand",        "method": "GET",    "path": "/shorthand",        "handler": "shorthand", "handler_kind": "function" },
+      { "module": "flask_app.py",   "address": "POST /admin/purge",     "method": "POST",   "path": "/admin/purge",      "handler": "purge",    "handler_kind": "function" },
+
+      { "module": "aliased.py",     "address": "GET /aliased-flask",    "method": "GET",    "path": "/aliased-flask",    "handler": "aliased_flask", "handler_kind": "function" }
+    ]
+  },
+
+  "_forbidden": "Endpoints that must NEVER exist. Each is a specific wrong answer a plausible implementation would produce. These are checked BEFORE the set-equality assertion, because Slice 9a found that a forbidden list sitting behind set equality is unreachable and never fires.",
+  "forbidden": [
+    { "address": "GET /v1/items",       "why": "APIRouter(prefix='/v1') composed into the declared path. The prefix only applies if some other file calls include_router, which this fixture does not contain." },
+    { "address": "POST /admin/admin/purge", "why": "A Blueprint url_prefix composed into the path." },
+    { "address": "GET /not-a-route",    "why": "`cache` is bound to Cache(), not to a framework constructor. Matching on the decorator's spelling finds this." },
+    { "address": "GET /also-not-a-route", "why": "A class literally named Router is still not fastapi.APIRouter." },
+    { "address": "GET /bare-decorator", "why": "A module-level function named `get` used as a decorator factory." },
+    { "address": "GET /subscript",      "why": "A dict subscript call that resembles an Express registration." },
+    { "address": "GET /computed/items", "why": "PREFIX + '/items' evaluated. Nerve does not evaluate expressions." },
+    { "address": "GET /lambda",         "why": "A lambda has no entity to serve, so there is no target for the edge." },
+    { "address": "GET /imported",       "why": "`app` is imported from another module. Emitting this requires cross-module value tracking, which is the stated lower bound." },
+    { "address": "POST /imported-router", "why": "Same, for the imported router." },
+    { "address": "GET /subscripted",    "why": "The decorator is a subscript, not a dotted name. Emitted by nothing and counted by nothing." },
+    { "address": "GET /dynamic-methods", "why": "`methods=METHODS` is a name. Flask's default GET must not be applied when an unreadable methods argument is present — that would invent a method the source did not state." }
+  ],
+
+  "_unsupported_by_form": "Every construct Nerve read and declined, counted by form. The gate asserts this map exactly, so a new unreadable form cannot appear silently. `app-not-local` is the cross-module limit. A `decorator-form` member was drafted and REMOVED: making it fire needed a special case whose only purpose was to feed the counter, it contradicted the rule that Nerve counts nothing when it has no reason to think a construct is a route, and 9a already counts unsupported decorator shapes.",
+  "unsupported_by_form": {
+    "app-not-local": 2,
+    "path-not-literal": 3,
+    "handler-not-a-symbol": 1,
+    "methods-not-literal": 1
+  },
+
+  "_ambiguous": "Declarations the source really does make twice. Both edges are kept; the ambiguity is reported rather than resolved by choosing one.",
+  "ambiguous": [
+    { "module": "aliased.py", "address": "GET /twice", "declarations": 2 }
+  ],
+
+  "_known_false_negatives": "Routes a human can see and Nerve does not record. Asserted ABSENT, so an FN cannot be quietly 'fixed' by a guess — promoting one has to be a deliberate change to this file. Mechanism introduced in Slice 9b.",
+  "known_false_negatives": [
+    { "address": "GET /imported",        "reason": "app-not-local: the binding proving `app` is a FastAPI instance is in fastapi_app.py. Following it is cross-module value tracking, not a binding lookup." },
+    { "address": "POST /imported-router", "reason": "app-not-local, same as above." },
+    { "address": "GET /computed/items",  "reason": "path-not-literal: PREFIX + '/items' requires evaluating an expression. Recording the operand text would be a guess at the address." },
+    { "address": "GET /lambda",          "reason": "handler-not-a-symbol: `app.get('/lambda')(lambda: [])` registers a callable that is not a declared symbol, so no entity can be the target." }
+  ],
+
+  "_not_a_route": "Symbols in the fixture that must have NO incoming SERVED_BY edge at all. A control against a rule that attaches endpoints too eagerly.",
+  "not_a_route": [
+    { "module": "fastapi_app.py", "symbol": "not_a_route" },
+    { "module": "negative.py",    "symbol": "looks_like_a_handler" },
+    { "module": "negative.py",    "symbol": "another_handler" },
+    { "module": "negative.py",    "symbol": "third_handler" },
+    { "module": "malformed.py",   "symbol": "broken" }
+  ],
+
+  "_gates": [
+    "1. Every entry in `resolved` exists, with exactly the stated address, handler and handler kind.",
+    "2. No entry in `forbidden` exists. Checked FIRST, so it cannot hide behind set equality.",
+    "3. Nothing in `not_a_route` has an incoming SERVED_BY edge.",
+    "4. Every entry in `known_false_negatives` is ABSENT.",
+    "5. `unsupported_by_form` matches exactly — no new form, no changed count.",
+    "6. The endpoint set is exactly `resolved`: FP = 0 and FN = 0 beyond the declared ones.",
+    "7. FastAPI and Flask are reported as SEPARATE tables and never summed into one score.",
+    "8. Every SERVED_BY observation carries FRAMEWORK_RULE / DIRECT and extractor id py-framework.",
+    "9. No py-framework observation carries a relation other than SERVED_BY, asserted over Relation::ALL.",
+    "10. negative.py contributes zero endpoints AND zero unsupported counts — Nerve does not know those are routes, so a tally would itself be a false claim."
+  ]
+}

@@ -408,12 +408,18 @@ fn every_json_output_parses_and_carries_its_required_keys() {
         nerve_index::PYTHON_REFERENCE_EXTRACTOR_VERSION
     );
     assert_eq!(runs[4]["files_processed"], 0);
-    assert_eq!(runs[5]["extractor_id"], "md-structural");
+    assert_eq!(runs[5]["extractor_id"], "py-framework");
+    assert_eq!(
+        runs[5]["extractor_version"],
+        nerve_index::PYTHON_FRAMEWORK_EXTRACTOR_VERSION
+    );
+    assert_eq!(runs[5]["files_processed"], 0);
+    assert_eq!(runs[6]["extractor_id"], "md-structural");
     // Slice 5d-ii: `SUPERSEDES` edges from the four explicit supersession fields. The version
     // moved with the behaviour and in the same commit as it, because that is what makes every
     // document re-scan once on this build rather than keep a graph the current rules would not
     // produce.
-    assert_eq!(runs[5]["extractor_version"], "1.2.0");
+    assert_eq!(runs[6]["extractor_version"], "1.2.0");
     require_keys(&runs[0], &["run_id", "state_id", "status"]);
 
     let search = json(&run(&["search", "area", "--path", root, "--json"]));
@@ -1825,8 +1831,10 @@ fn impact_reports_the_closure_and_always_states_what_it_cannot_see() {
     assert_eq!(value["exit_code"], 0);
     assert_eq!(
         value["relations"],
-        serde_json::json!(["CALLS", "REFERENCES", "EXTENDS", "IMPLEMENTS"]),
-        "an empty --relation list means the default set, never every relation"
+        serde_json::json!(["CALLS", "REFERENCES", "EXTENDS", "IMPLEMENTS", "SERVED_BY"]),
+        "an empty --relation list means the default set, never every relation. SERVED_BY joined \
+         the default in Slice 10a: an endpoint depends on the symbol that implements it, and \
+         without it a live route handler answers exactly as dead code does."
     );
     // `add` is called by three functions in this fixture and by nothing else.
     assert_eq!(value["totals"]["entities"], 3, "{value}");
@@ -3353,5 +3361,127 @@ fn search_prints_names_that_resolve_as_selectors() {
     assert!(
         !text.contains("docs/architecture.md.architecture"),
         "{text}"
+    );
+}
+
+// ---- framework endpoints (Slice 10a) --------------------------------------------------------
+
+/// The measured defect this slice exists to close, asserted from the command line.
+///
+/// Before Slice 10a, `nerve impact` on a live `GET /users/{user_id}` handler and on a genuinely
+/// dead function printed **byte-identical** answers: *"Nothing in the index depends on this."* A
+/// route handler was indistinguishable from dead code. Both halves are asserted here, because the
+/// fix is only a fix if the dead function still reports nothing — a change that made everything
+/// look reachable would satisfy the first assertion alone.
+#[test]
+fn a_route_handler_is_no_longer_indistinguishable_from_dead_code() {
+    let (_dir, root) = indexed_fixture("py-framework");
+    let path = root.to_str().unwrap();
+
+    let handler = run(&[
+        "impact",
+        "fastapi_app.py#read_user",
+        "--path",
+        path,
+        "--json",
+    ]);
+    assert_eq!(code(&handler), 0, "{}", stdout(&handler));
+    let handler = json(&handler);
+    assert!(
+        handler["count"].as_u64().unwrap() >= 1,
+        "a live route handler must have at least the endpoint depending on it: {handler}"
+    );
+    let served: Vec<&serde_json::Value> = handler["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["relation"] == "SERVED_BY")
+        .collect();
+    assert_eq!(
+        served.len(),
+        1,
+        "exactly one endpoint declares this handler: {handler}"
+    );
+    assert_eq!(served[0]["entity"]["kind"], "endpoint");
+    assert_eq!(served[0]["entity"]["name"], "GET /users/{user_id}");
+    assert_eq!(
+        served[0]["strongest_source_type"], "FRAMEWORK_RULE",
+        "a route registration is framework-rule evidence, not an AST fact about a call"
+    );
+    assert_eq!(served[0]["depth"], 1);
+
+    // The other half: dead code still answers as dead code.
+    let dead = run(&[
+        "impact",
+        "fastapi_app.py#not_a_route",
+        "--path",
+        path,
+        "--json",
+    ]);
+    assert_eq!(code(&dead), 0, "{}", stdout(&dead));
+    let dead = json(&dead);
+    assert_eq!(
+        dead["count"], 0,
+        "a function no route declares and nothing calls must still report nothing: {dead}"
+    );
+}
+
+/// A route is findable by a fragment of its path — the second defect the slice measured.
+///
+/// `nerve search users` returned *"No matches"* on a repository with three `/users` routes,
+/// because no entity carried the path. The endpoint's `name` is the canonical address, so FTS5
+/// indexes it.
+#[test]
+fn a_route_is_searchable_by_its_path_from_the_command_line() {
+    let (_dir, root) = indexed_fixture("py-framework");
+    let path = root.to_str().unwrap();
+
+    let output = run(&["search", "users", "--path", path, "--json"]);
+    assert_eq!(code(&output), 0, "{}", stdout(&output));
+    let value = json(&output);
+    let addresses: Vec<String> = value["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|hit| hit["kind"] == "endpoint")
+        .map(|hit| hit["name"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(
+        addresses.iter().any(|address| address.contains("/users")),
+        "searching a path fragment found no endpoint; got {addresses:?}"
+    );
+}
+
+/// `nerve why` explains the edge, and says what a registration does **not** prove.
+///
+/// The claim a reader is most likely to over-read is that a declared route is a reachable one. It
+/// is stated on the evidence itself rather than in documentation nobody opens.
+#[test]
+fn why_explains_a_route_registration_without_overclaiming() {
+    let (_dir, root) = indexed_fixture("py-framework");
+    let path = root.to_str().unwrap();
+
+    let output = run(&[
+        "why",
+        "endpoint:GET /users",
+        "fastapi_app.py#list_users",
+        "--path",
+        path,
+        "--json",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stdout(&output));
+    let value = json(&output);
+    let text = value.to_string();
+    assert!(
+        text.contains("SERVED_BY"),
+        "the relation must be named: {value}"
+    );
+    assert!(
+        text.contains("FRAMEWORK_RULE"),
+        "the evidence type must be named: {value}"
+    );
+    assert!(
+        text.contains("not that the route is reachable"),
+        "every observation states what the registration does not prove: {value}"
     );
 }

@@ -341,8 +341,12 @@ fn fresh_database_reaches_the_current_schema_version() {
     assert_eq!(schema_version(&conn).unwrap(), None);
     migrate(&conn).unwrap();
     assert_eq!(schema_version(&conn).unwrap(), Some(SCHEMA_VERSION));
-    assert_eq!(SCHEMA_VERSION, 4);
-    // A fresh database reaches v4 directly, without a v1, v2 or v3 database ever existing.
+    assert_eq!(SCHEMA_VERSION, 5);
+    // A fresh database reaches v5 directly, without a v1, v2, v3 or v4 database ever existing.
+    // v5's column is present from the start, with the default that makes a *migrated* row miss the
+    // framework cache. On a fresh database nothing has been cached yet, so the default is inert
+    // here and the upgrade path is what has to be tested separately.
+    assert!(column_names(&conn, "module_facts").contains(&"framework_version".to_string()));
     assert!(table_names(&conn).contains(&"module_facts".to_string()));
     for (table, column) in [
         ("occurrence", "state_id"),

@@ -1,4 +1,5 @@
-//! Schema v1 (ADR-0003), v2 (Slice 3), v3 (Slice 3b), v4 (Slice 5d-i), and migrations.
+//! Schema v1 (ADR-0003), v2 (Slice 3), v3 (Slice 3b), v4 (Slice 5d-i), v5 (Slice 10a), and
+//! migrations.
 //!
 //! Migrations are append-only. `V1` is immutable: a database written by an older build must be
 //! upgradable by replaying the later steps, so editing an already-shipped step in place would
@@ -11,7 +12,7 @@ use nerve_core::ids;
 use crate::error::{Result, StoreError};
 
 /// The schema version this build writes and understands.
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// Human-readable description recorded in `schema_version`.
 pub const SCHEMA_V1_DESCRIPTION: &str =
@@ -30,6 +31,11 @@ pub const SCHEMA_V3_DESCRIPTION: &str =
 pub const SCHEMA_V4_DESCRIPTION: &str =
     "Slice 5d-i: filesystem containment re-attributed from ts-js-structural/AST_DIRECT and \
      md-structural/DOCUMENT_STATED to fs-structural/FILESYSTEM_OBSERVED";
+
+/// Human-readable description recorded in `schema_version` for the Slice 10a upgrade.
+pub const SCHEMA_V5_DESCRIPTION: &str =
+    "Slice 10a: module_facts.framework_version, the cache slot a third extractor per language \
+     family needs; defaults to '' so every row written before the framework rules misses";
 
 const V1: &str = r#"
 CREATE TABLE repository (
@@ -254,6 +260,28 @@ CREATE UNIQUE INDEX idx_observation_identity ON observation(
 );
 "#;
 
+/// Schema v5 — Slice 10a. One additive column, and the default is the whole point.
+///
+/// `module_facts` had exactly two version columns, `structural_version` and `reference_version`,
+/// reused positionally per language family: a document writes the `md-structural` version twice,
+/// a Python module writes `py-structural` / `py-reference`, a TS/JS module writes
+/// `ts-js-structural` / `ts-js-reference`. **There was no slot for a third extractor**, and that
+/// is the precise location of the Slice 9b upgrade defect, where two extractors happened to share
+/// a version string and an existing index hit the cache forever.
+///
+/// `NOT NULL DEFAULT ''` gives every row written before this slice a value that equals no released
+/// extractor version, so every file whose family *has* a framework extractor misses the cache and
+/// is re-extracted — which is the required behaviour, and the one no test that builds a fresh
+/// index can observe. A family with no framework extractor expects `''` and keeps hitting, so
+/// documents do not churn.
+///
+/// Rejected: folding the version into `reference_version` as a compound string (drifts,
+/// unparseable), and bumping `reference_version` whenever a framework rule changes (couples two
+/// independent extractors, and re-extracts references in order to publish a route change).
+const V5: &str = r#"
+ALTER TABLE module_facts ADD COLUMN framework_version TEXT NOT NULL DEFAULT '';
+"#;
+
 /// One migration step. Almost all of them are SQL; v3 is not, because it must recompute a
 /// BLAKE3 digest and SQLite has no such function.
 enum Step {
@@ -266,11 +294,12 @@ enum Step {
 /// Migration steps, in application order: `(version, description, step)`.
 ///
 /// Appending to this list is how the schema evolves. Editing an existing entry is prohibited.
-const MIGRATIONS: [(i64, &str, Step); 4] = [
+const MIGRATIONS: [(i64, &str, Step); 5] = [
     (1, SCHEMA_V1_DESCRIPTION, Step::Sql(V1)),
     (2, SCHEMA_V2_DESCRIPTION, Step::Sql(V2)),
     (3, SCHEMA_V3_DESCRIPTION, Step::Rust(migrate_v3)),
     (4, SCHEMA_V4_DESCRIPTION, Step::Rust(migrate_v4)),
+    (5, SCHEMA_V5_DESCRIPTION, Step::Sql(V5)),
 ];
 
 /// Apply [`V3`], then restate every `occurrence_id` under the ADR-0006 tuple.

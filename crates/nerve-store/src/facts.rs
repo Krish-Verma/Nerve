@@ -22,10 +22,18 @@ pub struct ModuleFactsRow {
     pub content_hash: String,
     /// Language tag the file was parsed as.
     pub language: String,
-    /// Version of `ts-js-structural` that produced them.
+    /// Version of the structural extractor that produced them, for this file's language family.
     pub structural_version: String,
-    /// Version of `ts-js-reference` that produced them.
+    /// Version of the reference extractor that produced them, for this file's language family.
     pub reference_version: String,
+    /// Version of the framework extractor that produced them, for this file's language family.
+    ///
+    /// Empty means *no framework extractor ran, and none was expected* — which is what every row
+    /// written before schema v5 says, and what a family with no framework rules keeps saying. It
+    /// is a third slot rather than a suffix on [`ModuleFactsRow::reference_version`] because the
+    /// three extractors are independent: bumping one must re-extract its own files and nothing
+    /// else. Added in Slice 10a; see `SCHEMA_V5_DESCRIPTION`.
+    pub framework_version: String,
     /// Extractor-owned payload, canonical JSON.
     pub facts: String,
 }
@@ -36,7 +44,8 @@ pub fn load_module_facts(
     repo_id: &str,
 ) -> Result<BTreeMap<String, ModuleFactsRow>> {
     let mut stmt = conn.prepare(
-        "SELECT rel_path, content_hash, language, structural_version, reference_version, facts
+        "SELECT rel_path, content_hash, language, structural_version, reference_version,
+                framework_version, facts
            FROM module_facts WHERE repo_id = ?1 ORDER BY rel_path",
     )?;
     let rows = stmt.query_map(params![repo_id], |row| {
@@ -46,7 +55,8 @@ pub fn load_module_facts(
             language: row.get(2)?,
             structural_version: row.get(3)?,
             reference_version: row.get(4)?,
-            facts: row.get(5)?,
+            framework_version: row.get(5)?,
+            facts: row.get(6)?,
         })
     })?;
     let mut out = BTreeMap::new();
@@ -66,13 +76,14 @@ pub fn upsert_module_facts(
     Ok(conn.execute(
         "INSERT INTO module_facts
              (repo_id, rel_path, content_hash, language, structural_version,
-              reference_version, facts)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+              reference_version, framework_version, facts)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT(repo_id, rel_path) DO UPDATE SET
              content_hash       = excluded.content_hash,
              language           = excluded.language,
              structural_version = excluded.structural_version,
              reference_version  = excluded.reference_version,
+             framework_version  = excluded.framework_version,
              facts              = excluded.facts",
         params![
             repo_id,
@@ -81,6 +92,7 @@ pub fn upsert_module_facts(
             row.language,
             row.structural_version,
             row.reference_version,
+            row.framework_version,
             row.facts,
         ],
     )?)

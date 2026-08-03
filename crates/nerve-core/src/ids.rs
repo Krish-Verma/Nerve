@@ -162,6 +162,40 @@ pub fn coverage_run_id(project_id: &str, rel_path: &str, content_hash: &str) -> 
     )
 }
 
+/// `("endpoint", project_id, module_rel_path, endpoint_kind, method, path)`
+///
+/// The declaring module is in the tuple because Slice 10 records the **declared** address, not the
+/// deployed one: two modules that both declare `GET /items` are two declarations, and merging them
+/// would assert that one deployed endpoint exists where the evidence says two files each register
+/// something. Within one module the same address declared twice *is* one address — that is the
+/// ambiguity `py-framework` counts as `duplicate-address` and reports with both edges kept.
+///
+/// `method` and `path` are separate fields rather than one joined address for the reason
+/// [`section_id`] spreads its heading chain: a route path is repository text an attacker writes,
+/// and a joined field would let `("GET", "/a /b")` and `("GET /a", "/b")` collide. Both are passed
+/// through [`strip_control`] first, for the same reason a heading is.
+pub fn endpoint_id(
+    project_id: &str,
+    module_rel_path: &str,
+    endpoint_kind: crate::vocab::EndpointKind,
+    method: &str,
+    path: &str,
+) -> String {
+    let method = strip_control(method);
+    let path = strip_control(path);
+    prefixed(
+        EntityKind::Endpoint,
+        &[
+            EntityKind::Endpoint.as_str(),
+            project_id,
+            module_rel_path,
+            endpoint_kind.as_str(),
+            &method,
+            &path,
+        ],
+    )
+}
+
 /// `("<kind>", project_id, module_rel_path, scope_path, name, disambiguator)`
 ///
 /// Valid only for [`EntityKind::is_symbol`] kinds.
@@ -282,6 +316,16 @@ mod tests {
             (document_id(PID, "docs/README.md"), "doc"),
             (section_id(PID, "docs/README.md", &["Title"], 0), "sect"),
             (coverage_run_id(PID, "coverage/lcov.info", "abc"), "cov"),
+            (
+                endpoint_id(
+                    PID,
+                    "api/routes.py",
+                    crate::vocab::EndpointKind::HttpRoute,
+                    "GET",
+                    "/users",
+                ),
+                "endp",
+            ),
         ];
         for (id, prefix) in cases {
             assert!(id.starts_with(&format!("{prefix}_")), "{id} lacks {prefix}");
@@ -410,6 +454,56 @@ mod tests {
         assert_ne!(
             coverage_run_id(PID, "coverage/lcov.info", "h1"),
             coverage_run_id(PID, "coverage/lcov.infoh1", "")
+        );
+    }
+
+    /// A route path is repository text an attacker writes, so the endpoint tuple gets the same
+    /// treatment a heading does: every field separate, control characters stripped.
+    #[test]
+    fn an_endpoint_address_cannot_forge_another_endpoints_identity() {
+        use crate::vocab::EndpointKind::HttpRoute;
+
+        let base = endpoint_id(PID, "api/routes.py", HttpRoute, "GET", "/users");
+        for other in [
+            endpoint_id("other", "api/routes.py", HttpRoute, "GET", "/users"),
+            endpoint_id(PID, "api/other.py", HttpRoute, "GET", "/users"),
+            endpoint_id(PID, "api/routes.py", HttpRoute, "POST", "/users"),
+            endpoint_id(PID, "api/routes.py", HttpRoute, "GET", "/items"),
+        ] {
+            assert_ne!(base, other);
+        }
+        assert_eq!(
+            base,
+            endpoint_id(PID, "api/routes.py", HttpRoute, "GET", "/users"),
+            "the same declared address in the same module is the same endpoint"
+        );
+
+        // A space is ordinary in neither field, but it is the character the canonical name joins
+        // them with, so a joined tuple would collide these two.
+        assert_ne!(
+            endpoint_id(PID, "api/routes.py", HttpRoute, "GET", "/a /b"),
+            endpoint_id(PID, "api/routes.py", HttpRoute, "GET /a", "/b")
+        );
+        // And the unit separator cannot be smuggled through either field.
+        assert_ne!(
+            endpoint_id(PID, "api/routes.py", HttpRoute, "GET", "/users"),
+            endpoint_id(
+                PID,
+                "api/routes.py\u{1f}http_route",
+                HttpRoute,
+                "GET",
+                "/users"
+            )
+        );
+        assert_eq!(
+            endpoint_id(PID, "api/routes.py", HttpRoute, "GET", "/us\u{1f}ers"),
+            endpoint_id(PID, "api/routes.py", HttpRoute, "GET", "/users")
+        );
+
+        // An endpoint and a module at the same path are domain-separated.
+        assert_ne!(
+            endpoint_id(PID, "api/routes.py", HttpRoute, "GET", "/users")[5..],
+            module_id(PID, "api/routes.py")[4..]
         );
     }
 

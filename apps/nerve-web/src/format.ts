@@ -115,6 +115,10 @@ const RELATION_VERB: Record<string, [string, string]> = {
   // test — the report carries no test names — and never a call, however it reads. Two symbols
   // running during one test says nothing about who invoked whom.
   COVERS: ['covers', 'is covered by'],
+  // From an endpoint to the symbol the source names as its handler. A declaration, not a dispatch:
+  // it says the registration exists, not that the route runs, is permitted, or still points here at
+  // runtime. Never a call, however much a request reaching a handler sounds like one.
+  SERVED_BY: ['is served by', 'serves'],
 };
 
 /** How to read a relation from the subject's side. */

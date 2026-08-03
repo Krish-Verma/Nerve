@@ -39,6 +39,19 @@ pub enum EntityKind {
     /// report describes one whole run — so the only endpoint the evidence supports is the run
     /// that produced the report. See `docs/decisions/ADR-0008-coverage-evidence.md`.
     CoverageRun,
+    /// A declared entry point at which something outside the indexed code can cause a symbol to
+    /// run.
+    ///
+    /// **Not code.** An endpoint is a *declaration about* code — a decorator, a registration call
+    /// — so it is not a symbol and is not addressed by a repository path. Which sort of entry
+    /// point it is lives in `meta.endpoint_kind`, from the closed [`EndpointKind`] vocabulary;
+    /// Slice 10 emits exactly one value, [`EndpointKind::HttpRoute`].
+    ///
+    /// Named `Endpoint` rather than `Route` because CLI commands, queue consumers and scheduled
+    /// tasks are the same concept with a different address form, and three vocabulary members for
+    /// one concept is the drift Slices 5d-iii and 7a-iii were corrective slices for. A general
+    /// name is not a licence to emit general things: [`EndpointKind::ALL`] is what bounds it.
+    Endpoint,
 }
 
 impl EntityKind {
@@ -48,7 +61,7 @@ impl EntityKind {
     /// `TEXT` — but `apps/nerve-web/src/api/types.ts` mirrors this array *in order* and
     /// `crates/nerve-server/tests/ui_vocabulary.rs` asserts the two match exactly, so the order
     /// is a contract with the interface even though it is not one with the database.
-    pub const ALL: [EntityKind; 12] = [
+    pub const ALL: [EntityKind; 13] = [
         EntityKind::Repository,
         EntityKind::Directory,
         EntityKind::File,
@@ -62,6 +75,8 @@ impl EntityKind {
         EntityKind::Unresolved,
         // Appended in Slice 6a.
         EntityKind::CoverageRun,
+        // Appended in Slice 10a.
+        EntityKind::Endpoint,
     ];
 
     /// Canonical lower-case name, used in the database and in canonical tuples.
@@ -79,6 +94,7 @@ impl EntityKind {
             EntityKind::Section => "section",
             EntityKind::Unresolved => "unresolved",
             EntityKind::CoverageRun => "coverage_run",
+            EntityKind::Endpoint => "endpoint",
         }
     }
 
@@ -97,6 +113,7 @@ impl EntityKind {
             EntityKind::Section => "sect",
             EntityKind::Unresolved => "unres",
             EntityKind::CoverageRun => "cov",
+            EntityKind::Endpoint => "endp",
         }
     }
 
@@ -126,8 +143,9 @@ impl EntityKind {
     /// Everything else is [`PathRole::None`], and each for a reason rather than by default: a
     /// `Section`'s `scope_path` is the document that holds it, an `Unresolved`'s is the importer
     /// that failed to resolve it, a `CoverageRun` is named by a report path and a content hash
-    /// rather than by a position in the tree, the symbol kinds are named by the symbol tuple, and
-    /// the `Repository` is the root every path is relative *to*.
+    /// rather than by a position in the tree, an `Endpoint` is named by the address a framework
+    /// serves it at, the symbol kinds are named by the symbol tuple, and the `Repository` is the
+    /// root every path is relative *to*.
     pub fn path_role(self) -> PathRole {
         match self {
             EntityKind::Module | EntityKind::Document => PathRole::Content,
@@ -139,8 +157,60 @@ impl EntityKind {
             | EntityKind::Interface
             | EntityKind::Section
             | EntityKind::Unresolved
-            | EntityKind::CoverageRun => PathRole::None,
+            | EntityKind::CoverageRun
+            | EntityKind::Endpoint => PathRole::None,
         }
+    }
+}
+
+/// What sort of entry point an [`EntityKind::Endpoint`] is.
+///
+/// Closed on purpose, and closed **in `nerve-core`** rather than in whichever extractor happens to
+/// need one: `EntityKind::Endpoint` is deliberately a general name, and a general name with an
+/// open discriminator is a free-text tag wearing a vocabulary's clothes. An extractor cannot
+/// invent a member; adding one is a change to this file.
+///
+/// **Slice 10 emits exactly one value.** The others are not declared here in advance either —
+/// declaring `cli_command` before a rule produces one would be the same over-claim in a different
+/// place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum EndpointKind {
+    /// An HTTP route declared by a web framework: a method and a path, as the source declares
+    /// them.
+    ///
+    /// **The declared address, never the deployed one.** Prefix composition
+    /// (`APIRouter(prefix=…)`, `app.include_router(…)`, `register_blueprint(…)`) is not applied,
+    /// because composing it needs cross-module value tracking and inventing a composed address
+    /// would produce a confidently wrong URL.
+    HttpRoute,
+}
+
+impl EndpointKind {
+    /// Every endpoint kind, in declaration order.
+    pub const ALL: [EndpointKind; 1] = [EndpointKind::HttpRoute];
+
+    /// Canonical name, recorded in `entity.meta.endpoint_kind` and in identity tuples.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EndpointKind::HttpRoute => "http_route",
+        }
+    }
+}
+
+impl fmt::Display for EndpointKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for EndpointKind {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        EndpointKind::ALL
+            .into_iter()
+            .find(|k| k.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("EndpointKind", s))
     }
 }
 
@@ -213,6 +283,26 @@ pub enum Relation {
     ///
     /// Declared in Slice 6a, emitted in Slice 6b.
     Covers,
+    /// An [`EntityKind::Endpoint`] declares that a symbol implements it.
+    ///
+    /// `Endpoint SERVED_BY Function|Method`. **The endpoint is the source**, and the direction is
+    /// forced rather than chosen: `nerve impact X` is a *reverse* closure — it finds `A` where
+    /// `A rel X` — so a handler stops looking like dead code only if the endpoint asserts the
+    /// edge. Semantically that is also the right way round: change the handler and the endpoint's
+    /// behaviour changes, so the endpoint depends on the handler.
+    ///
+    /// **Passive voice, deliberately.** Every other relation here is active. The active
+    /// alternatives all over-claim: `DISPATCHES_TO` and `INVOKES` assert a runtime invocation from
+    /// a static registration, and `ROUTES_TO` is HTTP-only, which contradicts the general kind.
+    ///
+    /// **Never a call relationship**, the same invariant ADR-0005 states for [`Relation::Covers`].
+    /// A registration proves a table entry, not an execution: it does not prove the route is
+    /// reachable in production, that middleware permits access, that dynamic configuration has not
+    /// replaced it, that a decorator-generated wrapper preserves the handler's identity, or that
+    /// two matching path strings denote one deployed endpoint.
+    ///
+    /// Declared and emitted in Slice 10a.
+    ServedBy,
 }
 
 impl Relation {
@@ -220,7 +310,7 @@ impl Relation {
     ///
     /// Appended to, never inserted into — `apps/nerve-web/src/api/types.ts` mirrors this array in
     /// order and `crates/nerve-server/tests/ui_vocabulary.rs` asserts the two match exactly.
-    pub const ALL: [Relation; 10] = [
+    pub const ALL: [Relation; 11] = [
         Relation::Contains,
         Relation::Defines,
         Relation::Imports,
@@ -232,6 +322,8 @@ impl Relation {
         Relation::Supersedes,
         // Appended in Slice 6a.
         Relation::Covers,
+        // Appended in Slice 10a.
+        Relation::ServedBy,
     ];
 
     /// The relations Slice 1 is permitted to emit.
@@ -255,6 +347,7 @@ impl Relation {
             Relation::Implements => "IMPLEMENTS",
             Relation::Supersedes => "SUPERSEDES",
             Relation::Covers => "COVERS",
+            Relation::ServedBy => "SERVED_BY",
         }
     }
 }
@@ -559,9 +652,64 @@ mod tests {
             prefixes,
             vec![
                 "repo", "dir", "file", "mod", "fn", "meth", "class", "iface", "doc", "sect",
-                "unres", "cov"
+                "unres", "cov", "endp"
             ]
         );
+    }
+
+    /// The two Slice 10a additions, named for exactly what the evidence supports.
+    ///
+    /// `SERVED_BY` is spelled passively because every active alternative asserts an execution the
+    /// evidence does not carry, and it must never be relabelled as a call — the same invariant
+    /// ADR-0005 states for `COVERS`. `Endpoint` is not a symbol: it is a declaration *about* code,
+    /// named by the address a framework serves it at rather than by the symbol tuple.
+    #[test]
+    fn the_framework_vocabulary_states_only_what_a_registration_carries() {
+        assert_eq!(Relation::ServedBy.as_str(), "SERVED_BY");
+        assert_eq!("SERVED_BY".parse::<Relation>().unwrap(), Relation::ServedBy);
+        // The names that would assert a runtime invocation from a static registration.
+        for over_claim in ["DISPATCHES_TO", "INVOKES", "ROUTES_TO", "HANDLES"] {
+            assert!(over_claim.parse::<Relation>().is_err());
+        }
+        assert_ne!(Relation::ServedBy, Relation::Calls);
+
+        assert_eq!(EntityKind::Endpoint.as_str(), "endpoint");
+        assert_eq!(
+            "endpoint".parse::<EntityKind>().unwrap(),
+            EntityKind::Endpoint
+        );
+        assert!(!EntityKind::Endpoint.is_symbol());
+        assert_eq!(EntityKind::Endpoint.path_role(), PathRole::None);
+        // `route` would be the narrow name this kind deliberately does not have.
+        assert!("route".parse::<EntityKind>().is_err());
+    }
+
+    /// The endpoint discriminator is a closed vocabulary, and Slice 10 emits one member of it.
+    ///
+    /// `EntityKind::Endpoint` is a general name on purpose. A general name whose discriminator is
+    /// free text is not a vocabulary at all, so the discriminator is parsed here and an extractor
+    /// cannot invent a value: `"cli_command"` is a plausible future member and must not parse
+    /// until someone writes the rule that produces it.
+    #[test]
+    fn the_endpoint_kind_vocabulary_is_closed_and_has_one_member() {
+        assert_eq!(EndpointKind::ALL.len(), 1);
+        assert_eq!(EndpointKind::HttpRoute.as_str(), "http_route");
+        for kind in EndpointKind::ALL {
+            assert_eq!(kind.as_str().parse::<EndpointKind>().unwrap(), kind);
+            assert_eq!(kind.to_string(), kind.as_str());
+        }
+        for invented in [
+            "cli_command",
+            "queue_consumer",
+            "scheduled_task",
+            "route",
+            "",
+        ] {
+            assert!(
+                invented.parse::<EndpointKind>().is_err(),
+                "{invented:?} parsed as an EndpointKind without a rule that emits it"
+            );
+        }
     }
 
     /// The two Slice 6a additions, named for exactly what the evidence supports.
@@ -604,11 +752,11 @@ mod tests {
     /// default is load-bearing well beyond the symbol tuple it was written for: it now decides
     /// which kinds `symbol_kinds_sql` puts in an `IN (…)` clause, and therefore what
     /// `StatusReport::symbols_total` counts and what the interface prints beside the word
-    /// *symbols*. Listing all twelve, and checking the list is exhaustive over
+    /// *symbols*. Listing all thirteen, and checking the list is exhaustive over
     /// [`EntityKind::ALL`], makes a new kind fail here until someone states which it is.
     #[test]
     fn every_entity_kind_is_classified_as_a_symbol_or_not() {
-        let pinned: [(EntityKind, bool); 12] = [
+        let pinned: [(EntityKind, bool); 13] = [
             // Named by a path, a tuple of its own, or a content hash — never by the symbol tuple.
             (EntityKind::Repository, false),
             (EntityKind::Directory, false),
@@ -618,6 +766,10 @@ mod tests {
             (EntityKind::Section, false),
             (EntityKind::Unresolved, false),
             (EntityKind::CoverageRun, false),
+            // An endpoint is a declaration *about* code, not code. Counting it as a symbol would
+            // make `symbols_total` grow by one per route and the interface print a number of
+            // "symbols" the repository does not contain.
+            (EntityKind::Endpoint, false),
             // The symbol tuple's four kinds, and the whole of what "symbol" means here.
             (EntityKind::Function, true),
             (EntityKind::Method, true),
@@ -653,12 +805,12 @@ mod tests {
     ///
     /// [`EntityKind::path_role`] decides which entities a `<rel_path>` selector may return and
     /// which SQL shape finds them, so a kind added to the vocabulary without a role would be
-    /// silently unaddressable — a default rather than a decision. Listing all twelve, and
+    /// silently unaddressable — a default rather than a decision. Listing all thirteen, and
     /// checking the list is exhaustive over [`EntityKind::ALL`], makes a new kind fail here until
     /// someone states where it lives.
     #[test]
     fn every_entity_kind_states_how_a_path_names_it() {
-        let pinned: [(EntityKind, PathRole); 12] = [
+        let pinned: [(EntityKind, PathRole); 13] = [
             // `scope_path` is the path itself.
             (EntityKind::Module, PathRole::Content),
             (EntityKind::Document, PathRole::Content),
@@ -674,6 +826,10 @@ mod tests {
             (EntityKind::Section, PathRole::None),
             (EntityKind::Unresolved, PathRole::None),
             (EntityKind::CoverageRun, PathRole::None),
+            // An endpoint's `scope_path` is the module that declares it, exactly as a section's
+            // is the document that holds it. `api/routes.py` names that module, never the routes
+            // declared inside it.
+            (EntityKind::Endpoint, PathRole::None),
         ];
 
         for (kind, expected) in pinned {

@@ -1986,21 +1986,31 @@ fn a_single_file_edit_costs_a_fraction_of_a_full_index() {
 /// The module has to contain a *call*, not just a definition: Slice 9b added `py-reference`, and
 /// a Python file with no reference site in it makes that extractor write nothing, which would
 /// leave the equality below failing for a reason that has nothing to do with withdrawal.
+///
+/// For the same reason it now has to declare a *route*: Slice 10a added `py-framework`, and a
+/// Python file with no route in it makes that extractor write nothing. The route is what proves an
+/// endpoint is withdrawn when its decorator is edited away, which is the only thing standing
+/// between a deleted route and a graph that still serves it.
 #[test]
 fn every_extractor_an_index_run_writes_is_one_it_also_withdraws() {
     let (_dir, root) = named_fixture_copy("md-docs");
     write(
         &root,
         "src/tool.py",
-        "\"\"\"One Python module, so both Python extractors write something here too.\"\"\"\n\
+        "\"\"\"One Python module, so all three Python extractors write something here too.\"\"\"\n\
          \n\
          import os\n\
+         \n\
+         from fastapi import FastAPI\n\
+         \n\
+         app = FastAPI()\n\
          \n\
          \n\
          def scale(value):\n\
          \x20   return value * 2\n\
          \n\
          \n\
+         @app.get(\"/scale\")\n\
          def run(value):\n\
          \x20   return scale(value)\n",
     );
@@ -2038,5 +2048,124 @@ fn every_extractor_an_index_run_writes_is_one_it_also_withdraws() {
         written, withdrawn,
         "the tree no longer exercises every extractor in INDEX_EXTRACTOR_IDS, so this test would \
          stop protecting the ones that went missing"
+    );
+}
+
+/// An index written before Slice 10a must re-extract its Python files, not hit the cache forever.
+///
+/// **This is the regression test Slice 9b did not get.** That slice shipped a defect of exactly this
+/// shape: the Python cache key was `(structural_version, reference_version)`, both columns were
+/// written from `pystruct` before 9b, and both were `"1.0.0"` — so an existing index compared
+/// `("1.0.0","1.0.0")` against `("1.0.0","1.0.0")`, hit the cache on every unchanged `.py` file, and
+/// would have produced **zero Python reference edges forever**. It was caught by hand, by rewriting
+/// cache rows and re-indexing, and fixed with a version bump. No test was written, because
+/// **every test in the suite builds a fresh index** and a fresh index cannot observe an upgrade.
+///
+/// Slice 10a adds a third extractor to the same two-column key, which is the same trap one slot
+/// wider. So the simulation is committed this time: write the row shape an older build wrote, run
+/// the current build over it, and assert the file was re-extracted and the new evidence exists.
+#[test]
+fn an_index_written_before_the_framework_rules_re_extracts_its_python_files() {
+    let (_dir, root) = named_fixture_copy("py-framework");
+    nerve_index::init_with_project_id(&root, Some(TEST_PROJECT_ID)).unwrap();
+    let first = index(&root);
+    assert!(first.endpoints > 0, "the fixture must declare routes");
+
+    let endpoints_before = {
+        let conn = open_db(&root);
+        count(&conn, "entity")
+    };
+
+    // Simulate the row a Slice 9b build wrote: the two version columns it knew about, and `''` in
+    // the slot it had never heard of. This is what `ALTER TABLE ... DEFAULT ''` leaves behind for
+    // every pre-existing row, so it is the real upgrade state rather than an invented one.
+    {
+        let conn = open_db(&root);
+        let rewritten = conn
+            .execute(
+                "UPDATE module_facts SET framework_version = '' WHERE language = 'python'",
+                [],
+            )
+            .unwrap();
+        assert!(
+            rewritten > 0,
+            "no Python rows were rewritten, so this test simulates nothing"
+        );
+    }
+
+    // Nothing on disk changed. Only the cache says an older extractor set produced it.
+    let second = index(&root);
+    assert!(
+        second.incremental.files_re_extracted > 0,
+        "a pre-10a index hit the cache and skipped framework extraction — the Slice 9b defect, \
+         one slot wider. files_re_extracted was {}",
+        second.incremental.files_re_extracted
+    );
+    assert!(
+        second.endpoints > 0,
+        "re-extraction produced no endpoints, so the upgrade lost the routes"
+    );
+
+    let conn = open_db(&root);
+    let served: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM assertion a
+               JOIN observation o ON o.assertion_id = a.assertion_id
+              WHERE o.extractor_id = 'py-framework' AND a.relation = 'SERVED_BY'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(served > 0, "no SERVED_BY evidence survived the upgrade");
+    assert_eq!(
+        count(&conn, "entity"),
+        endpoints_before,
+        "the upgrade must reach the same graph, not a larger or smaller one"
+    );
+
+    // And the version is now the current one, so a third run legitimately hits the cache.
+    let stored: String = conn
+        .query_row(
+            "SELECT DISTINCT framework_version FROM module_facts WHERE language = 'python'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, nerve_index::PYTHON_FRAMEWORK_EXTRACTOR_VERSION);
+    let third = index(&root);
+    assert_eq!(
+        third.incremental.files_re_extracted, 0,
+        "with all three versions current and no file changed, nothing should be re-extracted"
+    );
+}
+
+/// A document expects an empty framework slot, so documents must not churn on the upgrade.
+///
+/// The other half of the same decision. `''` is the value a family with no framework extractor
+/// *should* hold, so if the cache-hit check treated an empty slot as a miss, every Markdown file in
+/// every repository would be re-extracted on every run forever.
+#[test]
+fn the_framework_cache_slot_does_not_make_documents_churn() {
+    let (_dir, root) = named_fixture_copy("md-docs");
+    nerve_index::init_with_project_id(&root, Some(TEST_PROJECT_ID)).unwrap();
+    index(&root);
+
+    {
+        let conn = open_db(&root);
+        let documents: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM module_facts WHERE framework_version = ''",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(documents > 0, "the fixture must contain non-Python files");
+    }
+
+    let second = index(&root);
+    assert_eq!(
+        second.incremental.files_re_extracted, 0,
+        "an empty framework slot is the correct value for a family with no framework extractor, \
+         not a cache miss"
     );
 }

@@ -113,7 +113,9 @@ use nerve_core::ids;
 use nerve_core::model::{
     AssertionRecord, EntityRecord, GraphBatch, ObservationRecord, OccurrenceRecord, Span,
 };
-use nerve_core::vocab::{Directness, EntityKind, EvidenceSourceType, Relation, UnresolvedCategory};
+use nerve_core::vocab::{
+    Directness, EndpointKind, EntityKind, EvidenceSourceType, Relation, UnresolvedCategory,
+};
 
 use crate::config::{self, Config};
 use crate::discover;
@@ -132,6 +134,7 @@ use crate::fsstruct::{self, FsEntry};
 use crate::gitinfo;
 use crate::incremental::{self, MoveCandidate, PreviousModule};
 use crate::lang::{path_is_document, path_is_python, FileKind, Language, MARKDOWN_LANGUAGE};
+use crate::pyframework::{self, PyFrameworkExtraction};
 use crate::pyrefs::{self, PyRefTarget, PyReferenceExtraction};
 use crate::pyresolve;
 use crate::pystruct::{self, PyImportForm, PyImportSite, PyModuleExtraction};
@@ -145,12 +148,16 @@ use crate::resolve;
 /// `coverage` is deliberately absent: it is ingested by a separate, explicitly invoked command
 /// (`docs/plans/slice-06-test-evidence.md` §A.4), and an index run neither produces nor replaces
 /// it. The list is used exactly once, at the withdrawal in [`index_repository_with`].
-pub const INDEX_EXTRACTOR_IDS: [&str; 6] = [
+pub const INDEX_EXTRACTOR_IDS: [&str; 7] = [
     fsstruct::EXTRACTOR_ID,
     EXTRACTOR_ID,
     refs::EXTRACTOR_ID,
     pystruct::EXTRACTOR_ID,
     pyrefs::EXTRACTOR_ID,
+    // Added in Slice 10a. Present here is what lets a re-extraction *withdraw* an endpoint whose
+    // decorator was deleted; a framework extractor missing from this list would leave stale routes
+    // in the graph forever.
+    pyframework::EXTRACTOR_ID,
     docs::EXTRACTOR_ID,
 ];
 
@@ -292,6 +299,12 @@ pub struct IndexOutcome {
     pub unmodelled_call_sites: usize,
     /// Breakdown of the above by form tag.
     pub unmodelled_by_form: BTreeMap<String, usize>,
+    /// Endpoints declared by a framework rule.
+    pub endpoints: usize,
+    /// Framework-rule constructs read and declined, by form tag. Counted, never guessed.
+    ///
+    /// Cache-backed, so this describes the repository rather than the fraction this run touched.
+    pub framework_unsupported_by_form: BTreeMap<String, usize>,
     /// Documents read, over the whole repository.
     pub documents_processed: usize,
     /// Documents recognised as ADRs.
@@ -501,6 +514,17 @@ impl Evidence {
     const RESOLVED: Evidence = Evidence {
         source_type: EvidenceSourceType::AstResolved,
         directness: Directness::Resolved,
+    };
+
+    /// A framework rule read a declaration. The only profile `py-framework` may emit.
+    ///
+    /// `Direct` rather than `Inferred` because the decorator and the function it decorates are
+    /// adjacent in one syntax tree: the rule reads a declaration, it does not conclude one. What
+    /// the declaration proves is bounded by [`Relation::ServedBy`]'s documentation — a table entry,
+    /// never an execution.
+    const FRAMEWORK: Evidence = Evidence {
+        source_type: EvidenceSourceType::FrameworkRule,
+        directness: Directness::Direct,
     };
 
     /// A document states this. The only profile `md-structural` may emit (THREAT-MODEL.md T7).
@@ -873,6 +897,7 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
     let python_surface_index = PySurfaceIndex::build(python_surfaces, &indexed);
 
     let mut python_reference_extractions: BTreeMap<String, PyReferenceExtraction> = BTreeMap::new();
+    let mut python_framework_extractions: BTreeMap<String, PyFrameworkExtraction> = BTreeMap::new();
     for file in &loaded {
         let Some(extraction) = python_extractions.get(&file.rel_path) else {
             continue;
@@ -885,6 +910,18 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
                 &file.source,
                 extraction,
                 &python_surface_index,
+            )?,
+        );
+        // The framework rules read the same tree again rather than sharing the reference walk: they
+        // answer a different question, they emit a different source type, and keeping them separate
+        // is what lets `py-framework` be versioned and invalidated on its own.
+        python_framework_extractions.insert(
+            file.rel_path.clone(),
+            pyframework::extract_framework(
+                &config.project_id,
+                &file.rel_path,
+                &file.source,
+                extraction,
             )?,
         );
     }
@@ -900,9 +937,10 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
             None => match (
                 python_extractions.get(&file.rel_path),
                 python_reference_extractions.get(&file.rel_path),
+                python_framework_extractions.get(&file.rel_path),
             ) {
-                (Some(extraction), Some(references)) => {
-                    ModuleFacts::from_python(extraction, references, &file.source)
+                (Some(extraction), Some(references), Some(framework)) => {
+                    ModuleFacts::from_python(extraction, references, framework, &file.source)
                 }
                 _ => match (
                     extractions.get(&file.rel_path),
@@ -968,6 +1006,21 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
             *unmodelled_by_form.entry(form.clone()).or_insert(0) += count;
         }
     }
+    // Read from the cache-backed facts rather than from this run's fresh extractions, so a run that
+    // re-extracted one file still reports the whole repository's tally. The precision gate audits
+    // its denominator against this number.
+    let mut framework_unsupported_by_form: BTreeMap<String, usize> = BTreeMap::new();
+    for facts in facts_by_path.values() {
+        for (form, count) in &facts.counters.framework_unsupported_by_form {
+            *framework_unsupported_by_form
+                .entry(form.clone())
+                .or_insert(0) += count;
+        }
+    }
+    let endpoints: usize = python_framework_extractions
+        .values()
+        .map(|extraction| extraction.endpoints.len())
+        .sum();
 
     let module_exports: BTreeMap<String, BTreeMap<String, String>> = facts_by_path
         .iter()
@@ -1028,6 +1081,20 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         build_python_reference_graph(&config.project_id, &python_reference_targets);
     python_reference_batch
         .verify_declared_source_types(pyrefs::EXTRACTOR_ID, &pyrefs::DECLARED_SOURCE_TYPES)?;
+
+    let python_framework_targets: Vec<(&LoadedFile, &PyFrameworkExtraction)> = loaded
+        .iter()
+        .filter_map(|file| {
+            python_framework_extractions
+                .get(&file.rel_path)
+                .map(|extraction| (file, extraction))
+        })
+        .collect();
+    let python_framework_batch = build_python_framework_graph(&python_framework_targets);
+    python_framework_batch.verify_declared_source_types(
+        pyframework::EXTRACTOR_ID,
+        &pyframework::DECLARED_SOURCE_TYPES,
+    )?;
 
     let reference_targets: Vec<(&LoadedFile, &ReferenceExtraction)> = loaded
         .iter()
@@ -1299,6 +1366,31 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
             status.as_str(),
         )?;
 
+        // `py-framework` sits after `py-reference` for the same reason that sits after
+        // `py-structural`: every handler it names is an entity the structural batch created. The
+        // `Endpoint` entities are its own, and nothing else creates them.
+        let python_framework_run = nerve_store::begin_extractor_run(
+            &tx,
+            &repo_id,
+            &state_id,
+            pyframework::EXTRACTOR_ID,
+            pyframework::EXTRACTOR_VERSION,
+        )?;
+        rows_written += nerve_store::persist_batch(
+            &tx,
+            &repo_id,
+            python_framework_run,
+            &python_framework_batch,
+            &mut touched,
+        )?;
+        nerve_store::finish_extractor_run(
+            &tx,
+            python_framework_run,
+            python_loaded as i64,
+            python_failed as i64,
+            status.as_str(),
+        )?;
+
         // `md-structural` runs unconditionally, exactly as the others do. A run over a
         // repository with no documents records that Nerve looked and found none, which is a
         // fact; making the row conditional on content would make its absence ambiguous.
@@ -1359,12 +1451,23 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
             // bump to a TS/JS extractor leave every `.py` file alone, and a bump to either Python
             // extractor invalidate exactly the Python ones.
             // `load_previous_modules` reads the columns back through the same rule.
-            let (structural_version, reference_version) = if file.kind.is_doc() {
-                (docs::EXTRACTOR_VERSION, docs::EXTRACTOR_VERSION)
+            //
+            // The third column is the framework extractor, added in Slice 10a. Empty means *no
+            // framework extractor ran and none was expected*, which is what a document says and
+            // what TS/JS says until Slice 10b gives it a rule. It is a separate slot rather than a
+            // suffix on either of the others because the three extractors are independent: a
+            // framework-rule change must re-extract framework observations without re-parsing
+            // every reference.
+            let (structural_version, reference_version, framework_version) = if file.kind.is_doc() {
+                (docs::EXTRACTOR_VERSION, docs::EXTRACTOR_VERSION, "")
             } else if file.language().is_some_and(Language::is_python) {
-                (pystruct::EXTRACTOR_VERSION, pyrefs::EXTRACTOR_VERSION)
+                (
+                    pystruct::EXTRACTOR_VERSION,
+                    pyrefs::EXTRACTOR_VERSION,
+                    pyframework::EXTRACTOR_VERSION,
+                )
             } else {
-                (EXTRACTOR_VERSION, refs::EXTRACTOR_VERSION)
+                (EXTRACTOR_VERSION, refs::EXTRACTOR_VERSION, "")
             };
             rows_written += nerve_store::upsert_module_facts(
                 &tx,
@@ -1375,6 +1478,7 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
                     language: file.kind.as_str().to_string(),
                     structural_version: structural_version.to_string(),
                     reference_version: reference_version.to_string(),
+                    framework_version: framework_version.to_string(),
                     facts: facts.to_json()?,
                 },
             )?;
@@ -1459,6 +1563,8 @@ pub fn index_repository_with(root: &Path, options: IndexOptions) -> Result<Index
         dynamic_imports_without_specifier,
         unmodelled_call_sites,
         unmodelled_by_form,
+        endpoints,
+        framework_unsupported_by_form,
         documents_processed: documents_loaded,
         adr_documents,
         document_sections,
@@ -1505,15 +1611,22 @@ fn load_previous_modules(
         let facts = ModuleFacts::from_json(&row.facts);
         let is_document = path_is_document(&rel_path) || row.language == MARKDOWN_LANGUAGE;
         let is_python = path_is_python(&rel_path) || row.language == crate::lang::PYTHON_LANGUAGE;
+        // All three slots must match, and the third is the one a pre-Slice-10a row cannot satisfy:
+        // it holds `''` there, `py-framework` has a real version, so every Python file in an
+        // existing index misses and is re-extracted. That is the required upgrade behaviour, and it
+        // is invisible to every test that builds a fresh index — the exact defect Slice 9b shipped.
         let versions_match = if is_document {
             row.structural_version == docs::EXTRACTOR_VERSION
                 && row.reference_version == docs::EXTRACTOR_VERSION
+                && row.framework_version.is_empty()
         } else if is_python {
             row.structural_version == pystruct::EXTRACTOR_VERSION
                 && row.reference_version == pyrefs::EXTRACTOR_VERSION
+                && row.framework_version == pyframework::EXTRACTOR_VERSION
         } else {
             row.structural_version == EXTRACTOR_VERSION
                 && row.reference_version == refs::EXTRACTOR_VERSION
+                && row.framework_version.is_empty()
         };
         let reusable = facts.is_some() && versions_match;
         previous.insert(
@@ -2320,6 +2433,80 @@ fn build_python_reference_graph(
                 site.span,
                 hash,
                 site.details.clone(),
+            );
+        }
+    }
+
+    builder.batch
+}
+
+/// Turn declared HTTP routes into `Endpoint` entities and `SERVED_BY` assertions.
+///
+/// A **separate batch under a separate extractor run**, exactly as the reference graph is. It
+/// creates the `Endpoint` entities — nothing else names them — and no symbol entities: every
+/// handler already exists in the structural batch.
+///
+/// The `Endpoint` is the assertion's **source** and the handler its target. That direction is what
+/// makes `nerve impact <handler>` report the endpoint, which is the measured defect Slice 10
+/// exists to fix; see `nerve_store::impact`.
+fn build_python_framework_graph(targets: &[(&LoadedFile, &PyFrameworkExtraction)]) -> GraphBatch {
+    let mut builder = GraphBuilder::new(pyframework::EXTRACTOR_ID, pyframework::EXTRACTOR_VERSION);
+
+    for (file, extraction) in targets.iter().copied() {
+        let rel_path = file.rel_path.as_str();
+        let hash = file.content_hash.as_str();
+
+        for endpoint in &extraction.endpoints {
+            builder.add_entity(EntityRecord {
+                entity_id: endpoint.entity_id.clone(),
+                kind: EntityKind::Endpoint,
+                // The canonical address. FTS5 indexes `name`, so this is what makes
+                // `nerve search users` find a route — the second defect the slice measured.
+                name: endpoint.address.clone(),
+                // The declaring module, exactly as a section's scope is its document.
+                scope_path: rel_path.to_string(),
+                language: None,
+                meta: Some(
+                    serde_json::json!({
+                        "endpoint_kind": EndpointKind::HttpRoute.as_str(),
+                        "framework": endpoint.framework.as_str(),
+                        "method": endpoint.method,
+                        // The **declared** path. No prefix from `APIRouter(prefix=…)` or a
+                        // blueprint registration is composed in.
+                        "path": endpoint.path,
+                        "rule_id": endpoint.framework.rule_id(),
+                        // Whether this address is declared more than once in this module. Both
+                        // edges are kept; the ambiguity is reported rather than resolved.
+                        "declarations_in_module": extraction
+                            .ambiguous_addresses
+                            .get(&endpoint.address)
+                            .copied()
+                            .unwrap_or(1),
+                    })
+                    .to_string(),
+                ),
+            });
+            builder.add_occurrence(&endpoint.entity_id, rel_path, endpoint.span, hash);
+
+            builder.claim(
+                &endpoint.entity_id,
+                Relation::ServedBy,
+                &endpoint.handler_entity_id,
+                Evidence::FRAMEWORK,
+                rel_path,
+                endpoint.span,
+                hash,
+                serde_json::json!({
+                    "framework": endpoint.framework.as_str(),
+                    "rule_id": endpoint.framework.rule_id(),
+                    "method": endpoint.method,
+                    "path": endpoint.path,
+                    // Stated on every observation, because this is the claim a reader is most
+                    // likely to over-read.
+                    "proves": "the source declares this endpoint and names this symbol as its \
+                               handler; not that the route is reachable, permitted by middleware, \
+                               or unreplaced by dynamic configuration",
+                }),
             );
         }
     }

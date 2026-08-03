@@ -65,8 +65,10 @@ fn a_non_symbol_entity_never_increases_symbols_total() {
         );
     }
 
-    // Eight non-symbol kinds are now in the table and the symbol count has never left zero.
-    assert_eq!(expected_entities, 8);
+    // Nine non-symbol kinds are now in the table and the symbol count has never left zero.
+    // `Endpoint` joined them in Slice 10a: a route is a declaration about code, not code, so
+    // counting it would make the interface print a number of "symbols" the repository lacks.
+    assert_eq!(expected_entities, 9);
     assert_eq!(status(&conn).unwrap().symbols_total, 0);
 }
 
@@ -102,7 +104,7 @@ fn symbols_total_is_strictly_below_entities_total_on_a_mixed_database() {
     }
 
     let report = status(&conn).unwrap();
-    assert_eq!(report.entities_total, 12);
+    assert_eq!(report.entities_total, 13);
     assert_eq!(report.symbols_total, 4);
     assert!(report.symbols_total < report.entities_total);
 

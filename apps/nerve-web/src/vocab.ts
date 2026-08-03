@@ -103,6 +103,8 @@ const KIND_GLOSS: Record<string, string> = {
     'A reference Nerve recorded but could not connect to a declaration. It is kept, not discarded.',
   coverage_run:
     'One coverage report Nerve was told to read, identified by its path and its contents. It stands for the whole test run, not for any single test — the report records no test names.',
+  endpoint:
+    'An entry point a framework declares, such as an HTTP route, named by the address the source gives it. It is the declaration, not a promise: it does not mean the route is reachable, that middleware allows it, or that configuration has not replaced it.',
 };
 
 export function kindGloss(kind: string): string {

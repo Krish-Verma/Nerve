@@ -361,7 +361,13 @@ fn a_real_v3_database_migrates_to_exactly_what_the_current_build_produces() {
         );
         // A v3 build derived its state from those labels, so the downgrade has to as well.
         nerve_store::rebuild_assertion_state(&conn).unwrap();
-        conn.execute("DELETE FROM schema_version WHERE version = 4", [])
+        // Rewind every marker above v3, and rewind v5's *shape* as well as its marker: replaying
+        // `ALTER TABLE module_facts ADD COLUMN framework_version` against a column that already
+        // exists is an error, and it should be — a migration that tolerated re-application would
+        // hide a real double-apply. So the downgrade has to be a real one.
+        conn.execute("DELETE FROM schema_version WHERE version >= 4", [])
+            .unwrap();
+        conn.execute("ALTER TABLE module_facts DROP COLUMN framework_version", [])
             .unwrap();
         assert_eq!(nerve_store::schema_version(&conn).unwrap(), Some(3));
         assert_ne!(

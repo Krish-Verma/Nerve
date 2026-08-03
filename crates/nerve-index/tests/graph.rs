@@ -308,7 +308,7 @@ fn evidence_source_types_distinguish_read_from_resolved() {
 
 /// Every extractor is recorded, each with its own run row and version.
 ///
-/// `md-structural`, `py-structural` and `py-reference` run even though `ts-basic` holds neither
+/// `md-structural` and the three Python extractors run even though `ts-basic` holds neither
 /// documents nor Python: the rows say Nerve looked and found none, which is a fact. A row that
 /// appeared only when a matching file existed would make its absence ambiguous between "none
 /// here" and "never looked for".
@@ -338,6 +338,10 @@ fn every_extractor_run_is_recorded_per_index() {
             (
                 "py-reference".to_string(),
                 nerve_index::PYTHON_REFERENCE_EXTRACTOR_VERSION.to_string()
+            ),
+            (
+                "py-framework".to_string(),
+                nerve_index::PYTHON_FRAMEWORK_EXTRACTOR_VERSION.to_string()
             ),
             ("md-structural".to_string(), "1.2.0".to_string()),
         ]

@@ -357,6 +357,8 @@ export const ENTITY_KINDS = [
   'section',
   'unresolved',
   'coverage_run',
+  // Appended in Slice 10a.
+  'endpoint',
 ] as const;
 
 export const RELATIONS = [
@@ -370,4 +372,6 @@ export const RELATIONS = [
   'IMPLEMENTS',
   'SUPERSEDES',
   'COVERS',
+  // Appended in Slice 10a.
+  'SERVED_BY',
 ] as const;

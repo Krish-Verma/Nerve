@@ -716,8 +716,8 @@ fn impact_reports_the_closure_with_its_tallies_and_its_unresolved_account() {
     assert_eq!(value["subject"]["name"], "add");
     assert_eq!(
         value["relations"],
-        serde_json::json!(["CALLS", "REFERENCES", "EXTENDS", "IMPLEMENTS"]),
-        "the default set, not every relation"
+        serde_json::json!(["CALLS", "REFERENCES", "EXTENDS", "IMPLEMENTS", "SERVED_BY"]),
+        "the default set, not every relation. SERVED_BY joined it in Slice 10a."
     );
     assert_eq!(value["max_depth"], 6);
 

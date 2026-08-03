@@ -57,8 +57,9 @@
 //! # Which relations are followed, and which are refused
 //!
 //! The default is `CALLS`, `REFERENCES`, `EXTENDS`, `IMPLEMENTS` — the symbol-level dependency
-//! relations, and exactly the four Slice 2a resolves and measures. [`DEFAULT_RELATIONS`] is the
-//! whole of it, and the exclusions are deliberate:
+//! relations Slice 2a resolves and measures — plus `SERVED_BY` since Slice 10a.
+//! [`DEFAULT_RELATIONS`] is the whole of it, and both the exclusions and the one inclusion that
+//! looks like an exclusion are deliberate:
 //!
 //! - **`CONTAINS` and `DEFINES`** would walk from a function to its module, its file, its
 //!   directory and the repository itself. Every symbol would "impact" the repository — true, and
@@ -71,6 +72,19 @@
 //!   consequence of a change rather than a dependency on the symbol — and would put a
 //!   `CoverageRun`, which is neither a symbol nor code, in a list of things that depend on your
 //!   function.
+//! - **`SERVED_BY` is included**, and the obvious objection is the `COVERS` one restated: an
+//!   `Endpoint` is not a symbol and not code either. The distinction is real. A `CoverageRun` is
+//!   an artifact **about** the code — a report of a past execution — and changing a symbol does
+//!   not break a report, it makes it *stale*, which is a freshness matter and is exactly what the
+//!   `COVERS` exclusion note says. An `Endpoint` is a declaration **in** the code: it exists
+//!   because a decorator in a source file declares it, it is withdrawn when that file changes, and
+//!   changing its handler changes what the endpoint does. It genuinely depends on the symbol.
+//!   Excluding it would reproduce the defect Slice 10 exists to fix — a live HTTP handler and dead
+//!   code producing a byte-identical *"nothing in the index depends on this"*.
+//!
+//!   What appears in the closure is still a **declaration**, never a proof of reachability. See
+//!   [`nerve_core::vocab::Relation::ServedBy`] for the list of things a registration does not
+//!   prove, which the CLI restates when an endpoint is in the answer.
 //!
 //! This is **not** `nerve affected`. That command is refused, not deferred (ADR-0008 §A.2: LCOV
 //! carries no per-test attribution). If a test file appears in an impact set it is because code
@@ -102,12 +116,15 @@ use crate::select::EntityRef;
 /// The relations a reverse impact closure follows unless the caller names others.
 ///
 /// See the module documentation for why `CONTAINS`, `DEFINES`, `IMPORTS` and `COVERS` are not
-/// here. Changing this array changes what `nerve impact` means.
-pub const DEFAULT_RELATIONS: [Relation; 4] = [
+/// here, and why `SERVED_BY` is. Changing this array changes what `nerve impact` means.
+pub const DEFAULT_RELATIONS: [Relation; 5] = [
     Relation::Calls,
     Relation::References,
     Relation::Extends,
     Relation::Implements,
+    // Appended in Slice 10a. An endpoint depends on the symbol that implements it, and without
+    // this a live route handler is indistinguishable from dead code.
+    Relation::ServedBy,
 ];
 
 /// What to ask, and how much of the answer to return.
@@ -478,14 +495,20 @@ pub fn impact(
 mod tests {
     use super::*;
 
-    /// The four the walk follows, and the four it must not.
+    /// The five the walk follows, and the six it must not.
     ///
     /// This is the difference between an answer and a truism. With `CONTAINS` in the set every
     /// symbol reaches its module, its file, its directory and the repository, so every symbol
     /// "impacts" the whole repository; with `COVERS` in it a `CoverageRun` — not a symbol, not
     /// code — turns up in a list of things that depend on your function.
+    ///
+    /// `SERVED_BY` is in the set for the reason the module documentation gives: an endpoint is a
+    /// declaration *in* the code rather than a report *about* it, so it genuinely depends on its
+    /// handler, and leaving it out makes a live route handler answer exactly as dead code does.
+    /// The two membership decisions are asserted together, because they are the same argument
+    /// pointing in opposite directions.
     #[test]
-    fn the_default_relation_set_is_the_four_dependency_relations() {
+    fn the_default_relation_set_is_the_dependency_relations_plus_served_by() {
         assert_eq!(
             DEFAULT_RELATIONS.to_vec(),
             vec![
@@ -493,6 +516,7 @@ mod tests {
                 Relation::References,
                 Relation::Extends,
                 Relation::Implements,
+                Relation::ServedBy,
             ]
         );
         for refused in [
@@ -508,6 +532,18 @@ mod tests {
                 "{refused} must not be a default impact relation"
             );
         }
+        assert!(
+            DEFAULT_RELATIONS.contains(&Relation::ServedBy),
+            "without SERVED_BY a live route handler and dead code give the same answer, which is \
+             the measured defect Slice 10 exists to fix"
+        );
+        // Every member of the closed vocabulary is accounted for, so a relation added later
+        // cannot be silently absent from both lists.
+        assert_eq!(
+            DEFAULT_RELATIONS.len() + 6,
+            Relation::ALL.len(),
+            "a relation was added to the vocabulary without a decision about `nerve impact`"
+        );
     }
 
     /// An empty list means the default four, never "every relation".
@@ -577,7 +613,7 @@ mod tests {
         let clause = relation_clause(&DEFAULT_RELATIONS);
         assert_eq!(
             clause,
-            " AND a.relation IN ('CALLS', 'REFERENCES', 'EXTENDS', 'IMPLEMENTS')"
+            " AND a.relation IN ('CALLS', 'REFERENCES', 'EXTENDS', 'IMPLEMENTS', 'SERVED_BY')"
         );
         assert!(!clause.contains("CONTAINS"));
     }

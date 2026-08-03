@@ -3,11 +3,12 @@
 ## Layering
 
 ```
-Surfaces        nerve-cli   ·   [Slice 4] nerve-server + apps/nerve-web   ·   [Slice 8] MCP
+Surfaces        nerve-cli   ·   nerve-server + apps/nerve-web   ·   MCP (stdio)
                                   thin adapters — no business logic
                                             │
 Application     index_repository() · status() · search_entities() · resolve_selector()
-                find_paths() · explain()      · (later) impact/gaps/check
+                find_paths() · explain() · impact() · gaps() · diagnose()
+                ingest_coverage() · index_freshness() + untracked_files()  [nerve check]
                                             │
 Pipeline        nerve-index:  discover → parse → extract → persist
                               emits Observations ONLY
@@ -26,10 +27,18 @@ Model           nerve-core:   ids · entity kinds · relations · evidence vocab
 | `nerve-core` | Identity computation, entity/relation/evidence vocabularies, error types, canonical serialization for golden tests | — |
 | `nerve-store` | SQLite schema and migrations, all SQL, FTS5, `rebuild_assertion_state`, selector resolution, bounded path traversal, evidence assembly | `nerve-core` |
 | `nerve-index` | File discovery, ignore/deny rules, tree-sitter parsing, extraction, indexing pipeline, query-time file prober | `nerve-core`, `nerve-store` |
+| `nerve-server` | Loopback HTTP API, token/origin/host validation, embedded SPA assets, MCP over stdio | `nerve-core`, `nerve-store`, `nerve-index` |
 | `nerve-cli` | `clap` command surface, human and `--json` rendering, exit codes | all |
 
-`nerve-query` and `nerve-server` are deliberately **not** created yet — they have no distinct
-boundary until Slice 2 and Slice 4 respectively. See master plan §3.4.
+`nerve-server` was created in Slice 4a and gained the MCP surface in Slice 8a. Both of its surfaces
+are **pure surface over the application layer** — invariant 3 below — which Slice 8b-ii verified by
+adding four MCP tools with `nerve-store`, `nerve-core`, `nerve-index` and `api.rs` byte-untouched.
+
+`nerve-query` was **never created, and no longer will be.** The boundary it was reserved for turned
+out to belong inside `nerve-store` (`query.rs`, `graph.rs`, `impact.rs`, `gaps.rs`, `select.rs`,
+`freshness.rs`, `diagnose.rs`), because every one of those needs the SQL and the schema it would
+have had to import wholesale. A crate whose entire dependency is one other crate's internals is a
+module. Superseding master plan §3.4.
 
 ## Invariants
 

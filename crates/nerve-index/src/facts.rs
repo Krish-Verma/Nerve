@@ -82,6 +82,19 @@ pub struct CachedCounters {
     pub unmodelled_call_sites: usize,
     /// Breakdown of the above by form tag.
     pub unmodelled_by_form: BTreeMap<String, usize>,
+    /// Framework-rule constructs read and declined, by form tag.
+    ///
+    /// Cached for the same reason [`CachedCounters::unmodelled_by_form`] is: `nerve index` reports
+    /// these over the **whole** repository, so a run that re-extracted one file must still be able
+    /// to state the totals. Without the cache the tally would shrink to whatever the last edit
+    /// touched, which is not a smaller answer but a false one — and it is the number the precision
+    /// gate's denominator is audited against.
+    ///
+    /// Added in Slice 10a. Absent from a row written earlier, which
+    /// `#[serde(default)]` on the struct's derive handles: an old row deserialises with an empty
+    /// map, and `framework_version` guarantees such a row is re-extracted anyway.
+    #[serde(default)]
+    pub framework_unsupported_by_form: BTreeMap<String, usize>,
 }
 
 /// One supersession field a document wrote, reduced to what re-resolution needs.
@@ -231,6 +244,7 @@ impl ModuleFacts {
     pub fn from_python(
         extraction: &crate::pystruct::PyModuleExtraction,
         references: &crate::pyrefs::PyReferenceExtraction,
+        framework: &crate::pyframework::PyFrameworkExtraction,
         source: &str,
     ) -> ModuleFacts {
         let import_specifiers: BTreeSet<String> = extraction
@@ -261,6 +275,11 @@ impl ModuleFacts {
                 has_syntax_error: extraction.has_syntax_error,
                 unmodelled_call_sites: references.unmodelled_call_sites,
                 unmodelled_by_form: references.unmodelled_by_form.clone(),
+                framework_unsupported_by_form: framework
+                    .unsupported_by_form
+                    .iter()
+                    .map(|(form, count)| ((*form).to_string(), *count))
+                    .collect(),
                 ..CachedCounters::default()
             },
             python: PythonFacts {
@@ -480,6 +499,9 @@ impl ModuleFacts {
                 has_syntax_error: extraction.has_syntax_error,
                 unmodelled_call_sites: references.unmodelled_call_sites,
                 unmodelled_by_form: references.unmodelled_by_form.clone(),
+                // Empty by construction, not by omission: Slice 10a's framework rules are Python
+                // only, and `ts-js-framework` is Slice 10b. When it lands this stops being empty.
+                framework_unsupported_by_form: BTreeMap::new(),
             },
             document: DocumentCounters::default(),
             // Empty by construction: a TypeScript module contributes nothing to Python's

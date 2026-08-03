@@ -1035,10 +1035,12 @@ fn impact_reports_the_closure_with_exact_tallies() {
     assert!(payload["evidence"]["dependants_total"].as_u64().unwrap() >= 1);
     assert!(payload["evidence"]["totals"]["entities"].as_u64().unwrap() >= 1);
     assert!(payload["evidence"]["totals"]["by_depth"].is_array());
-    // Empty relations means the four dependency relations, and the answer says which.
+    // Empty relations means the default dependency set, and the answer says which. `SERVED_BY`
+    // joined it in Slice 10a, so the set is five and the tool reports the fifth rather than
+    // silently following an edge the caller was not told about.
     assert_eq!(
         payload["query"]["relations_effective"],
-        json!(["CALLS", "REFERENCES", "EXTENDS", "IMPLEMENTS"])
+        json!(["CALLS", "REFERENCES", "EXTENDS", "IMPLEMENTS", "SERVED_BY"])
     );
     let rows = payload[tool::UNTRUSTED_CONTENT_FIELD]["results"]
         .as_array()
