@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| **Last slice commit** | Slice 8b-i — `feat: Slice 8b-i — a path now names what is at it`. Hash recorded by the follow-up docs commit; `git log --oneline -3` is authoritative. |
+| **Last slice commit** | `124747b` — `feat: Slice 8b-i — a path now names what is at it`. A docs commit may sit on top; `git log --oneline -3` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
 | **Last completed slice** | **Slice 8b-i** — selector resolution by entity kind |

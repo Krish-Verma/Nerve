@@ -206,6 +206,10 @@ them. Recorded because the two-party check was weaker here than the process inte
 - **`nerve path` and `nerve impact` were not re-examined selector-by-selector** beyond the test
   suite and the shared resolution layer they call.
 
+## Commit
+
+`124747b` — *feat: Slice 8b-i — a path now names what is at it*.
+
 ## Next slice
 
 **8b-ii — the rest of the MCP tool surface** (`search`, `path`, `impact`, `gaps`), on a selector
