@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| **Last slice commit** | Slice 8a — `feat: Slice 8a — MCP over stdio`. `git log --oneline -3` is authoritative; a docs commit records the hash. |
+| **Last slice commit** | `cbce2c0` — `feat: Slice 8a — MCP over stdio, one tool, and the two gates that had to come first`. A docs commit may sit on top; `git log --oneline -3` is authoritative. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
 | **Last completed slice** | **Slice 8a** — MCP over stdio, one tool, T7 + T8 satisfied |
