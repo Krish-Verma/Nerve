@@ -150,4 +150,3 @@ the moved case additionally asserted to leave a broken-link entity behind.
 - `document_link_refused` does not fire on Nerve's own repository, because the traversal-shaped
   fixture link does not actually climb above the root from where it sits. It fires on the fixture
   corpus.
-</content>

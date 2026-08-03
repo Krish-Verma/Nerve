@@ -166,4 +166,3 @@ unit of work.
 - A raw `0x1f` cannot be committed through the implementer's file tools, so `fixtures/md-docs/docs/hostile.md`
   stores control bytes as escapes and the harness substitutes real bytes before indexing. A separate
   test asserts the substitution happened, so the forgery test cannot pass vacuously.
-</content>

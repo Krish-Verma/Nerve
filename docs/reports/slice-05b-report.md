@@ -89,4 +89,3 @@ These are real and belong to the resolution slice:
 
 Resolution, `Section REFERENCES`, `Document SUPERSEDES Document`, unresolved entities, the
 precision harness and invalidation. All of that is Slice 5c.
-</content>
