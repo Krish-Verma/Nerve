@@ -1987,3 +1987,322 @@ fn the_cli_and_the_api_answer_the_impact_question_identically() {
 
     drop(child);
 }
+
+// ---- check -------------------------------------------------------------------------------
+//
+// `nerve check` answers with an exit code, so every test here asserts the **code**. Text is
+// asserted only where the plan requires the staleness to be visible as well as fatal.
+
+/// Open the index for a fixture directly, to put it into a state the CLI cannot produce.
+fn open_index(root: &Path) -> nerve_store::Connection {
+    nerve_store::open(&root.join(".nerve/nerve.db")).unwrap()
+}
+
+/// BLAKE3 of the database file, for the "check writes nothing" proof.
+fn database_digest(root: &Path) -> String {
+    let bytes = std::fs::read(root.join(".nerve/nerve.db")).unwrap();
+    nerve_core::ids::content_hash(&bytes)
+}
+
+#[test]
+fn check_exits_zero_when_the_index_describes_the_tree() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    let output = run(&["check", root.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("verdict        current"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn check_exits_two_when_there_is_nothing_to_judge() {
+    let (_dir, root) = fixture_copy();
+    let root = root.to_str().unwrap();
+
+    // No database at all.
+    let bare = run(&["check", root]);
+    assert_eq!(code(&bare), 2, "{}", stdout(&bare));
+    assert!(
+        stdout(&bare).contains("verdict        no_index"),
+        "{}",
+        stdout(&bare)
+    );
+
+    // Initialized, but nothing has ever been indexed. There is still no graph to trust.
+    assert_eq!(code(&run(&["init", root])), 0);
+    let empty = run(&["check", root]);
+    assert_eq!(code(&empty), 2, "{}", stdout(&empty));
+    assert!(
+        stdout(&empty).contains("nothing has been indexed"),
+        "{}",
+        stdout(&empty)
+    );
+}
+
+#[test]
+fn check_exits_three_when_the_schema_is_behind() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    {
+        let conn = open_index(&root);
+        conn.execute_batch(
+            "DELETE FROM schema_version
+              WHERE version = (SELECT MAX(version) FROM schema_version)",
+        )
+        .unwrap();
+    }
+    let output = run(&["check", root.to_str().unwrap()]);
+    assert_eq!(code(&output), 3, "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("verdict        unusable"),
+        "{}",
+        stdout(&output)
+    );
+
+    // A behind schema is not staleness, so the escape hatch for staleness must not open it.
+    assert_eq!(
+        code(&run(&["check", root.to_str().unwrap(), "--allow-stale"])),
+        3
+    );
+}
+
+#[test]
+fn check_exits_three_when_a_run_never_finished() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    {
+        let conn = open_index(&root);
+        conn.execute_batch(
+            "UPDATE extractor_run
+                SET status = 'running', finished_at = NULL
+              WHERE run_id = (SELECT MAX(run_id) FROM extractor_run)",
+        )
+        .unwrap();
+    }
+    let output = run(&["check", root.to_str().unwrap()]);
+    assert_eq!(code(&output), 3, "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("did not finish"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn check_exits_four_when_an_indexed_file_changed() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    std::fs::write(root.join("src/math.ts"), "export const changed = 1;\n").unwrap();
+
+    let output = run(&["check", root.to_str().unwrap()]);
+    assert_eq!(code(&output), 4, "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("verdict        stale"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("changed        1"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+/// A deleted file is `missing` in the sweep, and `missing` is staleness: the graph still
+/// describes a file that is not there.
+#[test]
+fn check_exits_four_when_an_indexed_file_was_deleted() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    std::fs::remove_file(root.join("src/math.ts")).unwrap();
+
+    let output = run(&["check", root.to_str().unwrap()]);
+    assert_eq!(code(&output), 4, "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("removed        1"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(
+        json(&run(&["check", root.to_str().unwrap(), "--json"]))["freshness"]["missing"],
+        1
+    );
+}
+
+/// An added file has no row for the sweep to compare, so it is found by walking the tree rather
+/// than the cache. Without that walk this case reports a wholly fresh index.
+#[test]
+fn check_exits_four_when_a_file_was_added() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    std::fs::write(root.join("src/brandnew.ts"), "export const brandNew = 1;\n").unwrap();
+
+    let output = run(&["check", root.to_str().unwrap()]);
+    assert_eq!(code(&output), 4, "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("added          1"),
+        "{}",
+        stdout(&output)
+    );
+
+    let value = json(&run(&["check", root.to_str().unwrap(), "--json"]));
+    assert_eq!(value["added"], 1);
+    assert_eq!(value["added_paths"][0], "src/brandnew.ts");
+    assert_eq!(
+        value["freshness"]["stale"], 0,
+        "the sweep itself sees nothing wrong; only the tree walk does"
+    );
+    assert_eq!(
+        value["freshness"]["fresh"],
+        value["freshness"]["files_total"]
+    );
+}
+
+#[test]
+fn check_allow_stale_exits_zero_and_still_reports_the_staleness() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    let root = root.to_str().unwrap();
+    std::fs::write(
+        Path::new(root).join("src/math.ts"),
+        "export const changed = 1;\n",
+    )
+    .unwrap();
+    assert_eq!(code(&run(&["check", root])), 4);
+
+    let output = run(&["check", root, "--allow-stale"]);
+    assert_eq!(code(&output), 0, "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("verdict        stale"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("--allow-stale"),
+        "{}",
+        stdout(&output)
+    );
+
+    let value = json(&run(&["check", root, "--allow-stale", "--json"]));
+    assert_eq!(value["exit_code"], 0);
+    assert_eq!(value["ok"], true);
+    assert_eq!(
+        value["verdict"], "stale",
+        "the verdict is the judgement; --allow-stale changes only what is done about it"
+    );
+    assert_eq!(value["allow_stale"], true);
+    assert_eq!(value["downgraded"], true);
+    assert_eq!(value["freshness"]["stale"], 1);
+    assert_eq!(
+        value["error"],
+        serde_json::Value::Null,
+        "`ok: true` must never carry an error; the staleness is reported in `verdict`"
+    );
+}
+
+#[test]
+fn check_exits_ten_on_a_bad_argument() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    assert_eq!(
+        code(&run(&["check", root.to_str().unwrap(), "--no-such-flag"])),
+        10
+    );
+}
+
+#[test]
+fn check_json_carries_the_verdict_the_reason_and_the_freshness_counts() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    let root = root.to_str().unwrap();
+
+    let value = json(&run(&["check", root, "--json"]));
+    require_keys(
+        &value,
+        &[
+            "command",
+            "ok",
+            "exit_code",
+            "error",
+            "verdict",
+            "reason",
+            "allow_stale",
+            "downgraded",
+            "root",
+            "database_path",
+            "schema_version",
+            "supported_schema_version",
+            "runs_running",
+            "freshness",
+            "added",
+            "added_paths",
+            "unindexable",
+        ],
+    );
+    require_keys(
+        &value["freshness"],
+        &[
+            "files_total",
+            "files_probed",
+            "fresh",
+            "stale",
+            "missing",
+            "refused",
+            "unreadable",
+            "truncated",
+        ],
+    );
+    assert_eq!(value["command"], "check");
+    assert_eq!(value["verdict"], "current");
+    assert_eq!(value["exit_code"], 0);
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["error"], serde_json::Value::Null);
+    assert_eq!(value["schema_version"], nerve_store::SCHEMA_VERSION);
+    assert_eq!(
+        value["supported_schema_version"],
+        nerve_store::SCHEMA_VERSION
+    );
+    assert_eq!(value["freshness"]["truncated"], false);
+    assert!(value["reason"].as_str().unwrap().len() > 10);
+
+    // The same keys are present when the verdict is bad, so a script parses one shape.
+    std::fs::remove_file(Path::new(root).join("src/math.ts")).unwrap();
+    let stale = json(&run(&["check", root, "--json"]));
+    require_keys(
+        &stale,
+        &["verdict", "reason", "freshness", "added", "unindexable"],
+    );
+    assert_eq!(stale["verdict"], "stale");
+    assert_eq!(stale["exit_code"], 4);
+    assert_eq!(stale["error"], stale["reason"]);
+
+    // And when there is nothing to judge at all, the freshness counts are null rather than zero:
+    // no sweep ran, so `0 stale` would be a measurement that was never taken.
+    let (_bare_dir, bare) = fixture_copy();
+    let empty = json(&run(&["check", bare.to_str().unwrap(), "--json"]));
+    require_keys(&empty, &["verdict", "reason", "freshness", "added"]);
+    assert_eq!(empty["verdict"], "no_index");
+    assert_eq!(empty["freshness"], serde_json::Value::Null);
+    assert_eq!(empty["added"], serde_json::Value::Null);
+}
+
+/// `check` judges and never repairs. Asserted on the bytes, not on the absence of a call.
+#[test]
+fn check_writes_nothing_to_the_database() {
+    let (_dir, root) = indexed_fixture("ts-basic");
+    let path = root.to_str().unwrap();
+
+    let before = std::fs::read(root.join(".nerve/nerve.db")).unwrap();
+    let before_digest = database_digest(&root);
+
+    assert_eq!(code(&run(&["check", path])), 0);
+    assert_eq!(code(&run(&["check", path, "--json"])), 0);
+
+    // A stale index is the case a repairing implementation would be tempted by.
+    std::fs::write(root.join("src/math.ts"), "export const changed = 1;\n").unwrap();
+    std::fs::write(root.join("src/brandnew.ts"), "export const brandNew = 1;\n").unwrap();
+    assert_eq!(code(&run(&["check", path])), 4);
+    assert_eq!(code(&run(&["check", path, "--allow-stale"])), 0);
+
+    let after = std::fs::read(root.join(".nerve/nerve.db")).unwrap();
+    assert_eq!(
+        database_digest(&root),
+        before_digest,
+        "nerve check must not write to the index it was asked to judge"
+    );
+    assert_eq!(before, after, "the database bytes must be identical");
+}

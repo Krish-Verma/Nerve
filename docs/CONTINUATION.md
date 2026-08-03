@@ -8,22 +8,22 @@
 
 | | |
 |---|---|
-| **Last slice commit** | `45d0b77` — `feat: Slice 7b — nerve impact, and the caveat that is larger than the answer`. A docs commit may sit on top; `git log --oneline -3` is authoritative. |
+| **Last slice commit** | Slice 7c-i — `feat: Slice 7c-i — nerve check`. `git log --oneline -3` is authoritative; a docs commit records the hash. |
 | **Branch** | `main` · **Working tree** clean at that commit |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 7b** — `nerve impact`, with the unresolved account on every answer |
-| **Next slice** | **Slice 7c** — `nerve check` (CI exit codes) + `nerve doctor` (diagnostics). Then 8–14, validation. |
-| **Roadmap status** | **INCOMPLETE.** 7c, 8–14 and real-world validation not started. |
+| **Last completed slice** | **Slice 7c-i** — `nerve check`, the CI verdict and its exit codes |
+| **Next slice** | **Slice 7c-ii** — `nerve doctor` (diagnostics). Then 8–14, validation. |
+| **Roadmap status** | **INCOMPLETE.** 7c-ii, 8–14 and real-world validation not started. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
 
-## Verification state at the Slice 7b commit
+## Verification state at the Slice 7c-i commit
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace                                  → 771 passed, 0 failed, 2 ignored
+cargo test --workspace                                  → 795 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
 ```
 
@@ -126,6 +126,35 @@ Two mutation probes. Zeroing the account failed 4 tests across store, CLI and AP
 `CONTAINS`'d); re-run with `DEFINES`, that test fails as intended. Recorded because a probe that
 passes for the wrong reason is how a never-firing test gets trusted.
 
+## What Slice 7c-i delivered
+
+**`nerve check`** — five verdicts (`current` / `no_index` / `unusable` / `stale` / `unverified`)
+over `index_freshness` + `is_healthy()`, mapping to exit `0 / 2 / 3 / 4 / 4`. One new exit code,
+`STALE_INDEX = 4`. `exit_code()` is the only place the mapping exists and a unit test asserts every
+verdict maps to exactly one code. `--allow-stale` downgrades to 0 without changing the verdict.
+
+**`Unverified` is distinct from `Stale` and shares its exit code.** Different evidence — nothing
+was *observed* to change, part of the tree was never looked at — same instruction to the caller. A
+truncated sweep is therefore never a clean bill.
+
+**The brief was wrong and the implementer proved it with a test rather than asserting it.**
+`index_freshness` iterates `module_facts`, so a file with no row — an *added* file — is invisible
+to it: a repository can grow a hundred modules while every recorded hash still matches. Hence
+`nerve_index::untracked_files` = `discover(root) − module_facts(repo_id)`. Files the loader would
+refuse (over size, unreadable, non-UTF-8) have no row either, so they are counted `unindexable`
+and excluded — otherwise they would pin `check` at exit 4 forever.
+
+**Read-only by construction**: the connection opens `query_only=ON`. Verified on the bytes —
+BLAKE3 before/after in the shipped test, and the orchestrator confirmed sha256 identical after six
+`check` runs including stale ones.
+
+Orchestrator verification beyond the implementer's: **zero false positives across all 7 fixtures**
+(document fixtures included — `module_facts` carries rows for documents via the `is_doc()` branch),
+and **unsupported file types do not trigger staleness** — adding `.py`, `.txt` and a binary each
+left `current`/exit 0, while a real `.ts` gave `stale`/exit 4. `discover()` filters by supported
+extension. Orchestrator mutation probe (make `untracked_files` never record an addition) failed 3
+tests.
+
 ---
 
 ## The interface is frozen (2026-08-02)
@@ -147,7 +176,7 @@ across `types.ts` and `App.tsx:144`) are the model.
 
 | | |
 |---|---|
-| **7c** | **Next.** `nerve check` (CI exit codes) + `nerve doctor` (diagnostics). |
+| **7c-ii** | **Next.** `nerve doctor` — diagnostics for a human whose install misbehaves. Plan: `docs/plans/slice-07c-check-and-doctor.md` §7c-ii. |
 | 7c | `nerve check` (CI exit codes) + `nerve doctor` (diagnostics). |
 | 8 | MCP — one default investigation tool. **T7 + T8 gate.** |
 | 9 | Python |
@@ -269,6 +298,16 @@ recorded in `docs/plans/slice-15-real-world-validation.md`.
   correspondence. Found during 7a-iii, deliberately left.
 - **The CLI↔API agreement-test boilerplate is duplicated twice** (`gaps`, `overview`) — roughly 35
   lines of spawn/`Reaper` each. A third such test should hoist it into the shared harness.
+- **`indexable()` in `nerve-index/src/inspect.rs` restates the pipeline loader's three conditions**
+  (size ceiling, readable, UTF-8) rather than calling it. If the loader's rules change, `check`
+  reports an addition indexing will not actually add. Documented at the function; nothing enforces
+  the correspondence. Same class of risk as the triplicated symbol-kind list 7a-iii consolidated.
+- **`check`'s truncated-sweep path is unit-tested, not end-to-end.** Forcing the 5,000-file probe
+  cap needs a repository larger than the cap, which would dominate suite runtime. `judge_freshness`
+  is a pure function and is tested as one. An `#[ignore]`d scale test is the option if wanted.
+- **`README.md`'s command list is stale** — it shows only `init`/`index`/`status`/`search` and
+  predates `coverage`, `gaps`, `impact`, `path`, `why`, `serve`, `check`. Found during 7c-i, which
+  touched only the exit-code line it had to.
 - **`docs/ARCHITECTURE.md` has drifted.** It says `nerve-server` is "deliberately not created yet"
   (shipped in Slice 4a), its crate table lists 4 of the 5 crates, its pipeline diagram names only
   the two `ts-js-*` extractors (there are now `fs-structural`, `md-structural` and coverage too),

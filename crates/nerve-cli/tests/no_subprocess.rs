@@ -205,7 +205,14 @@ fn indexing_a_repository_never_executes_its_contents() {
 
     let binary = env!("CARGO_BIN_EXE_nerve");
     let path = root.to_str().unwrap();
-    for args in [["init", path], ["index", path], ["status", path]] {
+    // `check` is in this loop because it reads repository bytes of its own: the untracked-file
+    // walk opens every path the index has no row for, which on this tree is the hostile file.
+    for args in [
+        ["init", path],
+        ["index", path],
+        ["status", path],
+        ["check", path],
+    ] {
         Command::new(binary)
             .args(args)
             .output()

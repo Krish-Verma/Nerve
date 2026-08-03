@@ -67,7 +67,9 @@ pub use incremental::{
     PreviousModule,
 };
 pub use init::{init, init_with_project_id, InitOutcome};
-pub use inspect::{index_freshness, partial_parses, IndexFreshness, PartialParse};
+pub use inspect::{
+    index_freshness, partial_parses, untracked_files, IndexFreshness, PartialParse, UntrackedFiles,
+};
 pub use lang::{path_is_document, FileKind, Language, DOCUMENT_EXTENSIONS, MARKDOWN_LANGUAGE};
 pub use markdown::{scan as scan_markdown, DocumentScan, Heading, HeadingStyle, ScanCounters};
 pub use pipeline::{

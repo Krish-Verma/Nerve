@@ -47,7 +47,8 @@ nerve search <query>     # FTS5 symbol search
 Global flags: `--json`, `--quiet`, `--no-color`.
 
 Exit codes: `0` success · `2` no or unhealthy index · `3` partial index (some files were
-skipped) · `10` usage error · `70` internal error.
+skipped) · `4` index sound but stale — `nerve check` only · `10` usage error · `70` internal
+error.
 
 Every command accepts `--json`, which prints a single JSON object with stable keys.
 
