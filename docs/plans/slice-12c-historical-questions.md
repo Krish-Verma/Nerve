@@ -120,22 +120,37 @@ Four independent reasons the earliest visible change is not the first:
 
 ### 4.2 `FirstObservedKind` — a new closed vocabulary in `nerve-core`
 
-Five values. Exactly one of them may be rendered as creation.
+**Six** values, and the sixth is why this section was rewritten. Exactly one may be rendered as
+creation.
 
-| value | meaning | may say "created" |
+| value | condition | may say "created" |
 |---|---|---|
-| `CreatedInVisibleHistory` | earliest change is `Added`, at a commit where `parent_completeness.may_claim_history_begins_here()` **or** whose ancestry to a root is fully recorded | **yes** |
-| `EarliestVisibleChange` | a change was found; history above it is unavailable for one of §4.1's four reasons, which is named | no |
-| `PresentBeforeVisibleHistory` | the path is in the current tree and has **zero** change rows in visible history — so it existed at or before the earliest visible commit | no |
-| `NoHistoryIngested` | no `git_history_ingest` row | no |
-| `NotInVisibleHistory` | zero change rows **and** not in the current tree | no |
+| `CreatedInVisibleHistory` | earliest change is `Added`, at a commit whose `parent_completeness.may_claim_history_begins_here()` | **yes** |
+| `EarliestVisibleChange` | changes exist; history above is unavailable for one of §4.1's four reasons, which is named | no |
+| `PresentBeforeVisibleHistory` | zero change rows, **and** the path is an indexed entity — so it exists now and was never touched in visible history | no |
+| `AbsentFromVisibleHistory` | zero change rows, the path is not an indexed entity, **and an index exists** | no |
+| `CurrentTreeUnknown` | zero change rows, **and there is no index** — see below | no |
+| `NoHistoryIngested` | no `git_history_ingest` row at all | no |
 
-`PresentBeforeVisibleHistory` is the value that would not exist if the vocabulary were drafted from
-the happy path, and it is the common case on a shallow clone: every unchanged file has no rows at
-all. Without it the answer is an empty result, which reads as "this file has no history".
+`PresentBeforeVisibleHistory` is the value a happy-path draft omits, and it is the *common* case on a
+shallow clone: every unchanged file has zero change rows. Without it the answer is an empty result,
+which reads as "this file has no history".
 
-A method `FirstObservedKind::may_claim_created()` is the **only** copy of the permission, exported
-in JSON exactly as `may_claim_history_begins_here` already is, so no surface re-derives it.
+`CurrentTreeUnknown` comes from a property of 12b found by reading its own command documentation:
+**`nerve history sync` requires only `nerve init`, not an index** — *"History resolves nothing against
+the graph, so a repository that has never been indexed still has a history to read"*
+(`main.rs:361-364`). Distinguishing `PresentBeforeVisibleHistory` from `AbsentFromVisibleHistory`
+requires knowing the current tree, and the only thing that knows it is the entity table. With no
+index, Nerve genuinely cannot tell the two apart, and collapsing them either way is a claim it has no
+evidence for.
+
+**The current tree is read from the entity table, never from the filesystem.** A `stat` under the
+repository root would need its own path guard for a path that may not exist, and
+`discover::canonical_child` is exactly the function that cannot do that (§4.4). The basis is reported
+as a field so a caller knows which it got.
+
+A method `FirstObservedKind::may_claim_created()` is the **only** copy of the permission, exported in
+JSON exactly as `may_claim_history_begins_here` already is, so no surface re-derives it.
 
 ### 4.3 `last_observed` has its own trap, and it is the opposite one
 
@@ -253,14 +268,31 @@ refusals · reader_version
 result_kind · freshness · truncation · continuation · limitations
 ```
 
-### 9.2 The wording hoist — a defect 12b left for 12c
+### 9.2 The wording hoist — a defect 12b left for 12c, and it is four functions, not one
 
-`availability_note()` — the prose for each `ParentCompleteness` — is at
-`crates/nerve-cli/src/main.rs:2180`. It is in the CLI binary. HTTP, MCP and the UI cannot call it,
-so each would grow its own copy, and the brief's §6.2 names exactly that as forbidden.
+This section was drafted naming `availability_note()` alone. Reading `main.rs` found **four**
+wording functions and **one interpretation predicate**, all of them inside the CLI binary:
 
-**12c-i moves it to `nerve-core`, beside `ParentCompleteness::may_claim_history_begins_here()`,
-where the rule it renders already lives.** Then all four surfaces call one function.
+| | at | renders |
+|---|---|---|
+| `walk_termination_note` | `main.rs:2151` | `WalkTermination` |
+| `availability_note` | `main.rs:2180` | `ParentCompleteness` |
+| `enumeration_note` | `main.rs:2210` | `ChangesEnumerated` |
+| `ambiguity_note` | `main.rs:2230` | `RenameAmbiguity` |
+| `earlier_changes_may_exist` | `main.rs` (same block) | **not wording — a judgment.** Whether history exists above what was read |
+
+The last one is the worse finding. The other four are prose; that one is an *interpretation*, and it
+is the single question every history surface must agree on. Three more surfaces each deriving it
+independently is the §6.2 failure in its most consequential form — and the four notes are how it
+drifts, because a surface that re-words `ShallowBoundary` slightly is a surface that has restated
+the invariant 12b exists to protect.
+
+**12c-i moves all four notes to `nerve-core`,** as inherent methods beside the vocabularies they
+render, so `ParentCompleteness::note()` sits next to `may_claim_history_begins_here()` — the rule and
+its rendering in one place. `earlier_changes_may_exist` moves to **`nerve-store`** beside
+`IngestRow`, because it takes one and `nerve-core` does not depend on `nerve-store`.
+
+Then all four surfaces call one function per question, and the CLI keeps only formatting.
 
 A source-scan guard makes the single-copy property testable rather than aspirational, in the manner
 `crates/nerve-server/tests/layering.rs` already scans `src/` dynamically (`ee7f124`): no crate
@@ -348,11 +380,12 @@ because a passing suite is not evidence it was avoided.
 
 ## 14. Acceptance criteria for 12c-i
 
-1. Five `FirstObservedKind` values, each produced by a fixture, each pinned individually, with an
-   exhaustiveness check so a sixth cannot be classified by a `_` arm.
-2. `may_claim_created()` true for exactly one value, asserted over all five.
+1. Six `FirstObservedKind` values, each produced by a fixture, each pinned individually, with an
+   exhaustiveness check so a seventh cannot be classified by a `_` arm.
+2. `may_claim_created()` true for exactly one value, asserted over all six.
 3. On the shallow fixture: a file present in the tree with zero change rows reports
    `PresentBeforeVisibleHistory`, and **no** output describes it as created or as having no history.
+   With the index removed, the same path reports `CurrentTreeUnknown` rather than either neighbour.
 4. State diff refuses `state_not_recorded` and `not_an_ancestor` distinctly, neither as an empty diff.
 5. Change frequency and co-change bounded, deterministically ordered with an explicit tiebreak, and
    truncation reported.
@@ -383,9 +416,12 @@ Recorded so they are not re-litigated, in the manner of 12b's §12.
 3. **Co-change was drafted with a normalised affinity** (shared commits ÷ total commits) because it
    is more comparable across paths. Comparability is the problem — it invites exactly the dependency
    reading §8 forbids. A raw shared-commit count is kept.
-4. **First-observed was drafted with four result kinds.** `PresentBeforeVisibleHistory` was missing,
-   and it is the *common* case on a shallow clone. Drafted from the happy path, the vocabulary would
-   have reported every unchanged file on a shallow clone as having no history.
+4. **First-observed was drafted with four result kinds, then five, and is six.**
+   `PresentBeforeVisibleHistory` was missing from the four — the *common* case on a shallow clone,
+   where the vocabulary would have reported every unchanged file as having no history. `CurrentTreeUnknown`
+   was missing from the five, found by reading `main.rs:361-364`: history syncs without an index, so
+   with no entity table Nerve cannot tell "exists now, never changed" from "does not exist now", and
+   both of the neighbouring values would have been a claim without evidence.
 5. **`last_observed` was drafted as symmetric with `first_observed`.** It is not: its trap is
    staleness against current HEAD rather than unavailability below the boundary. §4.3.
 6. **Similarity renames were drafted into 12c-i.** They need a bound, a named method, a precision
