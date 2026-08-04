@@ -1,0 +1,208 @@
+{
+  "absent_object_oids": [],
+  "attacks": null,
+  "commit_order": [
+    "d9c4abe6efa51f7993e658948af37632553c5df7",
+    "0c3262c21f57fe225b02aa1a0cafa377e335c54f",
+    "2646bcf3503d43ab64d98f008f63831197f34ee4",
+    "ed8555304fa967fe3843ba6ceebbcce69e4d9f9d",
+    "ebdf6627841f77248b872733d6731d0aba6b4777"
+  ],
+  "commits": [
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767225600,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [
+        {
+          "blob_oid": "0042f6c56d8fc1896f3efc2cdc5060e5b5e44e02",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "a.txt",
+          "path_hex": "612e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": "2270a80fbb71d7109b85e7489f3f307d0141a559",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "b.txt",
+          "path_hex": "622e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        }
+      ],
+      "committer_epoch": 1767225600,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": null,
+      "is_merge": false,
+      "oid": "d9c4abe6efa51f7993e658948af37632553c5df7",
+      "parent_oids": [],
+      "parent_oids_from_revision_walk": [],
+      "shallow_boundary": false,
+      "summary": "root commit: two files, one per branch to come",
+      "summary_bytes": 46,
+      "tree_oid": "d9d4c730de327e3a57400a4bb4803793c4fcfa34"
+    },
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767229200,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [
+        {
+          "blob_oid": "da0f8ed91a8f2f0f067b3bdf26265d5ca48cf82c",
+          "change_kind": "modified",
+          "git_status": "M",
+          "mode_octal": "100644",
+          "path": "a.txt",
+          "path_hex": "612e747874",
+          "prev_blob_oid": "0042f6c56d8fc1896f3efc2cdc5060e5b5e44e02",
+          "prev_mode_octal": "100644"
+        }
+      ],
+      "committer_epoch": 1767229200,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": [
+        {
+          "name": "b.txt",
+          "name_hex": "622e747874",
+          "oid": "2270a80fbb71d7109b85e7489f3f307d0141a559",
+          "type": "blob"
+        }
+      ],
+      "is_merge": false,
+      "oid": "0c3262c21f57fe225b02aa1a0cafa377e335c54f",
+      "parent_oids": [
+        "d9c4abe6efa51f7993e658948af37632553c5df7"
+      ],
+      "parent_oids_from_revision_walk": [
+        "d9c4abe6efa51f7993e658948af37632553c5df7"
+      ],
+      "shallow_boundary": false,
+      "summary": "main edits a.txt",
+      "summary_bytes": 16,
+      "tree_oid": "040f77ef4218dad67962e4380496d5be61133340"
+    },
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767232800,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [
+        {
+          "blob_oid": "c9c6af7f78bc47490dbf3e822cf2f3c24d4b9061",
+          "change_kind": "modified",
+          "git_status": "M",
+          "mode_octal": "100644",
+          "path": "b.txt",
+          "path_hex": "622e747874",
+          "prev_blob_oid": "2270a80fbb71d7109b85e7489f3f307d0141a559",
+          "prev_mode_octal": "100644"
+        }
+      ],
+      "committer_epoch": 1767232800,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": [
+        {
+          "name": "a.txt",
+          "name_hex": "612e747874",
+          "oid": "0042f6c56d8fc1896f3efc2cdc5060e5b5e44e02",
+          "type": "blob"
+        }
+      ],
+      "is_merge": false,
+      "oid": "2646bcf3503d43ab64d98f008f63831197f34ee4",
+      "parent_oids": [
+        "d9c4abe6efa51f7993e658948af37632553c5df7"
+      ],
+      "parent_oids_from_revision_walk": [
+        "d9c4abe6efa51f7993e658948af37632553c5df7"
+      ],
+      "shallow_boundary": false,
+      "summary": "side edits b.txt",
+      "summary_bytes": 16,
+      "tree_oid": "c9a9a62930c2d4e16b48acd07255eba05733418a"
+    },
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767236400,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": null,
+      "changes_unavailable": "merge commit: two parents, so there is no single tree to diff against",
+      "committer_epoch": 1767236400,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": null,
+      "is_merge": true,
+      "oid": "ed8555304fa967fe3843ba6ceebbcce69e4d9f9d",
+      "parent_oids": [
+        "0c3262c21f57fe225b02aa1a0cafa377e335c54f",
+        "2646bcf3503d43ab64d98f008f63831197f34ee4"
+      ],
+      "parent_oids_from_revision_walk": [
+        "0c3262c21f57fe225b02aa1a0cafa377e335c54f",
+        "2646bcf3503d43ab64d98f008f63831197f34ee4"
+      ],
+      "shallow_boundary": false,
+      "summary": "merge side into main",
+      "summary_bytes": 20,
+      "tree_oid": "2e6273b1a268e62a54ed10aaa6b697ac9152dab7"
+    },
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767240000,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [],
+      "committer_epoch": 1767240000,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": [
+        {
+          "name": "a.txt",
+          "name_hex": "612e747874",
+          "oid": "da0f8ed91a8f2f0f067b3bdf26265d5ca48cf82c",
+          "type": "blob"
+        },
+        {
+          "name": "b.txt",
+          "name_hex": "622e747874",
+          "oid": "c9c6af7f78bc47490dbf3e822cf2f3c24d4b9061",
+          "type": "blob"
+        }
+      ],
+      "is_merge": false,
+      "oid": "ebdf6627841f77248b872733d6731d0aba6b4777",
+      "parent_oids": [
+        "ed8555304fa967fe3843ba6ceebbcce69e4d9f9d"
+      ],
+      "parent_oids_from_revision_walk": [
+        "ed8555304fa967fe3843ba6ceebbcce69e4d9f9d"
+      ],
+      "shallow_boundary": false,
+      "summary": "empty commit: nothing changed",
+      "summary_bytes": 29,
+      "tree_oid": "2e6273b1a268e62a54ed10aaa6b697ac9152dab7"
+    }
+  ],
+  "exact_content_rename_candidates": [],
+  "fixture": "history-merge",
+  "git_version": "git version 2.50.1 (Apple Git-155)",
+  "gitdir": "gitdir",
+  "head_oid": "ebdf6627841f77248b872733d6731d0aba6b4777",
+  "head_ref": "refs/heads/main",
+  "note": "Generated by scripts/make_history_fixtures.sh, from this fixture's own gitdir/. Every value here is Git's own answer.",
+  "notes": {
+    "side_branch_ref": "refs/heads/side"
+  },
+  "shallow": null
+}
