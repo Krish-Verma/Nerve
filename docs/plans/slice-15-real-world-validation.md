@@ -162,6 +162,29 @@ non-zero), `producer-unresolved-frame`, and the declared `producer_limitations`.
 corpus repository must have a runnable test suite — which not all of the above do, so the trace
 measurement covers a **subset**, named explicitly.
 
+### 3.4 The Git-object oracle, and why it is the strongest one in this document
+
+Added 2026-08-04 for rows 12a–12c. Every other oracle in this document is a *second implementation*
+whose disagreements need adjudicating — `tsc` and Nerve can both be defensibly right about a call site,
+which is why §3 spends its length on undecided cases.
+
+History has no such problem. **`git` itself is the oracle, and it is authoritative rather than
+comparable.** `git rev-list`, `git cat-file commit`, `git diff-tree --raw -z --no-renames` and
+`git ls-tree` do not *estimate* what a commit changed; they read the same immutable objects Nerve reads.
+A disagreement is a Nerve defect, full stop — there is no "both reasonable" case.
+
+Two consequences worth stating:
+
+- **`--no-renames` is passed deliberately**, exactly as `scripts/make_history_fixtures.sh` already does.
+  Git's rename detection is a heuristic with its own thresholds; using it as the oracle for Nerve's
+  rename *hypotheses* would measure agreement with a heuristic Nerve deliberately does not run. Renames
+  are validated against **blob identity**, which is a fact, and similarity hypotheses are validated
+  against a hand-labelled subset with the labels written first.
+- **The oracle runs `git`, and the product must not.** `no_subprocess.rs` exists to keep Nerve from
+  spawning anything, and the validation harness is a development tool on the far side of that line —
+  the same position `make_gitobj_fixtures.sh`, `make_history_fixtures.sh` and the corpus checkout already
+  occupy. No Rust source may name the harness.
+
 ## 4. What gets reported
 
 Separately, per category, never aggregated into one score:
@@ -181,6 +204,35 @@ on the two framework libraries and on `click`**, where the correct count is zero
 callee-outside-any-symbol · producer-unresolved-frame · declared producer_limitations`
 
 **Cross-language:** `document links · test coverage mappings`
+
+**Historical facts** (Slices 12a, 12b, 12c) — added 2026-08-04, and the oracle is §3.4:
+`commits recorded · changes per commit against Git's own diff · exact-content rename hypotheses ·
+similarity rename hypotheses (separate line, never summed with exact) · first-observed result kind
+distribution · paths reported PresentBeforeVisibleHistory on a shallow clone · state-diff ancestry
+outcomes`
+
+Two of those are the point of the row rather than statistics about it:
+
+- **Zero paths may be reported as created at a shallow boundary.** Measured on a deliberately shallow
+  clone of a corpus repository, not only on `fixtures/history-shallow`. The fixture proves the code
+  path; a real `git clone --depth` proves the claim against a repository Nerve did not author.
+- **`changes_enumerated` accounts for every commit with zero change rows.** A merge, a boundary, an
+  empty commit and a budget stop are four different silences (12b §6.2), and the measurement is that
+  the four counts sum to the number of zero-change commits. A residual means a fifth silence exists
+  that nothing names.
+
+**Cross-repository contracts** (row 13): `C1 npm local dependencies · C2 export resolutions ·
+C3 Python path dependencies`, each with its own FP/FN and **never summed** (§5 of the row-13 plan),
+plus `unsupported dependency forms by form` and — the line that matters — **false positives on a
+sibling-checkout pair with matching package names and no declared dependency, where the correct count
+is zero.**
+
+**Memory lifecycle** (row 14): not an accuracy category and it is recorded as not being one. There is
+no ground truth for whether a human's note is correct. What is measured is **behaviour**: that
+`assertion_state` is byte-identical across the lifecycle, that no confirm path is reachable from MCP,
+and that every prior `memory_event` survives supersession. Those belong in
+`scripts/final_acceptance.sh`, and this section says so rather than inventing a precision number for a
+human sentence.
 
 For each: sample size · TP · FP · FN · precision · recall · unresolved rate · unsupported rate ·
 oracle-undecided rate · Wilson score interval at 95% · and an explicit **fixture-versus-real-world**
@@ -217,3 +269,14 @@ repository is dominated by trivial local calls and would hide exactly the catego
    validation harness that executes repository code while the product refuses to must say so where a
    reader will see it, not in a footnote.
 9. The trace measurement names the **subset** of the corpus it covers and why the rest is excluded.
+10. **A real shallow clone is in the corpus**, produced by `git clone --depth`, and **zero** paths in it
+    are reported as created at the boundary. `fixtures/history-shallow` proves the code path; only a
+    repository Nerve did not author proves the claim.
+11. The four `changes_enumerated` counts **sum** to the number of zero-change commits. A residual is a
+    finding, because it means a fifth silence exists that nothing names.
+12. Row 13's sibling-checkout negative scores **zero** links: two repositories with matching package
+    names, adjacent on disk, no declared dependency between them. This is the one measurement that
+    proves fuzzy linking is absent rather than merely unimplemented.
+13. Row 14 has **no precision number**, and its absence is stated as a decision rather than an omission
+    — there is no ground truth for whether a human's note is correct, and inventing one would be the
+    fake-confidence failure the evidence model exists to prevent.
