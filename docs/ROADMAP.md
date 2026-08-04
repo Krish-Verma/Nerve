@@ -37,7 +37,8 @@ Authoritative slice list. Update the status column at the end of every slice.
 | 11a-i | Corrective — the hostile fixtures were not attacking anything | ✅ Complete (2026-08-03) — 1169 tests; **the token-expansion mechanism `fixtures/trace-hostile/README.md` documents did not exist** — `grep` for `__PAD_ARTIFACT__`, `__PAD_RECORD__`, `__PAD_STRING__` or `__INVALID_UTF8__` across `crates/` returned nothing, so `__PAD_STRING__` reached the parser as fourteen ASCII bytes and `__INVALID_UTF8__` as valid UTF-8; **four attacks tested nothing** while their fixture rows named the bound each was supposed to exercise — `oversized-string` and `malformed-utf8` refused nothing and wrote two observations each, `oversized-file` produced `malformed-json`, `oversized-record` produced `record-unknown-key` from its own padding key; the parser was never wrong (all fourteen forms in `trace::form::ALL` have unit tests and always passed) — **what was untested was the end-to-end path, while reading as though it were tested**, the fourth vacuity trap on this project after 8b's two T7 false positives and 10a's lambda test; **`run-id-conflict` was a real defect and the scope was the error** — detection compared only runs stored on the call site about to be restated, and the artifact replays its id on a *different* edge, so nothing stored ever saw it; the harm had been misplaced, since it is not overwriting but that **`run_id` stops naming one run**, and it is now repository-wide and counted once per artifact; **the aggregate threshold is why a green suite hid all of it** — *≥6 distinct forms across the whole set* was satisfied by the nine working attacks alone, so it is now **per artifact and bidirectional**, with the four inert artifacts required to produce **no** refusal because refusing a legal `run_id` for containing `NEAR(` would invent a rule the format does not have; `stage_hostile` refuses to stage an artifact still holding an unexpanded token, matching on prefixes so an unknown token also trips it; the new overwrite test's third assertion was wrong first — banning `9999` anywhere, when the replay's own edge legitimately carries it — so the assertion is now the **boundary** rather than the number |
 | 11b | Reference Python tracer — `tracers/python/nerve_trace/`, `sys.monitoring` + `sys.settrace`, real pytest end to end | ✅ Complete (2026-08-03) — **1179 Rust tests + 115 Python tests**, the Python suite green on **three interpreters** (3.9.6, 3.12.13, 3.14.6) so the `settrace` fallback is exercised on the interpreter that actually needs it rather than only on the one that does not; nine modules, **pure standard library, zero dependencies**, `Cargo.lock` unchanged at 101; a **pytest plugin** because `sys.monitoring` reports code objects and cannot know which test is running — per-test attribution needs the framework's cooperation, which is why the contract carries `test_framework` — and **inert without its flag**, since a plugin that traced by being installed would change behaviour without being asked; **no Rust source may name the tracer** (new test, probe-verified) because product code that knows its name is one step from knowing how to launch it; the attribution rule is `frame.f_back` **and only when it equals the top of the tracer's stack**, and the second clause is the point — taking top-of-stack unchecked means that after any missed event the edge is recorded against *some* frame with no sign anything was wrong; from a **real pytest run**, `test_basic → parse → tokenize` lands as `src/parse.py:10 → src/lex.py:4` and **no test file is ever the caller of anything in `src/lex.py`**, matching the hand-written `bound.jsonl` line for line, which is a genuine cross-check between a human's reading and the tracer's; **three implementation pushbacks verified and accepted** — `completion_state: "interrupted"` does not exist (the brief was wrong; `CompletionState::ALL` is `[Crashed, Partial, Complete]`), a native frame *interposed between* two Python frames is undetectable without per-`CALL` monitoring whose cost is why PEP 669 has per-event opt-in (documented and declared, not papered over), and the header **omits three limitations on purpose** because overstating blindness misleads as much as understating it; **one pushback accepted only halfway** — `binding: bound` was reported *structurally unreachable* and was merely *unachieved*, so the orchestrator made the script `git init` the traced copy, index it, and import the **raw** artifact: measured **`bound`, 11 records, 11 accepted, 0 refused, 7 edges, 21 rows, exit 0**; that also closed a gap nobody had named — **nothing parsed the raw artifact**, since both the diff and the Rust test read the same *canonicalised* copy, which is the exact shape of the defect 11a-i was opened for; and canonicalising `git_commit` taught it once more — a `__GIT_COMMIT__` token **failed five of six tests**, because that is the one canonicalised field whose *shape* the reader validates (40 lowercase hex), so the sentinel is forty zeros, asserted exactly |
 | 12a | Git **object access** — loose objects, `.idx` v2, pack entries, `OFS_DELTA`/`REF_DELTA`, alternates, shallow/partial detection | ✅ Complete (2026-08-03) — **1321 tests** (1179 → 1321); a reader and nothing more: zero entities, zero rows, `SCHEMA_VERSION` unchanged at 5, no migration, and `crates/nerve-store/` **byte-untouched**; the dependency **measured at +5, not the estimated +3** — `crc32fast` arrives for a gzip CRC Nerve never reads and `simd-adler32` because `flate2`'s `miniz_oxide` feature turns on `miniz_oxide/simd`, which is not a `miniz_oxide` default, and independent verification found **zero `.c`/`.h`/`.cc` files across all five** with `crc32fast`'s build script doing nothing but reading `rustc --version`; the security substance is that **`.git` object data becomes untrusted input** where until now Nerve read only two plain-text ref files, and the bound that matters is that the inflate is capped **as it streams** — orchestrator probe: turning the cap into a post-hoc check makes peak allocation **805 MB against a 64 MiB bound**, caught by a tracking global allocator measuring peak heap growth in its own test binary, which is the property rather than a proxy for it, and the bomb is generated from the bound per 11a-i; **two Rust footguns found and verified** — `flate2 1.1.9`'s `read::ZlibDecoder` returns `Ok(0)` rather than an error when input ends mid-deflate, so a truncated stream inflates to a silent empty prefix of a real object (worse than an unbounded read), and `checked_shl(7)` **does not detect overflow** because it validates the shift *amount*, so the first `OFS_DELTA` varint would have turned an absurd offset into a plausible base offset; **three corrections to the orchestrator's own plan, each proved against the code** — `selector_shape` is a *selector* guard that splits a `kind:body` qualifier and is the wrong tool for a filesystem path (T2 already names `canonical_child` as authoritative), the plan's "repository root check" cannot be passed in because the signature takes no root and in the worktree case `git_dir` is itself outside the repository, and **the worktree case is served by `commondir` rather than by alternates** — a linked worktree has no `objects/` at all, so without it the store opens and finds nothing, reading as *"this repository has no history"*, the exact failure the analysis warned about; SHA-256, `.idx` v1, `.midx` and commit-graph each refused **with a stated reason**, and "no magic" is distinguished from "version 1" so a corrupted v2 index is not reported as a 2007 format; fixtures include a real **2275-byte packfile**, 19 objects, 5 genuine deltas, generator *fails* rather than emit a delta-free pack, committed with a fixed synthetic identity and fixed dates so no developer identity is in the binary |
-| 12b | Git **historical model** — commit entities, first/last seen, moves, rename hypotheses, change frequency, labelled co-change | ⬜ Not started — the storage strategy must be **measured**, not assumed |
+| 12b | Git **history ingestion** — schema v6, commit + change + availability tables, exact-content rename hypotheses, `nerve history sync` / `log` / `file` | ⬜ Not started — plan accepted: `docs/plans/slice-12b-historical-model.md` |
+| 12c | Git **historical questions** — first/last seen with boundary qualification, similarity rename hypotheses, change frequency, labelled co-change, state-to-state diff, API + MCP + UI | ⬜ Not started |
 | 13 | Cross-repository contracts | ⬜ Not started |
 | 14 | Human-confirmed memory | ⬜ Not started |
 
@@ -240,3 +241,84 @@ It also raised one corrective item: there is no test asserting Nerve spawns no s
   and unknown paths still 401. Verified live.
 - 31 screenshots reviewed across 4 repositories at 380px and 1600px; 0 CSP violations; database
   byte-identical before and after a UI session. Report: `docs/reports/slice-04b-report.md`.
+
+## Slice 12 scope split, part two (2026-08-03)
+
+Row 12 was already split into **12a** (object access) and **12b** (historical model) by
+`docs/plans/slice-12-git-object-access-analysis.md`. Planning 12b split it again, into **12b**
+(ingestion, storage, availability, two read commands) and **12c** (the derived questions and
+every remaining surface). Same seam as 2a/2b, 5a/5b/5c, 6a/6b and 11a/11b, and the same recorded
+reason: a slice bundling ingestion and a surface has cost this project five agents.
+
+### The storage strategy, measured
+
+The roadmap row required this to be measured rather than assumed. Measured on two real
+repositories by `scripts/measure_history_storage.sh`, counting repository shape only:
+
+| Repository | Commits | Files at HEAD | Snapshot path-rows | Delta change-rows | Ratio |
+|---|---|---|---|---|---|
+| Nerve | 85 | 420 | 22,958 | 762 | **30.1×** |
+| A local 1,214-commit repository | 1,214 | 865 | 682,940 | 3,858 | **177×** |
+
+**The ratio grows with history depth** — snapshot cost is `O(commits × tree_size)`, delta cost is
+`O(total churn)` — so a single repository would have understated it. 682,940 rows exceeds the
+entire current graph of any repository Nerve has indexed. Per-commit snapshots are rejected on
+this evidence, along with selected-snapshots-plus-deltas and on-demand reconstruction: the delta
+table answers every accepted question directly, so a reconstruction path would be cost with no
+query behind it.
+
+### Three positions the 12b plan takes against its own roadmap row
+
+Recorded here because the row's wording will otherwise read as authoritative.
+
+1. **"Commit entities" is declined.** History goes in dedicated tables; commits are not entities
+   and changes are not assertions. Nerve has ruled on this question twice and stated the rule
+   both times — `CoverageRun` *is* an entity because it had to be an **endpoint** of `COVERS`,
+   and Slice 11a's `TraceRun` is *not* because it is **provenance**. A commit is provenance for a
+   change fact whose subject is a *path*, and a historical path is not a current entity. The
+   consequence is the argument: no entity kind, relation or source type is added, so
+   `entity_fts`, selector resolution, `entities_total` and `ui_vocabulary.rs` are all untouched.
+   Two qualifications came out of adversarial review of the plan: `documents.rs:331`'s
+   migration-equivalence test **does** need a `DROP TABLE` rewind, because it re-migrates a
+   physically-current database and `Step::Sql` would replay `CREATE TABLE`; and `symbols_total`
+   was never at risk from a historical *File* entity, since `is_symbol()` covers only the four
+   symbol kinds. The three invariants that are genuinely at risk are enough.
+2. **Symbol-level history is refused in row 12**, with the cost stated rather than half-shipped.
+   It needs a second identity namespace; without one it would break the three invariants above,
+   one of which Slice 7a-iii was an entire corrective slice about.
+3. **Historical impact is refused outright**, in the manner of `nerve affected`: it needs the
+   historical graph, and computing it over the current graph would attribute today's edges to
+   yesterday's commit.
+
+### The invariant the slice exists to protect
+
+A shallow boundary commit must never be diffed against the empty tree. Doing so reports every
+file in the boundary tree as newly *added* at the boundary — "the project's history begins here",
+stated as data rather than as prose. The boundary therefore carries
+`changes_enumerated = 'parent_unavailable'` and **zero** change rows, and a mutation probe that
+diffs it against the empty tree must fail a named test with the count of paths it wrongly
+reported. `shallow_boundary`, `parents_missing`, `parents_unverifiable` and Nerve's own
+`commit_budget` are four distinct reasons history stops. The third exists because adversarial
+review found the boundary and a genuinely absent parent are **indistinguishable** in three
+`store.rs` paths — an oversized or unreadable `.git/shallow` reads as *not shallow* — so the
+four-way vocabulary would have reported a shallow repository as corrupt, the inverse of the error
+the section warns about. The fourth, a bounded ingest, is the one the brief's list does not name
+and the one that is Nerve's own doing.
+
+### Two pre-existing defects the review surfaced
+
+Both are fixed as part of 12b rather than deferred, because 12b cannot be correct without them.
+
+1. **`discover::canonical_child` cannot guard a historical path.** It ends in
+   `std::fs::canonicalize`, so it requires the path to *exist* — `coverage_ingest.rs:88-90`
+   already documents the property. Routed through it, 12b would have refused every `deleted`
+   change and made rename hypotheses structurally impossible, while counting each refusal as a
+   path-safety success. A filesystem-free `discover::safe_tree_name` is added instead; the work is
+   small because `gitobj::parse_tree` already refuses a per-entry name that is empty, contains
+   `/`, or is `.` or `..`.
+2. **`gitinfo::head_commit` does not follow `commondir`.** Measured on a real
+   `git worktree add`: the worktree's HEAD names `refs/heads/feat`, which exists in neither the
+   worktree's `refs/` nor its `packed-refs`. So it returns `None` — and its only production caller
+   is `pipeline.rs:649`, which feeds `repository_state.git_commit`. **Indexing a linked worktree
+   today records no commit for the state.** This is the failure 12a added `commondir` to prevent,
+   reproduced one layer up in the ref reader instead of the object reader.
