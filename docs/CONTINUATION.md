@@ -599,11 +599,16 @@ recorded in `docs/plans/slice-15-real-world-validation.md`.
 - **`README.md`'s command list is stale** — it shows only `init`/`index`/`status`/`search` and
   predates `coverage`, `gaps`, `impact`, `path`, `why`, `serve`, `check`. Found during 7c-i, which
   touched only the exit-code line it had to.
-- **`docs/ARCHITECTURE.md` has drifted.** It says `nerve-server` is "deliberately not created yet"
-  (shipped in Slice 4a), its crate table lists 4 of the 5 crates, its pipeline diagram names only
-  the two `ts-js-*` extractors (there are now `fs-structural`, `md-structural` and coverage too),
-  and it promises parallelism "in Slice 3" that was deliberately deferred. Documentation only; no
-  code depends on it. Fix in a docs pass.
+- ~~**`docs/ARCHITECTURE.md` has drifted.**~~ **Fixed 2026-08-03.** Two of the four items in this
+  entry were already stale when written: the crate table lists all five crates and the document
+  already said `nerve-server` shipped in Slice 4a. The two real ones are fixed — the pipeline
+  diagram now names all eight extractors plus the two ingestion commands, and the parallelism
+  promise is corrected to record that it was **deferred**, not delivered.
+  A worse error this entry did not mention was also fixed: the Repository State section claimed
+  "all observations are scoped to a state", which **contradicts ADR-0006**. Schema v3 dropped
+  `state_id` from `occurrence`, `observation` and `assertion_state`; state lives only on
+  `repository_state` and `extractor_run`, and freshness is computed at query time. A document
+  that contradicts an accepted ADR is worth more attention than one with a stale crate count.
 - **The Slice 7a-ii report's fixture counts do not match the committed fixture.** It states 21
   entities / 9 symbols (`function 4`); `fixtures/ts-coverage` at HEAD yields 18 / 8 (`function 3`).
   That QA session ran against a tree that is not the committed fixture. The defect it found was

@@ -8,7 +8,8 @@ Surfaces        nerve-cli   ·   nerve-server + apps/nerve-web   ·   MCP (stdio
                                             │
 Application     index_repository() · status() · search_entities() · resolve_selector()
                 find_paths() · explain() · impact() · gaps() · diagnose()
-                ingest_coverage() · index_freshness() + untracked_files()  [nerve check]
+                ingest_coverage() · ingest_trace()
+                index_freshness() + untracked_files()  [nerve check]
                                             │
 Pipeline        nerve-index:  discover → parse → extract → persist
                               emits Observations ONLY
@@ -50,8 +51,11 @@ module. Superseding master plan §3.4.
    application layer so the server, MCP, and CI reuse it unchanged.
 4. **Unresolved is a value, not an omission.** Unresolvable references become `Unresolved`
    entities with real assertions, flagged `is_unresolved`.
-5. **Determinism.** Indexing the same tree twice produces a byte-identical canonical dump.
-   Slice 1 parses serially for this reason; parallelism arrives in Slice 3 with an ordered merge.
+5. **Determinism.** Indexing the same tree twice produces a byte-identical canonical dump, and an
+   incremental re-index is byte-identical to a full index of the same tree. Parsing is **serial**,
+   and stays serial: parallelism was deferred rather than delivered, so that an equivalence failure
+   has one candidate cause instead of two. An earlier version of this line promised it "arrives in
+   Slice 3", which it did not.
 6. **Source text is never stored.** Ranges and content hashes only; source is read from disk
    when evidence is presented.
 
@@ -66,9 +70,19 @@ read + hash     BLAKE3 content hash per file
 parse           tree-sitter, grammar chosen by extension
    │
 extract         entities + occurrences + assertions + observations
+                fs-structural     → CONTAINS over the repository skeleton,
+                                    FILESYSTEM_OBSERVED — a directory has no syntax
+                                    tree, so it cannot be AST_DIRECT (ADR-0007)
                 ts-js-structural  → CONTAINS · DEFINES · IMPORTS · EXPORTS
                 ts-js-reference   → CALLS · REFERENCES · EXTENDS · IMPLEMENTS
                                     via bind (lexical scope) + exports (re-export closure)
+                ts-js-framework   → SERVED_BY, from an Express route registration
+                py-structural     → modules · packages · imports · functions ·
+                                    classes · methods
+                py-reference      → CALLS · REFERENCES · EXTENDS
+                py-framework      → SERVED_BY, from a FastAPI or Flask decorator
+                md-structural     → Document · Section · REFERENCES · SUPERSEDES,
+                                    DOCUMENT_STATED only
    │
 persist         single transaction: repository_state, one extractor_run per
                 extractor, entities, occurrences, assertions, observations
@@ -76,13 +90,47 @@ persist         single transaction: repository_state, one extractor_run per
 derive          rebuild_assertion_state()  — pure function of observation
 ```
 
+Each extractor declares the evidence source types it may emit, and emitting outside the
+declaration is a hard error (invariant 2). An extractor also produces **nothing** in a repository
+that has none of its language: a Python repository yields zero `ts-js-*` observations and a
+repository with no Python yields zero `py-framework` ones, asserted on the real database rather
+than assumed.
+
+### Ingestion, which is not the pipeline
+
+Two evidence sources arrive as artifacts another tool produced, each through its own command, and
+neither runs anything:
+
+```
+nerve coverage <report>      LCOV → CoverageRun entity + COVERS, TEST_COVERAGE
+nerve trace import <artifact>  nerve-trace/v1 NDJSON → TEST_OBSERVED_CALL, TEST_CALL_TRACE
+```
+
+They are separate commands rather than flags on `nerve index` for a stated reason: as a flag, the
+ordinary post-edit `nerve index` — run without it, as it always is — would silently destroy every
+coverage or trace edge in the repository. **Nerve runs no tests and spawns no process**;
+`crates/nerve-cli/tests/no_subprocess.rs` forbids it, and `nerve trace-tests` is *refused* rather
+than unbuilt.
+
 ## Repository state
 
 Every index run creates a `repository_state` row identified by a BLAKE3 Merkle over the sorted
 `(rel_path, content_hash)` pairs of all indexed files. If `.git` is present, the resolved HEAD
 commit is recorded alongside it — read directly from `.git/HEAD` and the ref file, with no
-subprocess. All observations are scoped to a state, which is how freshness is derived rather
-than stored.
+subprocess.
+
+**Observations are not scoped to a state**, and an earlier version of this section said they were.
+ADR-0006 (Slice 3b) made occurrence and observation identity **state-independent**: an occurrence is
+a physical location fact and an observation is evidence about a file at a `content_hash`, so
+neither depends on which run saw it. Schema v3 dropped `state_id` from `occurrence`, `observation`
+and `assertion_state`. State now lives only on `repository_state.state_id` and
+`extractor_run.state_id`.
+
+Freshness is therefore **computed at query time** by re-hashing the file and comparing against the
+recorded `content_hash` — which is how `nerve why` already worked before 3b, so product semantics
+did not change. The reason for the normalization was cost: `state_id` inside `occurrence_id` forced
+an O(repository) restatement pass on every incremental run, and removing it moved incremental
+indexing from 24.9% of a full index to 2.0%.
 
 ## Extension points (defined now, populated later)
 
