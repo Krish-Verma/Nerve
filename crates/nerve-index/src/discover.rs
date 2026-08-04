@@ -102,6 +102,110 @@ pub fn canonical_child(root: &Path, candidate: &Path) -> Result<PathBuf> {
     Ok(canonical)
 }
 
+/// Segments a path assembled from tree entry names may have.
+///
+/// 64, chosen against two measurements rather than taste: Git's own `PATH_MAX`-shaped limits stop
+/// well before this, and the deepest directory nesting in the repositories Nerve has indexed is in
+/// the low teens. So it refuses nothing real, and it bounds the one resource a tree diff spends
+/// without asking — the call stack, since the diff recurses per directory level and a tree object
+/// can name itself as its own subtree.
+pub const MAX_TREE_PATH_DEPTH: usize = 64;
+
+/// Why [`safe_tree_name`] refused a Git tree entry name. A closed vocabulary, so every refusal can
+/// be counted by form rather than collapsed into a boolean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TreeNameRefusal {
+    /// The name is not valid UTF-8. `TreeEntry::name` is bytes, so this is decided rather than
+    /// assumed.
+    NotUtf8,
+    /// The name carries a byte in the C0 range `0x00`–`0x1f`.
+    ControlCharacter,
+    /// The name carries a backslash.
+    Backslash,
+    /// The name begins with `/`, which would make the assembled path absolute.
+    LeadingSlash,
+    /// The path this name would extend is already at [`MAX_TREE_PATH_DEPTH`] segments.
+    TooDeep,
+}
+
+impl TreeNameRefusal {
+    /// Every refusal, in declaration order.
+    pub const ALL: [TreeNameRefusal; 5] = [
+        TreeNameRefusal::NotUtf8,
+        TreeNameRefusal::ControlCharacter,
+        TreeNameRefusal::Backslash,
+        TreeNameRefusal::LeadingSlash,
+        TreeNameRefusal::TooDeep,
+    ];
+
+    /// The closed-vocabulary tag this refusal is counted under.
+    pub const fn form(self) -> &'static str {
+        match self {
+            TreeNameRefusal::NotUtf8 => "history-path-not-utf8",
+            TreeNameRefusal::ControlCharacter => "history-path-control-character",
+            TreeNameRefusal::Backslash => "history-path-backslash",
+            TreeNameRefusal::LeadingSlash => "history-path-leading-slash",
+            TreeNameRefusal::TooDeep => "history-tree-too-deep",
+        }
+    }
+}
+
+/// Guard one Git tree entry name, without touching the filesystem.
+///
+/// # Why [`canonical_child`] cannot be this guard
+///
+/// [`canonical_child`] ends in `std::fs::canonicalize`, so **it requires the path to exist**.
+/// [`crate::coverage_ingest::form::PATH_REFUSED`] already documents the consequence: a path that
+/// cannot be canonicalized cannot be proven to be inside the root, so it is refused. Every
+/// historical path is a path in a *past* tree, and every `deleted` one is by definition not on disk,
+/// so routing history through it would refuse every deletion, make rename hypotheses structurally
+/// impossible — they need the deleted `from_path` — rewrite surviving paths to their symlink targets
+/// in contradiction of `git_change.path`'s stated meaning ("as recorded in the tree"), and count all
+/// of it as a path-safety refusal, which reads as a security control working.
+///
+/// `nerve_store::selector_shape` is not the alternative either: it splits a `qualifier:body`, which
+/// is the footgun the Git-object slice already recorded when it rejected the same function for a
+/// filesystem path.
+///
+/// # What this has to do, and what it does not
+///
+/// [`crate::gitobj::parse_tree`] already refuses a per-entry name that is empty, contains `/`, or is
+/// `.` or `..`, so a path assembled from validated entry names **cannot contain a traversal
+/// segment**. That is checked by the format reader rather than restated here, because two guards for
+/// one hazard is one too many. What remains is the class of names that are legal in a tree, legal on
+/// a filesystem, and hostile as identity:
+///
+/// - **C0 bytes**, the class closed at [`canonical_child`] for a measured reason: ADR-0002's
+///   canonical tuples are injective only because no field can contain the unit separator, and a
+///   historical path is a tuple field's worth of attacker-controlled text on a route that no longer
+///   passes through that choke point.
+/// - **Invalid UTF-8**, decided rather than assumed.
+/// - **A backslash**, which the framework slice found was *not* refused where `../` was.
+/// - **A leading `/`**, which would make the assembled path absolute. Unreachable through
+///   [`crate::gitobj::parse_tree`], which refuses `/` anywhere in a name — kept so that this
+///   function is correct standing alone rather than correct only for its current caller.
+/// - **Depth**, so a pathological tree cannot exhaust the stack.
+///
+/// `depth` is the number of segments the assembled path will have, so the first level of a tree is
+/// `1`. On success the name is returned as `&str`, because the caller needs the decoded form and
+/// deciding UTF-8 twice is how the two decisions drift apart.
+pub fn safe_tree_name(name: &[u8], depth: usize) -> std::result::Result<&str, TreeNameRefusal> {
+    if depth == 0 || depth > MAX_TREE_PATH_DEPTH {
+        return Err(TreeNameRefusal::TooDeep);
+    }
+    let text = std::str::from_utf8(name).map_err(|_| TreeNameRefusal::NotUtf8)?;
+    if text.chars().any(|character| (character as u32) < 0x20) {
+        return Err(TreeNameRefusal::ControlCharacter);
+    }
+    if text.contains('\\') {
+        return Err(TreeNameRefusal::Backslash);
+    }
+    if text.starts_with('/') {
+        return Err(TreeNameRefusal::LeadingSlash);
+    }
+    Ok(text)
+}
+
 /// Repository-relative, `/`-separated form of a canonical path under `root`.
 pub fn relative_path(root: &Path, canonical: &Path) -> Result<String> {
     let relative = canonical
@@ -252,5 +356,91 @@ mod tests {
         let root = Path::new("/tmp/root");
         let child = Path::new("/tmp/root/src/math.ts");
         assert_eq!(relative_path(root, child).unwrap(), "src/math.ts");
+    }
+
+    #[test]
+    fn every_tree_name_refusal_has_a_distinct_non_empty_form() {
+        let mut forms: Vec<&str> = TreeNameRefusal::ALL.iter().map(|r| r.form()).collect();
+        assert_eq!(forms.len(), 5);
+        forms.sort_unstable();
+        forms.dedup();
+        assert_eq!(forms.len(), 5, "two refusal forms collide");
+        assert!(forms.iter().all(|form| !form.is_empty()));
+    }
+
+    #[test]
+    fn an_ordinary_tree_entry_name_is_accepted() {
+        for name in [
+            &b"README.md"[..],
+            &b"main.rs"[..],
+            &b".hidden"[..],
+            &b"...three-dots"[..],
+            &b"a b"[..],
+            // Non-ASCII UTF-8 is a real file name and must not be refused for being unfamiliar.
+            "café.txt".as_bytes(),
+        ] {
+            assert_eq!(
+                safe_tree_name(name, 1).map(str::to_string),
+                Ok(String::from_utf8_lossy(name).into_owned()),
+                "{name:?} was refused"
+            );
+        }
+    }
+
+    /// Every refusal, by the byte that causes it. The whole C0 range, not only NUL.
+    #[test]
+    fn each_hostile_tree_entry_name_is_refused_by_its_own_form() {
+        for byte in 0u8..0x20 {
+            let name = [b'a', byte, b'b'];
+            assert_eq!(
+                safe_tree_name(&name, 1),
+                Err(TreeNameRefusal::ControlCharacter),
+                "0x{byte:02x} was not refused"
+            );
+        }
+        assert_eq!(
+            safe_tree_name(b"..\\..\\etc", 1),
+            Err(TreeNameRefusal::Backslash)
+        );
+        assert_eq!(
+            safe_tree_name(b"back\\slash.txt", 1),
+            Err(TreeNameRefusal::Backslash)
+        );
+        assert_eq!(
+            safe_tree_name(b"/absolute", 1),
+            Err(TreeNameRefusal::LeadingSlash)
+        );
+        // Invalid UTF-8 is decided, not assumed: these bytes are a real tree entry name that
+        // `parse_tree` carries verbatim.
+        assert_eq!(
+            safe_tree_name(&[0xff, 0xfe, 0x80], 1),
+            Err(TreeNameRefusal::NotUtf8)
+        );
+        assert_eq!(
+            safe_tree_name(b"name", MAX_TREE_PATH_DEPTH + 1),
+            Err(TreeNameRefusal::TooDeep)
+        );
+        // Exactly at the bound is inside it, and depth 0 is not a path.
+        assert!(safe_tree_name(b"name", MAX_TREE_PATH_DEPTH).is_ok());
+        assert_eq!(safe_tree_name(b"name", 0), Err(TreeNameRefusal::TooDeep));
+    }
+
+    /// The names the format reader already refuses are **not** this guard's business, and it must
+    /// not grow a second opinion about them: a name reaching here has passed `parse_tree`.
+    #[test]
+    fn traversal_segments_are_the_format_readers_refusal_not_this_ones() {
+        assert!(safe_tree_name(b"..", 1).is_ok());
+        assert!(safe_tree_name(b".", 1).is_ok());
+        assert_eq!(
+            crate::gitobj::parse_tree(&{
+                let mut bytes = b"100644 ..\0".to_vec();
+                bytes.extend_from_slice(&[0u8; 20]);
+                bytes
+            })
+            .unwrap_err()
+            .form(),
+            crate::gitobj::form::TREE_ENTRY_MALFORMED,
+            "the format reader is what refuses a traversal segment"
+        );
     }
 }

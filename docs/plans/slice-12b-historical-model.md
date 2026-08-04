@@ -624,8 +624,14 @@ Gitlinks (submodule commits, mode `0o160000`) are recorded as a change to the gi
 ### 8.5 Incremental re-ingest
 
 `git_commit` is keyed `(repo_id, commit_oid)` and a commit object is immutable, so re-ingest is an
-`INSERT OR IGNORE` over commits already present and a walk that stops as soon as it reaches one.
-New commits cost their own changes and nothing more.
+`INSERT OR IGNORE` over commits already present. New commits cost their own changes and nothing more.
+
+**Correction: the walk does not stop at the first recorded commit, and this sentence originally said
+it did.** That contradicted §8.5.1 and criterion 11: a repaired commit is reached *through* recorded
+commits, so a walk that stopped at the first one would never revisit it, and the repair would be
+unobservable. Probed by the implementation — zero re-records. The walk covers the whole reachable
+graph and skips only the **tree diff** for a commit already recorded, which is the cost that
+matters: measured warm re-sync on Nerve's own 95 commits is 14 ms against a 257–314 ms cold ingest.
 
 #### 8.5.1 Two columns are *not* immutable, and the ingester must repair them
 
@@ -732,9 +738,25 @@ fail that test for the intended reason.
    subprocess; `no_subprocess.rs` and `no_network.rs` byte-identical.
 5a. **The new path guard is real** (§8.4) — `discover::safe_tree_name` refuses C0 bytes, invalid
    UTF-8, a backslash, a leading `/`, and over-deep recursion, each with a **nonzero** counted
-   refusal from `history-hostile`. And the guard must not refuse a legitimate *deleted* path: a
-   test asserts `git_change` holds `deleted` rows and `git_rename_hypothesis` is **non-empty**,
-   because both were structurally impossible under the guard this plan first named.
+   refusal. And the guard must not refuse a legitimate *deleted* path: a test asserts `git_change`
+   holds `deleted` rows and `git_rename_hypothesis` is **non-empty**, because both were structurally
+   impossible under the guard this plan first named.
+
+   **Amended: the per-form counts cannot come from `history-hostile`, and the implementation was
+   right to say so.** That fixture puts `../escape.txt`, `back\slash.txt`, `ctl\x01name.txt` and
+   `nl\nname.txt` in the *same tree* as the subtree named `..`, and `gitobj::parse_tree` refuses a
+   whole tree on any malformed entry (`gitobj/tree.rs:124-133`) rather than yielding a partial
+   prefix. So the **12a format reader** refuses that tree before 12b sees any of its names. The
+   fixture's README also declared it carries no invalid UTF-8, and a leading `/` cannot survive
+   `parse_tree` at all.
+
+   The per-form counts therefore come from **tree objects built byte-by-byte in the test**, one
+   hostile name per tree with no sibling to be refused alongside it — the only construction in which
+   a per-form count means what it says. `history-hostile`'s job is narrower and still real: the
+   malformed trees are **refused and counted**, never dropped silently, and the ingest continues so
+   the repository's other commits still land. Had this criterion been taken literally it would have
+   been satisfied by a count that could never rise above zero, which is the 11a-i shape exactly —
+   caught here by the implementation rather than by a later corrective slice.
 5b. **`gitinfo::head_commit` follows `commondir`** (§8.1 step 2) — the `history-worktree` fixture
    asserts `commits_recorded > 0`, and a separate regression test asserts that indexing a linked
    worktree records a non-NULL `repository_state.git_commit`, which is a pre-existing defect this
@@ -810,6 +832,7 @@ rather than from Nerve's own reader.
 | A rename hypothesis is read as a fact | `ambiguity` column, no score, criterion 10. |
 | `ObjectStore` is not `Send`/`Sync` (`RefCell`) | History is persisted at ingest and queried from SQLite only. No `.git` access on any query path, so the server's worker pool never touches the store. |
 | Third-party PII in the index | §8.3, off by default. |
+| A truncated commit summary is flagged **per repository, not per commit** | Schema v6 has no per-commit truncation column, so from `git_commit.summary` alone a 512-byte summary is indistinguishable from a cut one. The flag lives in `git_history_ingest.refusals` as `history-summary-truncated` and in the ingest outcome. A per-commit flag needs v7; 12c decides whether the surface needs it. Found by the implementation. |
 | A rename hypothesis carries no evidence *profile*, only two named columns | Stated in §3.3 rather than hidden. This is the one place the design is weaker than the evidence model would be, and the mechanical reason it cannot use it is that an observation needs an assertion, which needs two entity endpoints. |
 
 ---

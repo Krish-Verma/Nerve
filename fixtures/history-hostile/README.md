@@ -92,13 +92,33 @@ this fixture used `../literal.txt` and the generator's own type-change warning c
 
 ## What a test must assert
 
-- Every hostile path is **refused by `discover::canonical_child` and counted**, not dropped
-  silently. `canonical_child` is authoritative for path safety and has refused the whole C0 range
-  at one choke point since Slice 5a; this fixture is what proves the git reader routes through it.
-- The refusal counter is nonzero, and **every** hostile path in `inventory.json` is accounted for by
-  name. A test asserting only "the ingest did not crash", or only that the counter moved, would pass
-  over a reader that stored all but one of these paths — the aggregate-threshold trap that cost
+- **Corrected 2026-08-03.** This section said every hostile path is "refused by
+  `discover::canonical_child` and counted", and that this fixture proves the git reader routes
+  through it. Both claims were wrong, and the second was wrong in the direction that matters.
+  `canonical_child` ends in `std::fs::canonicalize` (`discover.rs:96-97`), so it **requires the path
+  to exist** — routed through it, every `deleted` historical path would be refused and rename
+  hypotheses would be structurally impossible. Slice 12b uses a filesystem-free
+  `discover::safe_tree_name` instead; see `docs/plans/slice-12b-historical-model.md` §8.4.
+- **And these four names do not reach that guard at all.** `../escape.txt`,
+  `back\slash.txt`, `ctl\x01name.txt` and `nl\nname.txt` sit in the **same tree** as the subtree
+  named `..`, and `gitobj::parse_tree` refuses a whole tree on any malformed entry
+  (`gitobj/tree.rs:124-133`) rather than returning a partial prefix. So that tree is refused
+  wholesale by the **12a format reader**, and its siblings are never offered to a 12b path check.
+  That is correct behaviour — failing closed on a malformed tree is the right call — but it means
+  this fixture exercises **12a's whole-tree refusal**, not 12b's per-name guard.
+- Per-form coverage of `safe_tree_name` therefore comes from **tree objects built byte-by-byte in
+  the test**, one hostile name at a time, with no sibling to be refused alongside it. That is not a
+  weaker test: it is the only construction in which a per-form count means what it says. Building
+  such objects needs no SHA-1, because 12a deliberately does not verify content against its oid.
+- What a test must assert **from this fixture** is that the malformed trees are refused and
+  **counted**, never dropped silently, and that the ingest continues — a repository containing one
+  hostile tree must still yield its other commits. A test asserting only "the ingest did not crash"
+  would pass over a reader that stored these paths, which is the aggregate-threshold trap that cost
   Slice 11a-i a corrective slice.
+- A future revision could split the four names across separate trees so each is individually
+  reachable through `parse_tree`. It is recorded as a refinement rather than done, because the
+  synthetic trees already give per-form counts and this fixture's whole-tree refusal is worth
+  keeping.
 - The commit summaries are **stored** — not dropped — bounded at `MAX_SUMMARY_BYTES`, first line
   only, lossy UTF-8, and never interpreted on any surface.
 - The over-512-byte summary is truncated **and flagged**. `inventory.json` records its exact byte

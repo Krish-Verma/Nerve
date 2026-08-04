@@ -32,6 +32,13 @@
 //! itself rather than depending on a Git implementation, because every such implementation ships a
 //! network transport that `crates/nerve-cli/tests/no_network.rs` exists to keep out of the tree.
 //!
+//! [`history`] is the half of Slice 12b that writes, and it is the one module here that persists
+//! something which is **not** an observation: a tree diff is a primary-source fact read out of an
+//! immutable object, so it lives in plain tables beside `repository_state` and `module_facts` rather
+//! than in Assertion / Observation / AssertionState, which exist to qualify a *derived* claim. It
+//! reads `.git` only through [`gitobj`], writes only through `nerve_store::history`, and its whole
+//! reason for existing is that an absent history must never be described as an empty one.
+//!
 //! This crate emits **observations only**. It cannot write `assertion_state`: that table is
 //! rebuilt by [`nerve_store::rebuild_assertion_state`] as a pure function of what was
 //! observed.
@@ -53,6 +60,7 @@ pub mod facts;
 pub mod fsstruct;
 pub mod gitinfo;
 pub mod gitobj;
+pub mod history;
 pub mod incremental;
 pub mod init;
 pub mod inspect;
@@ -99,6 +107,10 @@ pub use gitobj::{
     ObjectStore as GitObjectStore, Oid as GitOid, StoreLimits as GitStoreLimits,
     MAX_DELTA_DEPTH as GIT_MAX_DELTA_DEPTH, MAX_OBJECT_BYTES as GIT_MAX_OBJECT_BYTES,
     MAX_PACK_COUNT as GIT_MAX_PACK_COUNT,
+};
+pub use history::{
+    ingest_history, HistoryOptions, HistoryOutcome, MAX_CHANGES_PER_COMMIT, MAX_HISTORY_COMMITS,
+    MAX_IDENT_BYTES, MAX_SUMMARY_BYTES, MAX_TREE_ENTRIES, READER_VERSION as HISTORY_READER_VERSION,
 };
 pub use incremental::{
     classify, invalidation_set, propose_moves, ChangeKind, ChangeSet, MoveCandidate, MoveProposal,

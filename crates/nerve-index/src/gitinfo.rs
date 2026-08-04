@@ -35,8 +35,50 @@ pub fn git_dir(root: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Bytes of a `commondir` pointer file this module will read.
+///
+/// [`crate::gitobj::store`] bounds its own pointer-file reads and that discipline is **matched**
+/// here rather than shared: the bound lives in a private constant of that module, and widening its
+/// visibility would export an implementation detail of the object reader into a ref reader that has
+/// no other use for it. 4 KiB is far more than the one relative path Git writes — `../..` — so a
+/// `commondir` larger than this is a file Nerve declines to read rather than a repository it has to
+/// understand. `read_to_string` on an unbounded path is what this exists to avoid.
+const MAX_COMMONDIR_BYTES: u64 = 4096;
+
 fn is_object_id(text: &str) -> bool {
     matches!(text.len(), 40 | 64) && text.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Resolve `<git_dir>/commondir`, which exists only in a linked worktree's private git directory.
+///
+/// `None` when there is no `commondir`, when it is over [`MAX_COMMONDIR_BYTES`], when it is empty or
+/// carries a control character, or when it does not resolve to a directory — every one of those
+/// degrading to `None` in the manner of the rest of this module, because a missing or exotic git
+/// layout is not an indexing error.
+///
+/// The content is almost always relative (`../..`), and it is resolved against the git directory
+/// that named it, which is what Git does.
+fn common_dir(git_dir: &Path) -> Option<PathBuf> {
+    let path = git_dir.join("commondir");
+    let metadata = std::fs::metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_COMMONDIR_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    // Lossy rather than refusing outright: a target that is not UTF-8 will fail the guard below on
+    // its own, and a replacement character is not a valid path component either.
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let target = text.trim();
+    if target.is_empty() || target.chars().any(|c| (c as u32) < 0x20) {
+        return None;
+    }
+    let joined = if Path::new(target).is_absolute() {
+        PathBuf::from(target)
+    } else {
+        git_dir.join(target)
+    };
+    let resolved = std::fs::canonicalize(&joined).ok()?;
+    resolved.is_dir().then_some(resolved)
 }
 
 fn read_packed_ref(git_dir: &Path, ref_name: &str) -> Option<String> {
@@ -55,6 +97,20 @@ fn read_packed_ref(git_dir: &Path, ref_name: &str) -> Option<String> {
 }
 
 /// Resolve the commit `HEAD` points at, or `None` when there is no readable git state.
+///
+/// # `commondir` is followed, and that is a fix rather than a feature
+///
+/// A linked worktree keeps its own `HEAD` but **not** the branch that `HEAD` names.
+/// `git worktree add` writes `refs/heads/<branch>` into the *common* git directory, and the
+/// worktree's private directory has no `refs/heads/<branch>` and no `packed-refs` at all — measured
+/// on a real `git worktree add`. A reader that looked only beside `HEAD` therefore answered `None`
+/// for every linked worktree, and this function's one production caller feeds
+/// `repository_state.git_commit`, so indexing a linked worktree recorded no commit for the state.
+/// [`crate::gitobj::ObjectStore::open`] already learned this lesson for `objects/`; this is the same
+/// lesson one layer up.
+///
+/// The private directory is consulted **first**, because Git keeps a handful of refs per worktree
+/// there and a worktree's own `HEAD` must win over the common directory's.
 pub fn head_commit(root: &Path) -> Option<String> {
     let git_dir = git_dir(root)?;
     let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
@@ -65,14 +121,24 @@ pub fn head_commit(root: &Path) -> Option<String> {
         if ref_name.contains("..") || ref_name.starts_with('/') {
             return None;
         }
-        let ref_path = git_dir.join(ref_name);
-        if let Ok(text) = std::fs::read_to_string(&ref_path) {
-            let object_id = text.trim();
-            if is_object_id(object_id) {
-                return Some(object_id.to_string());
+        let mut directories = vec![git_dir.clone()];
+        if let Some(common) = common_dir(&git_dir) {
+            if common != git_dir {
+                directories.push(common);
             }
         }
-        return read_packed_ref(&git_dir, ref_name);
+        for directory in &directories {
+            if let Ok(text) = std::fs::read_to_string(directory.join(ref_name)) {
+                let object_id = text.trim();
+                if is_object_id(object_id) {
+                    return Some(object_id.to_string());
+                }
+            }
+            if let Some(object_id) = read_packed_ref(directory, ref_name) {
+                return Some(object_id);
+            }
+        }
+        return None;
     }
 
     // Detached HEAD.
@@ -141,5 +207,135 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write(&dir.path().join(".git/HEAD"), "not-a-sha\n");
         assert_eq!(head_commit(dir.path()), None);
+    }
+
+    /// The shape `git worktree add` produces: `HEAD` beside `commondir`, and the branch it names
+    /// living **only** in the common directory.
+    ///
+    /// Before `commondir` was followed this returned `None`, which reads as "this worktree has no
+    /// history" and left `repository_state.git_commit` NULL for every linked worktree.
+    #[test]
+    fn resolves_a_ref_that_lives_only_in_the_common_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let sha = "0f0e0d0c0b0a09080706050403020100fedcba98";
+        // The common git directory, and the worktree's private one two levels below it.
+        write(
+            &dir.path().join("common/refs/heads/feat"),
+            &format!("{sha}\n"),
+        );
+        std::fs::create_dir_all(dir.path().join("common/worktrees/linked")).unwrap();
+        let worktree_root = dir.path().join("checkout");
+        std::fs::create_dir_all(&worktree_root).unwrap();
+        write(
+            &worktree_root.join(".git"),
+            &format!(
+                "gitdir: {}\n",
+                dir.path().join("common/worktrees/linked").display()
+            ),
+        );
+        write(
+            &dir.path().join("common/worktrees/linked/HEAD"),
+            "ref: refs/heads/feat\n",
+        );
+        write(
+            &dir.path().join("common/worktrees/linked/commondir"),
+            "../..\n",
+        );
+
+        // The private directory has neither the loose ref nor a `packed-refs`, which is exactly
+        // what a real worktree looks like. If either existed this test would prove nothing.
+        assert!(!dir
+            .path()
+            .join("common/worktrees/linked/refs/heads/feat")
+            .exists());
+        assert!(!dir
+            .path()
+            .join("common/worktrees/linked/packed-refs")
+            .exists());
+
+        assert_eq!(head_commit(&worktree_root), Some(sha.to_string()));
+    }
+
+    /// `packed-refs` lives in the common directory too, and a worktree has none of its own.
+    #[test]
+    fn falls_back_to_packed_refs_in_the_common_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let sha = "1234567890abcdef1234567890abcdef12345678";
+        write(
+            &dir.path().join("common/packed-refs"),
+            &format!("# pack-refs with: peeled fully-peeled sorted \n{sha} refs/heads/feat\n"),
+        );
+        std::fs::create_dir_all(dir.path().join("common/worktrees/linked")).unwrap();
+        let worktree_root = dir.path().join("checkout");
+        std::fs::create_dir_all(&worktree_root).unwrap();
+        write(
+            &worktree_root.join(".git"),
+            &format!(
+                "gitdir: {}\n",
+                dir.path().join("common/worktrees/linked").display()
+            ),
+        );
+        write(
+            &dir.path().join("common/worktrees/linked/HEAD"),
+            "ref: refs/heads/feat\n",
+        );
+        write(
+            &dir.path().join("common/worktrees/linked/commondir"),
+            "../..\n",
+        );
+
+        assert_eq!(head_commit(&worktree_root), Some(sha.to_string()));
+    }
+
+    /// A `commondir` that is empty, carries a control character, or does not resolve is ignored,
+    /// and the traversal refusal on the ref name still applies with a `commondir` present.
+    #[test]
+    fn a_malformed_commondir_is_ignored_and_the_ref_guard_still_holds() {
+        for body in ["\n", "\u{1}evil\n", "../nowhere-at-all\n"] {
+            let dir = tempfile::tempdir().unwrap();
+            write(&dir.path().join(".git/HEAD"), "ref: refs/heads/feat\n");
+            write(&dir.path().join(".git/commondir"), body);
+            assert_eq!(head_commit(dir.path()), None, "commondir {body:?}");
+        }
+
+        // A resolvable `commondir` does not license a traversing ref name.
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join(".git/HEAD"),
+            "ref: ../../../../etc/passwd\n",
+        );
+        write(&dir.path().join(".git/commondir"), "..\n");
+        assert_eq!(head_commit(dir.path()), None);
+    }
+
+    /// A `commondir` over the bound is not read at all, so it cannot be an allocation a repository
+    /// chooses.
+    #[test]
+    fn an_oversized_commondir_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let sha = "aaaabbbbccccddddeeeeffff0000111122223333";
+        write(
+            &dir.path().join("common/refs/heads/feat"),
+            &format!("{sha}\n"),
+        );
+        std::fs::create_dir_all(dir.path().join("common/worktrees/linked")).unwrap();
+        let private = dir.path().join("common/worktrees/linked");
+        let worktree_root = dir.path().join("checkout");
+        std::fs::create_dir_all(&worktree_root).unwrap();
+        write(
+            &worktree_root.join(".git"),
+            &format!("gitdir: {}\n", private.display()),
+        );
+        write(&private.join("HEAD"), "ref: refs/heads/feat\n");
+
+        // Under the bound the ref resolves; one byte over it, the pointer is not read and the ref
+        // is unreachable. Both directions, so the bound cannot be satisfied by never resolving.
+        let padded = format!("../..{}\n", " ".repeat(16));
+        write(&private.join("commondir"), &padded);
+        assert_eq!(head_commit(&worktree_root), Some(sha.to_string()));
+
+        let oversized = format!("../..{}\n", " ".repeat(MAX_COMMONDIR_BYTES as usize + 1));
+        write(&private.join("commondir"), &oversized);
+        assert_eq!(head_commit(&worktree_root), None);
     }
 }

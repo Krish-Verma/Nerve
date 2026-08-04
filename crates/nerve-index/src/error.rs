@@ -81,6 +81,32 @@ pub enum IndexError {
     /// No source of operating-system randomness was available.
     #[error("could not obtain randomness for project_id: {0}")]
     Randomness(String),
+
+    /// The Git object reader refused something.
+    ///
+    /// Slice 12a deliberately left [`crate::gitobj::Error`] unbridged, with the comment that the
+    /// bridge would be added "when it has a caller for it"; [`crate::history`] is that caller.
+    ///
+    /// The refusal is carried whole rather than flattened to a message, and the message states the
+    /// [`crate::gitobj::form`] tag, so a closed-vocabulary refusal keeps its tag all the way to the
+    /// CLI instead of a surface having to re-derive it by parsing prose.
+    /// [`IndexError::git_object_form`] is how a caller reads it back structurally.
+    #[error("git object refused [{}]: {}", .0.form(), .0)]
+    GitObject(#[from] crate::gitobj::Error),
+}
+
+impl IndexError {
+    /// The [`crate::gitobj::form`] tag, when this error is a Git-object refusal.
+    ///
+    /// `None` for every other variant. A caller counting refusals by form needs the tag rather than
+    /// the message, and a tag recovered by string-matching the message would be a second, weaker
+    /// copy of a vocabulary that already exists.
+    pub const fn git_object_form(&self) -> Option<&'static str> {
+        match self {
+            IndexError::GitObject(error) => Some(error.form()),
+            _ => None,
+        }
+    }
 }
 
 /// Convenience alias.
