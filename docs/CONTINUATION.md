@@ -55,18 +55,22 @@ cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
 cargo test --workspace --no-fail-fast                   → 1402 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
 python3 -m unittest discover -s tracers/python          → 115 tests, OK (skipped=1)
-scripts/final_acceptance.sh                             → 36 passed, 0 failed, 0 skipped
+scripts/final_acceptance.sh                             → 43 passed, 0 failed, 0 skipped
 Cargo.lock                                              → 106 packages, unchanged by row 12b
 ```
 
 `scripts/trace_python_e2e.sh` was **not** re-run this session — it needs pytest in a venv, which needs
 network. Last green at `2d68d58`, and row 12b touched nothing it exercises.
 
-The acceptance script moved 35 → 36 on its own: its `history` check prints
-`PASS — nerve history exists — update this script` now that the command is real. **That is the update
-it is asking for**, and it is the first item of the acceptance expansion. Two other lines there are
-now stale: it still reports "the frontend is frozen and owned by the user", which the lifted freeze
-contradicts.
+The acceptance script is at **43** checks. It moved 35 → 36 on its own when `nerve history` appeared,
+because its "unbuilt" loop awards a `PASS` for a command's mere existence — a pass that checked
+nothing. That row is now eight real checks (`2dc3a7d`), including the product assertion that a shallow
+boundary is never described as the start of history, verified on the shipped binary and probed by
+setting the forbidden pattern to a phrase the output does contain. Its stale "the frontend is frozen"
+line is corrected too.
+
+**`nerve memory` is still in that same loop**, so row 14 will award itself the same empty pass. Replace
+it with real checks when it lands, rather than after.
 
 **Schema is at v6.** Four new tables — `git_commit`, `git_change`, `git_rename_hypothesis`,
 `git_history_ingest` — and no change to any existing table, so `entity_fts`, `symbols_total`,
@@ -522,6 +526,14 @@ recorded in `docs/plans/slice-15-real-world-validation.md`.
 
 ## Environment notes
 
+- **An org monthly spend limit killed the Slice 12b CLI agent mid-slice** (2026-08-04) — the **third**
+  such kill on this project, after Slice 7b and Slice 9b. Its 1029 surviving lines in
+  `crates/nerve-cli/src/main.rs` compiled and smoke-tested correctly, so they were inspected, kept,
+  and finished by the orchestrator, which wrote the eleven CLI tests, the handoff entry and the slice
+  report directly. **That is the recorded fallback and it worked**, but it means delegation should be
+  assumed unavailable until the limit resets: a fresh session should test it with one cheap dispatch
+  before planning around subagents. The mutation probes carry more weight than usual for that part of
+  the slice, because the two-party check was unavailable.
 - **An org monthly spend limit killed the Slice 7b implementation agent mid-slice** (2026-08-02),
   after the store and CLI but before the API handler and every CLI/API test. Delegation was then
   unavailable, so the orchestrator finished the slice directly and recorded the deviation in
