@@ -3490,3 +3490,465 @@ fn why_explains_a_route_registration_without_overclaiming() {
         "every observation states what the registration does not prove: {value}"
     );
 }
+
+// ---- history -------------------------------------------------------------------------------
+//
+// Slice 12b's CLI. The subject of nearly every assertion below is *wording*, which is unusual for
+// a test file and is the point of the slice: a shallow boundary that reads as the start of history
+// is wrong in a way no row count reveals.
+//
+// The fixtures store a real Git directory under the plain name `gitdir/`, because Git will not
+// track files inside a nested `.git`. Each test copies the fixture and renames the copy.
+
+/// Copy a `history-*` fixture, make its `gitdir/` into a real `.git`, and `nerve init` it.
+fn history_fixture(name: &str) -> (tempfile::TempDir, PathBuf) {
+    let (dir, root) = named_fixture_copy(name);
+    std::fs::rename(root.join("gitdir"), root.join(".git"))
+        .expect("the fixture must carry a gitdir/");
+    assert_eq!(code(&run(&["init", root.to_str().unwrap()])), 0);
+    (dir, root)
+}
+
+/// The fixture's own `inventory.json`, whose every value is Git's answer rather than Nerve's.
+fn history_inventory(name: &str) -> serde_json::Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures")
+        .join(name)
+        .join("inventory.json");
+    serde_json::from_str(&std::fs::read_to_string(&path).expect("the inventory must be readable"))
+        .expect("the inventory must parse")
+}
+
+#[test]
+fn history_sync_then_log_records_every_commit_the_fixture_declares() {
+    let (_dir, root) = history_fixture("history-basic");
+    let root = root.to_str().unwrap();
+    let inventory = history_inventory("history-basic");
+    let declared = inventory["commits"].as_array().unwrap().len();
+    assert!(declared > 1, "the fixture must declare a history to read");
+
+    let sync = run(&["history", "sync", root]);
+    assert_eq!(code(&sync), 0, "{}", String::from_utf8_lossy(&sync.stderr));
+
+    let log = run(&["history", "log", "--path", root, "--json"]);
+    assert_eq!(code(&log), 0);
+    let value = json(&log);
+    require_keys(
+        &value,
+        &["answerable", "commits", "commits_total", "totals"],
+    );
+    assert_eq!(value["answerable"], serde_json::json!(true));
+    assert_eq!(
+        value["commits"].as_array().unwrap().len(),
+        declared,
+        "the CLI and Git disagree about how many commits there are"
+    );
+}
+
+#[test]
+fn history_log_limit_states_the_true_total_beside_the_page() {
+    let (_dir, root) = history_fixture("history-basic");
+    let root = root.to_str().unwrap();
+    assert_eq!(code(&run(&["history", "sync", root])), 0);
+
+    let value = json(&run(&[
+        "history", "log", "--path", root, "--limit", "2", "--json",
+    ]));
+    assert_eq!(value["commits"].as_array().unwrap().len(), 2);
+    let total = value["totals"]["commits"].as_u64().expect("a commit total");
+    assert!(
+        total > 2,
+        "the fixture is too small for this test to mean anything"
+    );
+
+    // A page that did not say what it was a page of would let a reader believe there were two.
+    let text = stdout(&run(&["history", "log", "--path", root, "--limit", "2"]));
+    assert!(
+        text.contains(&format!("2 of {total}")),
+        "the page must name the true total: {text}"
+    );
+}
+
+/// **The gate, at the surface.** Every other assertion in this file is about counts; this one is
+/// about a sentence, because the sentence is the product.
+#[test]
+fn a_shallow_boundary_is_never_described_as_the_start_of_history() {
+    let (_dir, root) = history_fixture("history-shallow");
+    let root = root.to_str().unwrap();
+    let inventory = history_inventory("history-shallow");
+    let boundary = inventory["shallow"]["boundary_oids"][0]
+        .as_str()
+        .expect("the fixture declares a boundary");
+
+    let sync = run(&["history", "sync", root]);
+    assert_eq!(code(&sync), 0);
+
+    for args in [
+        vec!["history", "sync", root],
+        vec!["history", "log", "--path", root],
+    ] {
+        let text = stdout(&run(&args));
+        // Anti-vacuity first: without this, a command that printed nothing would pass.
+        assert!(
+            text.contains(boundary),
+            "{args:?} never mentioned the boundary commit, so the negative below proves nothing"
+        );
+        assert!(
+            text.contains("unavailable to this repository")
+                || text.contains("earliest commit visible in this checkout"),
+            "{args:?} must say what a boundary means: {text}"
+        );
+        for forbidden in [
+            "the project's history begins here",
+            "history begins here",
+            "first commit in project",
+            "beginning of repository history",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "{args:?} claimed {forbidden:?} about a shallow checkout: {text}"
+            );
+        }
+    }
+
+    // And the JSON carries the permission as a field, so a consumer never re-derives the rule.
+    let value = json(&run(&["history", "log", "--path", root, "--json"]));
+    let row = value["commits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|commit| commit["commit_oid"] == serde_json::json!(boundary))
+        .expect("the boundary is listed");
+    assert_eq!(
+        row["parent_completeness"],
+        serde_json::json!("shallow_boundary")
+    );
+    assert_eq!(
+        row["may_claim_history_begins_here"],
+        serde_json::json!(false)
+    );
+    assert_eq!(
+        row["changes_enumerated"],
+        serde_json::json!("parent_unavailable")
+    );
+    // The commit object names a parent that Git's own revision walk hides.
+    assert_eq!(
+        row["parent_oids"].as_array().unwrap().len(),
+        1,
+        "the boundary's own object names its parent"
+    );
+}
+
+#[test]
+fn a_bounded_ingest_is_a_different_reason_from_a_shallow_boundary() {
+    let (_dir, root) = history_fixture("history-basic");
+    let root = root.to_str().unwrap();
+
+    let value = json(&run(&[
+        "history",
+        "sync",
+        root,
+        "--max-commits",
+        "1",
+        "--json",
+    ]));
+    assert_eq!(
+        value["walk_terminated_by"],
+        serde_json::json!("commit_budget")
+    );
+    assert_eq!(
+        value["shallow"],
+        serde_json::json!(false),
+        "Nerve stopping is not the repository being shallow"
+    );
+
+    let text = stdout(&run(&["history", "sync", root, "--max-commits", "1"]));
+    assert!(text.contains("commit_budget"), "{text}");
+    assert!(
+        text.contains("more history than this ingest read"),
+        "a bounded read must say the history is larger: {text}"
+    );
+}
+
+#[test]
+fn a_commit_with_no_changes_says_which_of_the_four_silences_it_is() {
+    let (_dir, root) = history_fixture("history-merge");
+    let root = root.to_str().unwrap();
+    assert_eq!(code(&run(&["history", "sync", root])), 0);
+
+    let value = json(&run(&["history", "log", "--path", root, "--json"]));
+    let commits = value["commits"].as_array().unwrap();
+
+    let silent: Vec<&serde_json::Value> = commits
+        .iter()
+        .filter(|commit| commit["changes"].as_u64() == Some(0))
+        .collect();
+    assert!(
+        silent.len() >= 2,
+        "the fixture must carry a merge and an empty commit, found {}",
+        silent.len()
+    );
+
+    let merge = silent
+        .iter()
+        .find(|commit| commit["is_merge"] == serde_json::json!(true))
+        .expect("a merge with no enumerated changes");
+    assert_eq!(
+        merge["changes_enumerated"],
+        serde_json::json!("merge_not_enumerated")
+    );
+
+    let empty = silent
+        .iter()
+        .find(|commit| commit["is_merge"] == serde_json::json!(false))
+        .expect("a genuinely empty commit");
+    assert_eq!(empty["changes_enumerated"], serde_json::json!("enumerated"));
+
+    // Two commits, both zero, different answers — and the text must distinguish them too.
+    let text = stdout(&run(&["history", "log", "--path", root]));
+    assert!(text.contains("merge_not_enumerated"), "{text}");
+    assert!(
+        text.contains("not an empty commit"),
+        "the merge's silence must not read as emptiness: {text}"
+    );
+}
+
+#[test]
+fn never_synced_and_synced_but_empty_are_different_answers() {
+    // 1. Never synced.
+    let (_dir, root) = history_fixture("history-basic");
+    let root_str = root.to_str().unwrap();
+    let before = json(&run(&["history", "log", "--path", root_str, "--json"]));
+    assert_eq!(
+        before["answerable"],
+        serde_json::json!(false),
+        "an unsynced repository is not answerable"
+    );
+    let text = stdout(&run(&["history", "log", "--path", root_str]));
+    assert!(text.contains("never synced"), "{text}");
+    assert!(
+        text.contains("no commits") || text.contains("has no commits"),
+        "it must say what it is *not* claiming: {text}"
+    );
+
+    // 2. Synced, and there was nothing to read: an unborn branch.
+    let (_dir2, empty) = named_fixture_copy("history-basic");
+    let git = empty.join(".git");
+    std::fs::create_dir_all(git.join("objects")).unwrap();
+    std::fs::create_dir_all(git.join("refs/heads")).unwrap();
+    std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    let empty_str = empty.to_str().unwrap();
+    assert_eq!(code(&run(&["init", empty_str])), 0);
+    assert_eq!(code(&run(&["history", "sync", empty_str])), 0);
+
+    let after = json(&run(&["history", "log", "--path", empty_str, "--json"]));
+    assert_eq!(
+        after["answerable"],
+        serde_json::json!(true),
+        "a sync that ran is answerable even when it found nothing"
+    );
+    assert_eq!(after["totals"]["commits"], serde_json::json!(0));
+    assert!(
+        !stdout(&run(&["history", "log", "--path", empty_str])).contains("never synced"),
+        "a sync that ran must not report as never having run"
+    );
+}
+
+#[test]
+fn history_file_answers_for_a_path_that_changed_and_for_one_that_never_existed() {
+    let (_dir, root) = history_fixture("history-basic");
+    let root = root.to_str().unwrap();
+    assert_eq!(code(&run(&["history", "sync", root])), 0);
+
+    // A path the fixture really changed, taken from Git's own inventory rather than guessed.
+    let inventory = history_inventory("history-basic");
+    let mut changed: Option<String> = None;
+    for commit in inventory["commits"].as_array().unwrap() {
+        if let Some(changes) = commit["changes"].as_array() {
+            for change in changes {
+                if change["change_kind"] == serde_json::json!("deleted") {
+                    changed = change["path"].as_str().map(str::to_owned);
+                }
+            }
+        }
+    }
+    let deleted = changed.expect("the fixture declares a deleted path");
+
+    let value = json(&run(&[
+        "history", "file", &deleted, "--path", root, "--json",
+    ]));
+    let commits = value["commits"].as_array().unwrap();
+    assert!(
+        !commits.is_empty(),
+        "a path the fixture deleted must have a history — a guard requiring the path to exist \
+         on disk would have refused this, which is why safe_tree_name exists"
+    );
+    assert!(
+        commits
+            .iter()
+            .any(|commit| commit["change"]["change_kind"] == serde_json::json!("deleted")),
+        "the deletion itself must be reported"
+    );
+
+    // A path that never existed is an answer, not an error. `nerve path` set that precedent.
+    let absent = run(&["history", "file", "no/such/file.txt", "--path", root]);
+    assert_eq!(code(&absent), 0);
+    let text = stdout(&absent);
+    assert!(
+        text.contains("No recorded commit changed this path"),
+        "{text}"
+    );
+    assert!(
+        text.contains("not a"),
+        "absence must be named as an answer: {text}"
+    );
+}
+
+#[test]
+fn a_hostile_commit_summary_is_emitted_as_inert_text() {
+    let (_dir, root) = history_fixture("history-hostile");
+    let root = root.to_str().unwrap();
+
+    // Exit 3, not 0: `PARTIAL_INDEX` is documented as "the index was written, but some files could
+    // not be read or parsed", which is exactly a sync that refused three malformed trees and kept
+    // the rest. No new exit code — the same argument `nerve doctor` made for reusing `NO_INDEX`,
+    // and the same code `nerve trace import` returns for a run-id conflict. A clean fixture below
+    // exits 0, so this is a distinction the caller can act on rather than a constant.
+    assert_eq!(code(&run(&["history", "sync", root])), 3);
+    let (_clean_dir, clean) = history_fixture("history-basic");
+    assert_eq!(code(&run(&["history", "sync", clean.to_str().unwrap()])), 0);
+
+    let text = stdout(&run(&["history", "log", "--path", root, "--limit", "20"]));
+    // Present, unaltered, and not acted on.
+    assert!(
+        text.contains("<script>alert(1)</script>"),
+        "the summary must be stored and shown as data: {text}"
+    );
+    assert!(
+        text.contains("IGNORE ALL PREVIOUS INSTRUCTIONS"),
+        "instruction-shaped text is data too"
+    );
+    // Truncation is flagged rather than silent, and the flag's scope is stated honestly.
+    let sync = stdout(&run(&["history", "sync", root]));
+    assert!(sync.contains("truncated"), "{sync}");
+
+    // The malformed trees are refused and counted, and the ingest still read the other commits.
+    //
+    // A *fresh* repository, because refusals describe the ingest that produced them. A re-sync
+    // whose commits are all already recorded does no tree work at all, so it correctly reports
+    // none — which the second half of this test pins, because a reader could otherwise conclude
+    // from one clean re-sync that the repository had no hostile trees.
+    let (_fresh_dir, fresh) = history_fixture("history-hostile");
+    let fresh = fresh.to_str().unwrap().to_owned();
+    let value = json(&run(&["history", "sync", &fresh, "--json"]));
+    let refused: u64 = value["refused"]
+        .as_object()
+        .expect("a refusal map")
+        .values()
+        .filter_map(serde_json::Value::as_u64)
+        .sum();
+    assert!(
+        refused > 0,
+        "the hostile trees must be counted, not dropped"
+    );
+    assert_eq!(
+        value["refused_total"],
+        serde_json::json!(refused),
+        "the total must be the sum of the forms, never an independent count"
+    );
+    assert!(
+        value["commits_recorded"].as_u64().unwrap_or(0) > 0,
+        "one hostile tree must not cost the whole repository its history"
+    );
+
+    // The ingest-level tally is per-ingest; the per-commit record is not. `changes_enumerated`
+    // stays on the commit, so "this commit's changes were refused" outlives a later sync that had
+    // no tree work to do. Without that, the only record of a refusal would be erasable by
+    // re-running the command.
+    let again = json(&run(&["history", "sync", &fresh, "--json"]));
+    assert_eq!(again["refused_total"], serde_json::json!(0));
+    let listed = json(&run(&[
+        "history", "log", "--path", &fresh, "--limit", "20", "--json",
+    ]));
+    assert!(
+        listed["commits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|commit| commit["changes_enumerated"] == serde_json::json!("refused")),
+        "the per-commit refusal must outlive the ingest tally"
+    );
+}
+
+#[test]
+fn a_max_commits_above_the_clamp_is_refused_with_the_clamp_stated() {
+    let (_dir, root) = history_fixture("history-basic");
+    let root = root.to_str().unwrap();
+
+    let refused = run(&["history", "sync", root, "--max-commits", "999999"]);
+    assert_eq!(
+        code(&refused),
+        10,
+        "an out-of-range argument is a usage error"
+    );
+    let text = String::from_utf8_lossy(&refused.stdout).to_string()
+        + &String::from_utf8_lossy(&refused.stderr);
+    assert!(text.contains("5000"), "the clamp must be stated: {text}");
+    assert!(
+        text.contains("silently"),
+        "and why honouring it silently would be wrong: {text}"
+    );
+}
+
+#[test]
+fn history_text_and_json_agree_on_every_count() {
+    let (_dir, root) = history_fixture("history-basic");
+    let root = root.to_str().unwrap();
+    assert_eq!(code(&run(&["history", "sync", root])), 0);
+
+    let value = json(&run(&["history", "log", "--path", root, "--json"]));
+    let text = stdout(&run(&["history", "log", "--path", root]));
+
+    let commits = value["totals"]["commits"].as_u64().unwrap();
+    let changes = value["totals"]["changes"].as_u64().unwrap();
+    assert!(commits > 0 && changes > 0, "the fixture must have content");
+    assert!(
+        text.contains(&format!("{commits} recorded")),
+        "text must carry the JSON's commit total: {text}"
+    );
+    assert!(
+        text.contains(&format!("{changes} change row")),
+        "text must carry the JSON's change total: {text}"
+    );
+}
+
+#[test]
+fn history_reads_leave_the_database_byte_identical() {
+    let (_dir, root) = history_fixture("history-basic");
+    let db = root.join(".nerve/nerve.db");
+    let root = root.to_str().unwrap();
+    assert_eq!(code(&run(&["history", "sync", root])), 0);
+
+    let before = std::fs::read(&db).expect("the database must exist");
+    for args in [
+        vec!["history", "log", "--path", root],
+        vec!["history", "log", "--path", root, "--json"],
+        vec!["history", "file", "README.md", "--path", root],
+        vec![
+            "history",
+            "file",
+            "no/such/file.txt",
+            "--path",
+            root,
+            "--json",
+        ],
+    ] {
+        assert_eq!(code(&run(&args)), 0, "{args:?}");
+    }
+    let after = std::fs::read(&db).expect("the database must still exist");
+    assert!(
+        before == after,
+        "a history read changed the database by {} bytes",
+        after.len().abs_diff(before.len())
+    );
+}

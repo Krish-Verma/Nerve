@@ -93,6 +93,24 @@ enum Command {
     /// for explicitly with `--relation TEST_OBSERVED_CALL`.
     #[command(subcommand)]
     Trace(TraceCommand),
+    /// Read the repository's own commit history, and ask what it recorded.
+    ///
+    /// `sync` walks `.git` and records what the commit graph says; `log` and `file` read it back.
+    /// Nothing here spawns `git`, and nothing here reaches the network: the object store is parsed
+    /// directly, exactly as `nerve index` parses source.
+    ///
+    /// **An absent history is never described as an empty one.** A repository whose history has
+    /// never been synced, one that was synced and holds no commits, one whose earliest visible
+    /// commit is a shallow boundary, and one where Nerve stopped at its own commit budget are four
+    /// different answers, and each says which it is. That distinction is the reason this surface
+    /// exists — see `docs/plans/slice-12b-historical-model.md` §5.
+    ///
+    /// Times and timezones are always recorded. Author and committer **identities are not**, unless
+    /// `--with-identity` asks for them: no question this surface answers asks *who*, so contributor
+    /// names and email addresses would be third-party personal data in the index with no query
+    /// behind them.
+    #[command(subcommand)]
+    History(HistoryCommand),
     /// Report index counts, freshness and schema version.
     Status {
         /// Repository root. Defaults to the current directory.
@@ -332,6 +350,90 @@ enum TraceCommand {
     },
 }
 
+/// `nerve history` subcommands.
+///
+/// One writer and two readers, following `nerve trace`'s shape rather than a bare
+/// `nerve history <path>`: the verbs are what the commands do, and a surface that grows a third
+/// question later needs no rename.
+#[derive(Debug, Subcommand)]
+enum HistoryCommand {
+    /// Walk `.git` and record the commit graph into an existing index.
+    ///
+    /// Requires `nerve init` and nothing more. History resolves nothing against the graph, so a
+    /// repository that has never been indexed still has a history to read — the opposite of
+    /// `nerve coverage`, which refuses without an index because every path in a report is resolved
+    /// against what was indexed.
+    ///
+    /// Re-syncing is cheap and additive: a commit object is immutable, so a commit already recorded
+    /// costs one lookup and no tree diff. The two columns that are *not* properties of the object —
+    /// whether its parents were visible, and whether its changes could be enumerated — are
+    /// re-examined every time, because `git fetch --unshallow` can turn "unavailable" into
+    /// "available" and stale availability data is the one thing this surface must not keep.
+    ///
+    /// Exit `0` when everything the walk needed was read, `3` when anything was refused **or** the
+    /// walk stopped at `--max-commits`. A bounded read is a partial read: a script that treated it
+    /// as complete would read Nerve's own boundary as the repository's.
+    Sync {
+        /// Repository root. Defaults to the current directory.
+        path: Option<PathBuf>,
+        /// Commits this walk may read. Refused above the clamp, never silently lowered.
+        #[arg(long, value_name = "N", default_value_t = nerve_index::MAX_HISTORY_COMMITS)]
+        max_commits: usize,
+        /// Also store author and committer identities.
+        ///
+        /// **Off by default, and that is a data-protection decision rather than a performance
+        /// one.** Not one question this surface answers asks *who*, so storing contributor names
+        /// and email addresses would put third-party personal data in the index that no query
+        /// reads. Times and timezones are always stored, because *when* is asked repeatedly.
+        ///
+        /// With this flag, a name and an email are untrusted repository strings on exactly the same
+        /// terms as a commit summary.
+        #[arg(long)]
+        with_identity: bool,
+    },
+    /// List recorded commits, newest committer time first.
+    ///
+    /// Reads only what `nerve history sync` recorded. It never opens `.git`, so it cannot invent a
+    /// commit the last sync did not read — and it says how much of the history that sync saw, so a
+    /// bounded or shallow ingest is not mistaken for the whole story.
+    Log {
+        /// Commits listed. The totals beside the list stay exact.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Commits skipped before listing.
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Report every recorded commit that changed one path, and the rename hypotheses naming it.
+    ///
+    /// The argument is a **repository-relative path exactly as a commit's tree recorded it** — not a
+    /// selector, and not resolved against the working tree. It is matched literally against
+    /// `git_change.path`.
+    ///
+    /// That is deliberate and it is the only thing it can be. A historical path routinely does not
+    /// exist on disk: it was deleted, or renamed, or it only ever existed before the shallow
+    /// boundary. Nerve's path guard ends in a `canonicalize` call, so it can only validate a path
+    /// that exists *now* — routed through it, this command would refuse every deleted path and
+    /// report a repository with no renames rather than a broken guard
+    /// (`docs/plans/slice-12b-historical-model.md` §8.4).
+    ///
+    /// A path no recorded commit touched is an empty answer and exit `0`. Absence is a finding.
+    File {
+        /// Repository-relative path as recorded in a tree, for example `src/app/main.rs`.
+        #[arg(value_name = "PATH_IN_REPO")]
+        tree_path: String,
+        /// Commits listed. The totals beside the list stay exact.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+}
+
 /// `--direction` values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum DirectionArg {
@@ -442,6 +544,21 @@ fn main() {
         Command::Trace(TraceCommand::Import { artifact, path }) => {
             run_trace_import(&output, path, artifact)
         }
+        Command::History(HistoryCommand::Sync {
+            path,
+            max_commits,
+            with_identity,
+        }) => run_history_sync(&output, path, max_commits, with_identity),
+        Command::History(HistoryCommand::Log {
+            limit,
+            offset,
+            path,
+        }) => run_history_log(&output, &path, limit, offset),
+        Command::History(HistoryCommand::File {
+            tree_path,
+            limit,
+            path,
+        }) => run_history_file(&output, &path, &tree_path, limit),
         Command::Status { path, path_flag } => run_status(
             &output,
             &path.or(path_flag).unwrap_or_else(|| PathBuf::from(".")),
@@ -1966,6 +2083,921 @@ fn run_gaps(output: &Output, path: &Path, arguments: GapArguments) -> i32 {
         })).collect::<Vec<_>>(),
     }));
 
+    exit::SUCCESS
+}
+
+// ---- history -------------------------------------------------------------------------------
+//
+// Three commands over schema v6. `sync` calls `nerve_index::ingest_history`, which is the only code
+// here that opens `.git`; `log` and `file` ask `nerve_store::history` and open the database
+// `query_only`, so a later edit cannot quietly make a read command write.
+//
+// Every handler below has one job beyond rendering: keep four kinds of silence apart. "Never
+// synced" is not "synced and found nothing", a shallow boundary is not a root commit, Nerve's own
+// commit budget is not the repository's boundary, and a commit with no change rows is one of four
+// stated facts rather than a row count. Collapsing any of them produces an answer that looks
+// reasonable and is wrong, which is what `docs/plans/slice-12b-historical-model.md` §5 and §6.1
+// exist to prevent.
+
+/// Render a repository-supplied string as inert single-line text.
+///
+/// A commit summary is the first free-form repository **prose** Nerve stores (plan §8.7). It is
+/// attacker-influencable in any repository that accepts contributions, and this is a line-oriented
+/// terminal surface, so two characters in it are dangerous for structural rather than semantic
+/// reasons: a newline forges a second output line — which can be shaped to read
+/// `  shallow        false` — and `ESC` begins an ANSI sequence, which can repaint or erase what
+/// Nerve printed above it. Either turns repository data into something that looks like Nerve's own
+/// answer.
+///
+/// So every control character becomes a visible `\u{..}` escape, and **the same escaped string is
+/// what `--json` carries.** Emitting the raw byte into JSON would be valid JSON and would still
+/// hand the problem to the next program — `jq -r` prints the value straight back to a terminal —
+/// and one rendering is also the only way a terminal and a UI cannot disagree about what a commit
+/// says.
+///
+/// What this deliberately does **not** do is neutralise meaning. `<script>` stays `<script>` and an
+/// instruction-shaped sentence stays an instruction-shaped sentence: they are data, they are
+/// labelled as the repository's, and HTML escaping belongs to whatever renders HTML. Bidirectional
+/// format characters are also left alone, because they cannot forge a line or a control sequence
+/// and escaping them would corrupt legitimate right-to-left prose; a *renderer* must still treat
+/// them as hostile.
+fn inert_text(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for character in raw.chars() {
+        if character.is_control() {
+            out.push_str(&format!("\\u{{{:02x}}}", character as u32));
+        } else {
+            out.push(character);
+        }
+    }
+    out
+}
+
+/// Open the index read-only for a history query.
+///
+/// `PRAGMA query_only` is the whole "a read command never writes" guarantee, made by construction
+/// rather than by discipline: SQLite refuses the write, so the byte-identical-database test cannot
+/// be broken by a later edit that reaches for a convenient repair.
+fn open_query_only(path: &Path) -> Result<OpenIndex, String> {
+    let opened = open_existing(path)?;
+    opened
+        .conn
+        .pragma_update(None, "query_only", "ON")
+        .map_err(|err| err.to_string())?;
+    Ok(opened)
+}
+
+/// Why the walk stopped, in words, with Nerve's own boundary kept apart from the repository's.
+fn walk_termination_note(value: nerve_core::WalkTermination) -> &'static str {
+    match value {
+        nerve_core::WalkTermination::Exhausted => {
+            "every commit reachable from the walked tips was read"
+        }
+        // The distinction this whole surface exists for. `commit_budget` is Nerve declining to read
+        // further; it says nothing whatever about how far the repository goes back.
+        nerve_core::WalkTermination::CommitBudget => {
+            "Nerve stopped at its own commit budget, so the repository has more history than this \
+             ingest read"
+        }
+        nerve_core::WalkTermination::ShallowBoundary => {
+            "the walk reached a declared shallow boundary; history before it is unavailable to \
+             this repository"
+        }
+        nerve_core::WalkTermination::MissingObject => {
+            "an object the walk needed was absent; a fault in this repository, not a declared \
+             boundary"
+        }
+        nerve_core::WalkTermination::Refused => "a bound refused an object the walk needed",
+    }
+}
+
+/// What a commit's parent situation means, and whether "history begins here" may be said of it.
+///
+/// The permission is [`nerve_core::ParentCompleteness::may_claim_history_begins_here`] and is never
+/// re-derived here. That method is true for `root` and nothing else; a `matches!` written out again
+/// in the renderer would be a second copy of the one rule this slice exists to get right, free to
+/// drift from the first.
+fn availability_note(value: nerve_core::ParentCompleteness) -> &'static str {
+    if value.may_claim_history_begins_here() {
+        return "no parents in the commit object and no shallow boundary, so the project's history \
+                begins here";
+    }
+    match value {
+        nerve_core::ParentCompleteness::Root => unreachable!("root is the permitted case above"),
+        nerve_core::ParentCompleteness::ParentsAvailable => {
+            "every parent this commit names is present"
+        }
+        nerve_core::ParentCompleteness::ShallowBoundary => {
+            "earliest commit visible in this checkout; history before this point is unavailable \
+             to this repository"
+        }
+        nerve_core::ParentCompleteness::ParentsMissing => {
+            "a parent this commit names is absent and was not declared absent, a fault in this \
+             repository rather than a shallow boundary; history before this point is unavailable \
+             to this repository"
+        }
+        nerve_core::ParentCompleteness::ParentsUnverifiable => {
+            "a parent this commit names is absent and Nerve could not establish whether the \
+             absence was declared, so neither shallow nor corrupt may be asserted"
+        }
+    }
+}
+
+/// Which of the four silences a commit with no change rows is.
+///
+/// Printing a count without this is the defect plan §6.1 exists to prevent: `0` alone reads as
+/// "nothing changed" in all four cases, and only one of them means that.
+fn enumeration_note(value: nerve_core::ChangesEnumerated) -> &'static str {
+    match value {
+        nerve_core::ChangesEnumerated::Enumerated => {
+            "the diff against the single parent ran to completion, so a zero here really is \
+             \"nothing changed\""
+        }
+        nerve_core::ChangesEnumerated::MergeNotEnumerated => {
+            "a merge has several parents and a change is only defined against one, so none were \
+             enumerated — not an empty commit"
+        }
+        nerve_core::ChangesEnumerated::ParentUnavailable => {
+            "the parent tree could not be read, so nothing was enumerated — not an empty commit"
+        }
+        nerve_core::ChangesEnumerated::Refused => {
+            "a bound refused this commit's diff, so nothing was enumerated — see the refusals above"
+        }
+    }
+}
+
+/// How ambiguous a rename hypothesis is, in words. There is no score, and none is invented.
+fn ambiguity_note(value: nerve_core::RenameAmbiguity) -> &'static str {
+    match value {
+        nerve_core::RenameAmbiguity::Unique => {
+            "one deleted path, one added path, one blob — the only unambiguous shape, and still a \
+             hypothesis"
+        }
+        nerve_core::RenameAmbiguity::ManyFrom => {
+            "several deleted paths share this blob — every pairing is recorded and none is promoted"
+        }
+        nerve_core::RenameAmbiguity::ManyTo => {
+            "several added paths share this blob — every pairing is recorded and none is promoted"
+        }
+        nerve_core::RenameAmbiguity::ManyBoth => {
+            "several paths on both sides share this blob — every pairing is recorded and none is \
+             promoted"
+        }
+    }
+}
+
+/// Whether this ingest could not see the whole reachable history, so an earlier change may exist
+/// and not be recorded.
+///
+/// One derived boolean rather than four conditions restated at each call site, and it is on the
+/// output so a consumer never has to re-derive it either. `shallow` is included even when the walk
+/// ended `exhausted`: the walk exhausted what it could *see*.
+fn earlier_changes_may_exist(ingest: &nerve_store::IngestRow) -> bool {
+    ingest.shallow || ingest.walk_terminated_by != nerve_core::WalkTermination::Exhausted
+}
+
+/// The refusal map, printed by form with its counts. Never summarised into one number alone.
+fn print_refusals(output: &Output, refusals: &std::collections::BTreeMap<String, usize>) {
+    output.line(format!(
+        "  refused        {} in total",
+        refusals.values().sum::<usize>()
+    ));
+    for (form, count) in refusals {
+        output.line(format!("    {form:<32} {count}"));
+    }
+}
+
+/// The one-line shallow verdict, with the boundary oids beneath it.
+fn print_shallow(output: &Output, shallow: bool, boundary: &[String]) {
+    if shallow {
+        output.line(
+            "  shallow        true — history before this point is unavailable to this repository",
+        );
+        for oid in boundary {
+            output.line(format!(
+                "    boundary     {oid} — earliest commit visible in this checkout"
+            ));
+        }
+    } else {
+        output.line("  shallow        false — this repository declares no shallow boundary");
+    }
+}
+
+fn ingest_json(ingest: &nerve_store::IngestRow) -> serde_json::Value {
+    json!({
+        "head_oid": ingest.head_oid,
+        "walked_from": ingest.walked_from,
+        "commits_recorded": ingest.commits_recorded,
+        "commit_budget": ingest.commit_budget,
+        "walk_terminated_by": ingest.walk_terminated_by.as_str(),
+        "walk_terminated_note": walk_termination_note(ingest.walk_terminated_by),
+        "shallow": ingest.shallow,
+        "shallow_boundary": ingest.shallow_boundary,
+        "promisor": ingest.promisor,
+        "refusals": ingest.refusals,
+        "refusals_total": ingest.refusals.values().sum::<usize>(),
+        "reader_version": ingest.reader_version,
+        "earlier_changes_may_exist": earlier_changes_may_exist(ingest),
+    })
+}
+
+fn history_totals_json(totals: &nerve_store::HistoryTotals) -> serde_json::Value {
+    json!({
+        "commits": totals.commits,
+        "changes": totals.changes,
+        "renames": totals.renames,
+        "merges": totals.merges,
+        "changes_by_kind": totals.changes_by_kind.iter()
+            .map(|(kind, count)| (kind.as_str().to_string(), *count))
+            .collect::<std::collections::BTreeMap<String, i64>>(),
+    })
+}
+
+/// One commit, with the count of its change rows beside the column that qualifies that count.
+///
+/// `changes` is `null` where the caller counted rows *for one path* rather than for the commit —
+/// see [`print_commit`]. `null` is not `0`: the count was not taken, and a consumer that read an
+/// absent count as an empty commit would make exactly the mistake `changes_enumerated` exists to
+/// stop.
+fn commit_json(commit: &nerve_store::CommitRow, changes: Option<usize>) -> serde_json::Value {
+    let summary = inert_text(&commit.summary);
+    json!({
+        "commit_oid": commit.commit_oid,
+        "tree_oid": commit.tree_oid,
+        "parent_oids": commit.parent_oids,
+        "is_merge": commit.is_merge,
+        "parent_completeness": commit.parent_completeness.as_str(),
+        "parent_completeness_note": availability_note(commit.parent_completeness),
+        // Carried rather than left to the consumer: a UI that re-derived this from the string
+        // would be the second copy of the rule, and the one likeliest to say "history begins here"
+        // about a shallow boundary.
+        "may_claim_history_begins_here":
+            commit.parent_completeness.may_claim_history_begins_here(),
+        "changes_enumerated": commit.changes_enumerated.as_str(),
+        "changes_enumerated_note": enumeration_note(commit.changes_enumerated),
+        "changes": changes,
+        "author_time": commit.author_time,
+        "author_tz": commit.author_tz,
+        "committer_time": commit.committer_time,
+        "committer_tz": commit.committer_tz,
+        "author_ident": commit.author_ident.as_deref().map(inert_text),
+        "committer_ident": commit.committer_ident.as_deref().map(inert_text),
+        "summary": summary,
+        "summary_escaped": summary != commit.summary,
+    })
+}
+
+fn change_json(change: &nerve_store::ChangeRow) -> serde_json::Value {
+    json!({
+        "path": change.path,
+        "change_kind": change.change_kind.as_str(),
+        "blob_oid": change.blob_oid,
+        "prev_blob_oid": change.prev_blob_oid,
+        "mode": change.mode,
+        "prev_mode": change.prev_mode,
+    })
+}
+
+fn rename_json(rename: &nerve_store::RenameRow) -> serde_json::Value {
+    json!({
+        "commit_oid": rename.commit_oid,
+        "from_path": rename.from_path,
+        "to_path": rename.to_path,
+        "evidence": rename.evidence.as_str(),
+        "blob_oid": rename.blob_oid,
+        "ambiguity": rename.ambiguity.as_str(),
+        "ambiguity_note": ambiguity_note(rename.ambiguity),
+        // Stated on every row rather than in a footnote a consumer can drop. Git records no rename;
+        // this is a proposal drawn from identical content, and there is no score to sort it by.
+        "is_hypothesis": true,
+    })
+}
+
+/// Print one commit as a labelled block, with every state that qualifies it.
+///
+/// A block rather than a table row because the summary is repository prose bounded at 512 bytes:
+/// in a column it would wrap and hide the fields beside it. The summary is printed **last** so
+/// nothing Nerve says about the commit can be pushed off the line by it.
+///
+/// `changes` is `None` where the caller has no *whole-commit* count to show — `nerve history file`
+/// holds one change row per commit because that is what it asked for, and printing `1` there would
+/// state that the commit changed one path. The qualifying column is printed either way, because a
+/// count is only readable next to it and its absence must not be readable as zero.
+fn print_commit(output: &Output, commit: &nerve_store::CommitRow, changes: Option<usize>) {
+    output.line(String::new());
+    output.line(format!("commit {}", commit.commit_oid));
+    output.line(format!(
+        "  committed      {} {}",
+        commit.committer_time, commit.committer_tz
+    ));
+    output.line(format!(
+        "  authored       {} {}",
+        commit.author_time, commit.author_tz
+    ));
+    output.line(format!(
+        "  parents        {}",
+        if commit.parent_oids.is_empty() {
+            "(none in the commit object)".to_string()
+        } else {
+            commit.parent_oids.join(" ")
+        }
+    ));
+    output.line(format!(
+        "  availability   {} — {}",
+        commit.parent_completeness.as_str(),
+        availability_note(commit.parent_completeness)
+    ));
+    match changes {
+        Some(count) => output.line(format!(
+            "  changes        {count} row(s) · {}",
+            commit.changes_enumerated.as_str()
+        )),
+        None => output.line(format!(
+            "  enumeration    {}",
+            commit.changes_enumerated.as_str()
+        )),
+    }
+    output.line(format!(
+        "                 {}",
+        enumeration_note(commit.changes_enumerated)
+    ));
+    if let Some(ident) = &commit.author_ident {
+        output.line(format!("  author         {}", inert_text(ident)));
+    }
+    if let Some(ident) = &commit.committer_ident {
+        output.line(format!("  committer      {}", inert_text(ident)));
+    }
+    output.line(format!("  summary        {}", inert_text(&commit.summary)));
+}
+
+/// Walk `.git` and record the commit graph.
+///
+/// The clamp is a **refusal**, not a silent correction: a caller that asked for more commits than
+/// Nerve will ever walk in one sync must learn that its number was not the one used, because the
+/// alternative is a bounded ingest that reads as the number the caller chose.
+fn run_history_sync(
+    output: &Output,
+    path: Option<PathBuf>,
+    max_commits: usize,
+    with_identity: bool,
+) -> i32 {
+    if max_commits > nerve_index::MAX_HISTORY_COMMITS {
+        return output.failure(
+            "history sync",
+            exit::USAGE,
+            &format!(
+                "--max-commits {max_commits} is above the clamp of {}; ask for at most {} \
+                 commit(s). Honouring it silently would report a bounded read as the read you \
+                 asked for.",
+                nerve_index::MAX_HISTORY_COMMITS,
+                nerve_index::MAX_HISTORY_COMMITS
+            ),
+        );
+    }
+
+    let root = path.unwrap_or_else(|| PathBuf::from("."));
+    let options = nerve_index::HistoryOptions {
+        max_commits,
+        with_identity,
+    };
+    match nerve_index::ingest_history(&root, &options) {
+        Ok(outcome) => {
+            let refused_total = outcome.refused.values().sum::<usize>();
+            // A budget-bounded walk is counted as a refusal by the ingester, so it lands here as a
+            // partial read — which is what it is. `nerve coverage` and `nerve trace import` use the
+            // same code for the same reason.
+            let code = if outcome.status == nerve_index::RunStatus::Partial {
+                exit::PARTIAL_INDEX
+            } else {
+                exit::SUCCESS
+            };
+
+            output.line(format!("Read history from {}", outcome.root.display()));
+            output.line(format!("  git_dir        {}", outcome.git_dir.display()));
+            output.line(format!(
+                "  head           {}",
+                outcome.head_oid.as_deref().unwrap_or(
+                    "(unborn branch — HEAD names a ref that does not exist yet; this is a \
+                     success, not an error)"
+                )
+            ));
+            output.line(format!(
+                "  budget         {} commit(s)",
+                outcome.commit_budget
+            ));
+            output.line(format!(
+                "  walked         {} examined · {} newly recorded · {} already recorded · {} \
+                 re-examined",
+                outcome.commits_walked,
+                outcome.commits_recorded,
+                outcome.commits_already_present,
+                outcome.commits_repaired
+            ));
+            output.line(format!(
+                "  changes        {} row(s)",
+                outcome.changes_written
+            ));
+            output.line(format!(
+                "  renames        {} hypothesis(es)",
+                outcome.renames_written
+            ));
+            output.line(format!(
+                "  stopped        {} — {}",
+                outcome.walk_terminated_by.as_str(),
+                walk_termination_note(outcome.walk_terminated_by)
+            ));
+            print_shallow(output, outcome.shallow, &outcome.shallow_boundary);
+            output.line(format!("  promisor       {}", outcome.promisor));
+            output.line(format!(
+                "  availability   {}",
+                tally_line(&outcome.completeness)
+            ));
+            output.line(format!(
+                "  enumeration    {}",
+                tally_line(&outcome.enumeration)
+            ));
+            output.line(format!(
+                "  trees          {} read · {} subtree(s) skipped unread",
+                outcome.trees_read, outcome.subtrees_skipped
+            ));
+            output.line(format!(
+                "  summaries      {} truncated at {} bytes",
+                outcome.summaries_truncated,
+                nerve_index::MAX_SUMMARY_BYTES
+            ));
+            if with_identity {
+                output.line(
+                    "  identity       stored — author and committer names and email addresses are \
+                     now in the index, as untrusted third-party strings",
+                );
+            } else {
+                output.line(
+                    "  identity       not stored — no question this surface answers asks who, so \
+                     contributor names and",
+                );
+                output.line(
+                    "                 email addresses are kept out of the index; times and \
+                     timezones are always stored",
+                );
+            }
+            print_refusals(output, &outcome.refused);
+            output.line(format!("  duration_ms    {}", outcome.duration_ms));
+
+            output.object(json!({
+                "command": "history sync",
+                "ok": true,
+                "exit_code": code,
+                "root": outcome.root.display().to_string(),
+                "git_dir": outcome.git_dir.display().to_string(),
+                "head_oid": outcome.head_oid,
+                "walked_from": outcome.walked_from,
+                "commit_budget": outcome.commit_budget,
+                "commits_walked": outcome.commits_walked,
+                "commits_recorded": outcome.commits_recorded,
+                "commits_already_present": outcome.commits_already_present,
+                "commits_repaired": outcome.commits_repaired,
+                "changes_written": outcome.changes_written,
+                "renames_written": outcome.renames_written,
+                "walk_terminated_by": outcome.walk_terminated_by.as_str(),
+                "walk_terminated_note": walk_termination_note(outcome.walk_terminated_by),
+                "shallow": outcome.shallow,
+                "shallow_boundary": outcome.shallow_boundary,
+                "promisor": outcome.promisor,
+                "with_identity": with_identity,
+                "completeness": outcome.completeness.iter()
+                    .map(|(value, count)| (value.as_str().to_string(), *count))
+                    .collect::<std::collections::BTreeMap<String, usize>>(),
+                "enumeration": outcome.enumeration.iter()
+                    .map(|(value, count)| (value.as_str().to_string(), *count))
+                    .collect::<std::collections::BTreeMap<String, usize>>(),
+                "trees_read": outcome.trees_read,
+                "subtrees_skipped": outcome.subtrees_skipped,
+                "summaries_truncated": outcome.summaries_truncated,
+                "max_summary_bytes": nerve_index::MAX_SUMMARY_BYTES,
+                "refused": outcome.refused,
+                "refused_total": refused_total,
+                "reader_version": outcome.reader_version,
+                "status": outcome.status.as_str(),
+                "duration_ms": outcome.duration_ms,
+                "reads_git_only": true,
+            }));
+            code
+        }
+        Err(err) => {
+            // A directory with no Git repository in it is a wrong **argument**, not a crash and not
+            // a missing index: there is no history there to read at all. It is deliberately not the
+            // same answer as an unborn branch, which is a real repository whose HEAD names no
+            // commit yet and which succeeds with `head_oid: null` — collapsing the two would report
+            // "you pointed at the wrong directory" as "this project has no history".
+            let message = match &err {
+                IndexError::NotADirectory(missing)
+                    if missing.file_name() == Some(std::ffi::OsStr::new(".git")) =>
+                {
+                    format!(
+                        "no Git repository at {}: there is no history to read here. A repository \
+                         whose HEAD names no commit yet is a different answer and succeeds with no \
+                         commits.",
+                        missing.display()
+                    )
+                }
+                other => other.to_string(),
+            };
+            output.failure("history sync", error_exit_code(&err), &message)
+        }
+    }
+}
+
+/// Everything the two read commands need before they can answer.
+struct HistoryRead {
+    root: PathBuf,
+    conn: nerve_store::Connection,
+    repo_id: String,
+    ingest: Option<nerve_store::IngestRow>,
+    totals: Option<nerve_store::HistoryTotals>,
+}
+
+/// Open the index, find the repository, and read the ingest record.
+///
+/// `totals` is `Some` only when an ingest record exists, and that pairing is the point. A repository
+/// that has never been synced has zero commits *and* zero of everything else, so reporting the
+/// tallies would answer "this project has no history" to a question nobody asked — the
+/// `nerve gaps` `totals: null` rule, in a second place.
+fn open_history(output: &Output, command: &'static str, path: &Path) -> Result<HistoryRead, i32> {
+    let OpenIndex { root, conn, .. } = open_query_only(path)
+        .map_err(|message| output.failure(command, exit::NO_INDEX, &message))?;
+    let repository = nerve_store::repository(&conn)
+        .map_err(|err| output.failure(command, exit::INTERNAL, &err.to_string()))?;
+    let repo_id = repository
+        .ok_or_else(|| {
+            output.failure(
+                command,
+                exit::NO_INDEX,
+                &format!(
+                    "no repository row at {}; run `nerve init` first",
+                    root.display()
+                ),
+            )
+        })?
+        .repo_id;
+    let ingest = nerve_store::history_ingest(&conn, &repo_id)
+        .map_err(|err| output.failure(command, exit::INTERNAL, &err.to_string()))?;
+    let totals = match &ingest {
+        None => None,
+        Some(_) => Some(
+            nerve_store::history_totals(&conn, &repo_id)
+                .map_err(|err| output.failure(command, exit::INTERNAL, &err.to_string()))?,
+        ),
+    };
+    Ok(HistoryRead {
+        root,
+        conn,
+        repo_id,
+        ingest,
+        totals,
+    })
+}
+
+/// The header both read commands print, and the JSON both of them carry.
+///
+/// Returns `false` when there is no ingest record, in which case the caller has nothing to list:
+/// **no history was ever read here**, which is not the same fact as a history with no commits in it
+/// and must not print the same words.
+fn print_history_header(output: &Output, read: &HistoryRead) -> bool {
+    let Some(ingest) = &read.ingest else {
+        output.line(format!("No history read in {}", read.root.display()));
+        output.line("  history        never synced — `nerve history sync` has not been run here");
+        output.line(String::new());
+        output.line("  This is not \"this repository has no commits\". Nerve has not read its");
+        output.line("  history at all, so it has nothing to say about it — and listing zero");
+        output.line("  commits would report the second as the first. Run `nerve history sync`.");
+        return false;
+    };
+
+    output.line(format!("History in {}", read.root.display()));
+    let totals = read
+        .totals
+        .as_ref()
+        .expect("totals accompany every ingest record");
+    if totals.commits == 0 {
+        // The other half of the distinction above, and the reason both halves are printed
+        // explicitly: this repository *was* read and the walk found no commit to record.
+        output.line(
+            "  history        synced, and it recorded no commits — the walk ran and found none",
+        );
+    } else {
+        output.line(format!(
+            "  history        synced · reader {}",
+            ingest.reader_version
+        ));
+    }
+    output.line(format!(
+        "  head           {}",
+        ingest
+            .head_oid
+            .as_deref()
+            .unwrap_or("(unborn branch at sync time — HEAD named a ref that did not exist yet)")
+    ));
+    output.line(format!(
+        "  commits        {} recorded · {} change row(s) · {} rename hypothesis(es) · {} merge(s)",
+        totals.commits, totals.changes, totals.renames, totals.merges
+    ));
+    output.line(format!(
+        "  changes        {}",
+        totals
+            .changes_by_kind
+            .iter()
+            .map(|(kind, count)| format!("{kind} {count}"))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    ));
+    output.line(format!(
+        "  budget         {} commit(s)",
+        ingest.commit_budget
+    ));
+    output.line(format!(
+        "  stopped        {} — {}",
+        ingest.walk_terminated_by.as_str(),
+        walk_termination_note(ingest.walk_terminated_by)
+    ));
+    print_shallow(output, ingest.shallow, &ingest.shallow_boundary);
+    output.line(format!("  promisor       {}", ingest.promisor));
+    print_refusals(output, &ingest.refusals);
+    if ingest
+        .refusals
+        .contains_key(nerve_index::history::form::SUMMARY_TRUNCATED)
+    {
+        output.line(format!(
+            "                 a summary was cut at {} bytes. The flag is per repository, not per",
+            nerve_index::MAX_SUMMARY_BYTES
+        ));
+        output.line(
+            "                 commit, so a summary of exactly that length cannot be told from a \
+             cut one",
+        );
+    }
+    if earlier_changes_may_exist(ingest) {
+        output.line(
+            "  completeness   this ingest did not read the whole reachable history, so an earlier",
+        );
+        output.line("                 commit may exist and not be recorded below");
+    }
+    true
+}
+
+/// The JSON fields both read commands share.
+fn history_context_json(read: &HistoryRead) -> serde_json::Map<String, serde_json::Value> {
+    let mut object = serde_json::Map::new();
+    object.insert("root".into(), json!(read.root.display().to_string()));
+    // `false` means *nothing was ever read*, and both tallies are `null` in that case rather than
+    // zero, so a script cannot read "never synced" as "no history".
+    object.insert("answerable".into(), json!(read.ingest.is_some()));
+    object.insert(
+        "ingest".into(),
+        read.ingest
+            .as_ref()
+            .map(ingest_json)
+            .unwrap_or(serde_json::Value::Null),
+    );
+    object.insert(
+        "totals".into(),
+        read.totals
+            .as_ref()
+            .map(history_totals_json)
+            .unwrap_or(serde_json::Value::Null),
+    );
+    object.insert(
+        "commits_total".into(),
+        read.totals
+            .as_ref()
+            .map(|totals| json!(totals.commits))
+            .unwrap_or(serde_json::Value::Null),
+    );
+    object.insert(
+        "earlier_changes_may_exist".into(),
+        read.ingest
+            .as_ref()
+            .map(|ingest| json!(earlier_changes_may_exist(ingest)))
+            .unwrap_or(serde_json::Value::Null),
+    );
+    object
+}
+
+/// Emit one read command's answer, with the shared context merged into it.
+fn history_object(
+    output: &Output,
+    command: &'static str,
+    read: &HistoryRead,
+    extra: serde_json::Value,
+) {
+    let mut object = serde_json::Map::new();
+    object.insert("command".into(), json!(command));
+    object.insert("ok".into(), json!(true));
+    object.insert("exit_code".into(), json!(exit::SUCCESS));
+    for (key, value) in history_context_json(read) {
+        object.insert(key, value);
+    }
+    if let serde_json::Value::Object(fields) = extra {
+        for (key, value) in fields {
+            object.insert(key, value);
+        }
+    }
+    output.object(serde_json::Value::Object(object));
+}
+
+fn run_history_log(output: &Output, path: &Path, limit: usize, offset: usize) -> i32 {
+    if limit == 0 {
+        return output.failure("history log", exit::USAGE, "--limit must be at least 1");
+    }
+    let read = match open_history(output, "history log", path) {
+        Ok(read) => read,
+        Err(code) => return code,
+    };
+
+    let commits = if read.ingest.is_none() {
+        Vec::new()
+    } else {
+        match nerve_store::commit_log(&read.conn, &read.repo_id, limit, offset) {
+            Ok(commits) => commits,
+            Err(err) => return output.failure("history log", exit::INTERNAL, &err.to_string()),
+        }
+    };
+    // The change *count* per commit, not the rows: `log` answers "what happened", and the count is
+    // only readable next to `changes_enumerated`, which is why they are printed together.
+    let mut counts = Vec::with_capacity(commits.len());
+    for commit in &commits {
+        match nerve_store::changes_for_commit(&read.conn, &read.repo_id, &commit.commit_oid) {
+            Ok(changes) => counts.push(changes.len()),
+            Err(err) => return output.failure("history log", exit::INTERNAL, &err.to_string()),
+        }
+    }
+
+    let answerable = print_history_header(output, &read);
+    let total = read.totals.as_ref().map(|totals| totals.commits);
+    if answerable {
+        // "20 of 95", never a bare "20": a reader who saw only the returned count would believe
+        // that was all there was.
+        output.line(format!(
+            "  listed         {} of {} recorded commit(s), from offset {}",
+            commits.len(),
+            total.unwrap_or(0),
+            offset
+        ));
+    }
+    for (commit, changes) in commits.iter().zip(&counts) {
+        print_commit(output, commit, Some(*changes));
+    }
+
+    history_object(
+        output,
+        "history log",
+        &read,
+        json!({
+            "limit": limit,
+            "offset": offset,
+            "count": commits.len(),
+            "truncated": total.unwrap_or(0) > i64::try_from(offset + commits.len()).unwrap_or(i64::MAX),
+            "commits": commits.iter().zip(&counts)
+                .map(|(commit, changes)| commit_json(commit, Some(*changes)))
+                .collect::<Vec<_>>(),
+        }),
+    );
+    exit::SUCCESS
+}
+
+fn run_history_file(output: &Output, path: &Path, tree_path: &str, limit: usize) -> i32 {
+    if limit == 0 {
+        return output.failure("history file", exit::USAGE, "--limit must be at least 1");
+    }
+    let read = match open_history(output, "history file", path) {
+        Ok(read) => read,
+        Err(code) => return code,
+    };
+
+    // One row past the limit, then cut: this is the only way `truncated` can be a fact rather than
+    // the guess "we got exactly as many as we asked for", which is false whenever the answer ends
+    // on the boundary. There is no total for a path the way `commit_log` has one.
+    let probe = limit.saturating_add(1);
+    let (mut commits, mut renames) = if read.ingest.is_none() {
+        (Vec::new(), Vec::new())
+    } else {
+        let commits =
+            match nerve_store::commits_touching_path(&read.conn, &read.repo_id, tree_path, probe) {
+                Ok(commits) => commits,
+                Err(err) => {
+                    return output.failure("history file", exit::INTERNAL, &err.to_string())
+                }
+            };
+        let renames =
+            match nerve_store::renames_touching_path(&read.conn, &read.repo_id, tree_path, probe) {
+                Ok(renames) => renames,
+                Err(err) => {
+                    return output.failure("history file", exit::INTERNAL, &err.to_string())
+                }
+            };
+        (commits, renames)
+    };
+    let commits_truncated = commits.len() > limit;
+    let renames_truncated = renames.len() > limit;
+    commits.truncate(limit);
+    renames.truncate(limit);
+
+    let answerable = print_history_header(output, &read);
+    if answerable {
+        output.line(format!(
+            "  path           {} (matched as a tree recorded it, not resolved on disk)",
+            inert_text(tree_path)
+        ));
+        output.line(format!(
+            "  changed_in     {} commit(s){}, limit {limit}",
+            commits.len(),
+            if commits_truncated {
+                " and more beyond the limit"
+            } else {
+                ""
+            }
+        ));
+        output.line(format!(
+            "  renames        {} hypothesis(es) naming this path{}",
+            renames.len(),
+            if renames_truncated {
+                " and more beyond the limit"
+            } else {
+                ""
+            }
+        ));
+        if commits.is_empty() && renames.is_empty() {
+            output.line(String::new());
+            output.line("  No recorded commit changed this path. That is an answer, not a");
+            output.line("  failure: the path may never have existed under this spelling, or it");
+            output.line("  may be recorded under another one — a tree records the bytes it was");
+            output.line("  given, and this argument is matched against those bytes literally.");
+            if read.ingest.as_ref().is_some_and(earlier_changes_may_exist) {
+                output.line("  This ingest also did not read the whole reachable history, so a");
+                output.line("  change to this path may exist in a commit it never saw.");
+            }
+        }
+    }
+
+    for (commit, change) in &commits {
+        print_commit(output, commit, None);
+        output.line(format!(
+            "  change         {} · blob {} ← {} · mode {} ← {}",
+            change.change_kind.as_str(),
+            change.blob_oid.as_deref().unwrap_or("(none — deleted)"),
+            change.prev_blob_oid.as_deref().unwrap_or("(none — added)"),
+            change
+                .mode
+                .map(|mode| format!("{mode:o}"))
+                .unwrap_or_else(|| "-".to_string()),
+            change
+                .prev_mode
+                .map(|mode| format!("{mode:o}"))
+                .unwrap_or_else(|| "-".to_string()),
+        ));
+    }
+    for rename in &renames {
+        output.line(String::new());
+        output.line("rename hypothesis — not a fact, and there is no score");
+        output.line(format!("  commit         {}", rename.commit_oid));
+        output.line(format!(
+            "  from           {}",
+            inert_text(&rename.from_path)
+        ));
+        output.line(format!("  to             {}", inert_text(&rename.to_path)));
+        output.line(format!(
+            "  evidence       {} · blob {}",
+            rename.evidence.as_str(),
+            rename.blob_oid
+        ));
+        output.line(format!(
+            "  ambiguity      {} — {}",
+            rename.ambiguity.as_str(),
+            ambiguity_note(rename.ambiguity)
+        ));
+    }
+
+    history_object(
+        output,
+        "history file",
+        &read,
+        json!({
+            "path": inert_text(tree_path),
+            "path_is_as_recorded_in_a_tree": true,
+            "limit": limit,
+            "count": commits.len(),
+            "truncated": commits_truncated,
+            "commits": commits.iter().map(|(commit, change)| {
+                let mut object = commit_json(commit, None);
+                if let Some(fields) = object.as_object_mut() {
+                    fields.insert("change".into(), change_json(change));
+                }
+                object
+            }).collect::<Vec<_>>(),
+            "renames_count": renames.len(),
+            "renames_truncated": renames_truncated,
+            "renames": renames.iter().map(rename_json).collect::<Vec<_>>(),
+        }),
+    );
     exit::SUCCESS
 }
 

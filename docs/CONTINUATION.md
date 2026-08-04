@@ -8,12 +8,12 @@
 
 | | |
 |---|---|
-| **Last slice commit** | **Slice 12b ingestion** (`848af72`). Row 12b is in three commits: `4b0d926` storage/schema v6, `848af72` the ingestion engine, plus fixtures at `24da6ef`. `git log --oneline -20` is authoritative. |
-| **Branch** | `main` · **Working tree** clean at `848af72` |
+| **Last slice commit** | **Slice 12b complete.** Four commits: fixtures `24da6ef`, storage/schema v6 `4b0d926`, ingestion engine `848af72`, CLI + report + roadmap here. `git log --oneline -20` is authoritative. |
+| **Branch** | `main` · **Working tree** clean |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 12b storage + ingestion.** Rows 1–11, 12a are complete; **12b lacks only its CLI surface**. |
-| **Next action** | **`nerve history sync` / `log` / `file`** — the CLI over the committed engine. Then: extend `scripts/final_acceptance.sh` (its `history` "NOT BUILT" block at line 128 becomes a real check — the script already prints `PASS … update this script` when the command appears), mark row 12b complete, write its report, then **12c** (derived questions + API + MCP + UI, and the six new vocabularies need UI glosses), 13, 14, the UI completion pass, real-world validation, acceptance expansion, the clean-checkout audit. |
-| **Roadmap status** | **INCOMPLETE.** Rows 1–11 and 12a are done. **12b, 12c, 13, 14, the UI completion pass, the real-world validation run, the acceptance expansion and the final audit are not.** `scripts/final_acceptance.sh` passes 35/35, which gates what is built and is **not** a claim of completeness. |
+| **Last completed slice** | **Slice 12b** — Git history ingestion. **Rows 1–11, 12a and 12b are complete.** Report: `docs/reports/slice-12b-report.md`. |
+| **Next action** | **Slice 12c** — the derived historical questions and every remaining surface. Needs its own plan. Scope is already fixed by 12b's plan §1.1: first/last observed **for path-bearing kinds only** (`File`/`Directory`/`Module`/`Document` — a symbol has `PathRole::None` and `git_change` is path-keyed, so the symbol form is refused), similarity renames as a **second** `RenameEvidence` value never blended with `exact_content`, change frequency, labelled co-change, state-to-state diff, `/api/history*`, MCP tools, the UI view, and **glosses for all six new vocabularies**. Two things to do first, both cheap: extend `scripts/final_acceptance.sh` (its `history` block now prints `PASS … update this script`), and note that `crates/nerve-server/tests/layering.rs` now scans `src/` dynamically so a new `mcp/history.rs` cannot evade the no-SQL, no-graph-walker, loopback-only and no-CORS scans. Then 13, 14, the UI completion pass, real-world validation, acceptance expansion, the clean-checkout audit. |
+| **Roadmap status** | **INCOMPLETE.** Rows 1–11, 12a and 12b are done. **12c, 13, 14, the UI completion pass, the real-world validation run, the acceptance expansion and the final audit are not.** The acceptance script gates what is built and is **not** a claim of completeness. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
@@ -45,17 +45,28 @@ no repair. See `docs/reports/restart-recovery-report.md`.
   cannot be a self-test subject for a symbol query; `apps/nerve-web` is what lets this repository index
   itself at all.
 
-## Verification state at `848af72` (Slice 12b ingestion)
+## Verification state at the Slice 12b completion commit
 
 Run by the orchestrator, not quoted from an implementer.
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace --no-fail-fast                   → 1391 passed, 0 failed, 2 ignored
+cargo test --workspace --no-fail-fast                   → 1402 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
+python3 -m unittest discover -s tracers/python          → 115 tests, OK (skipped=1)
+scripts/final_acceptance.sh                             → 36 passed, 0 failed, 0 skipped
 Cargo.lock                                              → 106 packages, unchanged by row 12b
 ```
+
+`scripts/trace_python_e2e.sh` was **not** re-run this session — it needs pytest in a venv, which needs
+network. Last green at `2d68d58`, and row 12b touched nothing it exercises.
+
+The acceptance script moved 35 → 36 on its own: its `history` check prints
+`PASS — nerve history exists — update this script` now that the command is real. **That is the update
+it is asking for**, and it is the first item of the acceptance expansion. Two other lines there are
+now stale: it still reports "the frontend is frozen and owned by the user", which the lifted freeze
+contradicts.
 
 **Schema is at v6.** Four new tables — `git_commit`, `git_change`, `git_rename_hypothesis`,
 `git_history_ingest` — and no change to any existing table, so `entity_fts`, `symbols_total`,

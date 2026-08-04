@@ -534,3 +534,114 @@ for it.
 
 No styling, no layout, no navigation, no views. **There is no trace view, no run picker and no test-to-
 symbol view** — building them is the user's call.
+
+---
+
+## Entry 6 — Slice 12b: history, and the difference between "nothing" and "nothing visible"
+
+Three new CLI commands and a new schema version. **No new HTTP endpoint, no new MCP tool and no new
+view** — 12c adds those. This entry exists so that when they arrive, the display language is already
+decided, because every mistake available in this data is a wording mistake.
+
+### What landed
+
+Schema **v6**: four new tables — `git_commit`, `git_change`, `git_rename_hypothesis`,
+`git_history_ingest`. **No new entity kind and no new relation.** A commit is not an entity and a
+change is not an assertion; the reasoning is in `docs/plans/slice-12b-historical-model.md` §3. That
+means `EntityKind`, `Relation` and `EvidenceSourceType` are unchanged, so nothing in
+`apps/nerve-web/src/api/types.ts` or `vocab.ts` needed an edit and **zero frontend lines changed in
+this slice.**
+
+Six new closed vocabularies in `nerve-core`, none of them mirrored into the UI yet:
+
+| vocabulary | values |
+|---|---|
+| `ChangeKind` | `added` `modified` `deleted` `mode_changed` |
+| `ParentCompleteness` | `root` `shallow_boundary` `parents_available` `parents_missing` `parents_unverifiable` |
+| `ChangesEnumerated` | `enumerated` `merge_not_enumerated` `parent_unavailable` `refused` |
+| `WalkTermination` | `exhausted` `commit_budget` `shallow_boundary` `missing_object` `refused` |
+| `RenameEvidence` | `exact_content` (12c adds `similar_content`) |
+| `RenameAmbiguity` | `unique` `many_from` `many_to` `many_both` |
+
+**12c must add a gloss for every member of all six**, and `ui_vocabulary.rs` will *not* catch the
+omission the way it caught Slice 5d-iii's, because nothing in the TypeScript references these names
+yet. Adding the mirror is what turns the test back on.
+
+### The commands
+
+```
+nerve history sync [--max-commits N] [--with-identity] [PATH]
+nerve history log  [--limit N] [--offset N] [--path P]
+nerve history file <PATH_AS_A_TREE_RECORDED_IT> [--limit N] [--path P]
+```
+
+`sync` is the only one that opens `.git`; `log` and `file` read the database with
+`PRAGMA query_only=ON` and are asserted to leave it byte-identical. `sync` exits **3**
+(`PARTIAL_INDEX`) when anything was refused and **0** otherwise, so a caller can tell a complete read
+from a partial one; **10** for `--max-commits` above the clamp of 5000, which is refused rather than
+silently honoured.
+
+`history file` takes a path **as a tree recorded it**, matched literally against stored bytes. It is
+not a selector and is not resolved on disk, because a historical path may not exist any more —
+`discover::canonical_child` canonicalizes and so cannot validate one. The JSON says so in
+`path_is_as_recorded_in_a_tree`.
+
+### Six things a view must get right
+
+**1. `answerable: false` is not zero commits.** `history log` on a repository that has never been
+synced returns `answerable: false`, and that is a different answer from a sync that ran and found
+nothing. The CLI spells it out — *"This is not 'this repository has no commits'… listing zero commits
+would report the second as the first"* — and a view must too. This is `gaps`' `totals: null` problem
+for the third time on this project.
+
+**2. Never say history begins anywhere unless the backend says it may.** Every commit row carries
+`may_claim_history_begins_here`, computed by
+`ParentCompleteness::may_claim_history_begins_here()`, which is true for `root` and nothing else. **Do
+not re-derive it from `parent_completeness` in TypeScript.** That would be a second copy of the one
+rule this slice exists to protect, free to drift from the first. Approved wording for a boundary:
+*"earliest commit visible in this checkout; history before this point is unavailable to this
+repository."* Forbidden: *"the project's history begins here"*, *"first commit"*, *"beginning of
+history"*.
+
+**3. Zero changes has four different meanings, and `changes_enumerated` is which.** `enumerated` — the
+diff ran and nothing changed. `merge_not_enumerated` — a merge has several parents and a change is
+only defined against one, so none were enumerated. `parent_unavailable` — the parent tree could not be
+read. `refused` — a bound or a malformed tree stopped it. A view rendering "0 changes" without the
+reason commits the defect the column exists to prevent, and the two most common cases mean opposite
+things: one is *"nothing happened"* and the other is *"we cannot see what happened."*
+
+**4. Three reasons history stops, and only one is the repository's fault.** `walk_terminated_by` is
+`shallow_boundary` (declared, expected), `missing_object` (a fault), or **`commit_budget` — Nerve
+stopped, and the repository has more history than this ingest read.** The third is Nerve's own doing
+and must never be drawn as a property of the repository. `earlier_changes_may_exist` on `log` and
+`file` is the single boolean a view should key its caveat on.
+
+**5. A rename is a hypothesis and `ambiguity` is not decoration.** `unique` `many_from` `many_to`
+`many_both`. When one deleted blob matches several added paths, **every pairing is recorded and none is
+promoted** — identical content is common (an empty file, a copied licence header, a barrel re-export).
+There is no score, no threshold and no tie-break, and a view must not invent one or render a
+`many_to` pairing the way it renders a `unique` one.
+
+**6. Refusals are per-ingest; the per-commit record is not.** `refused` and `refused_total` describe
+*the ingest that produced them*, so a re-sync with no tree work correctly reports zero. The durable
+record is `changes_enumerated == 'refused'` on the commit. A view showing only the ingest tally would
+let a clean re-run erase the evidence of a hostile tree.
+
+### And one thing the data is not
+
+**A commit summary is the first free-form repository *prose* Nerve stores.** Until now the only
+repository-derived strings in the graph were *names* — identifiers, headings, paths — which is why
+Slice 8a found the real T7 vector was a Markdown heading and not body text. A summary is body text: it
+is attacker-influencable in any repository that takes contributions, it is bounded at 512 bytes, first
+line only, lossy UTF-8, and **it is data on every surface**. Render it as text, never as HTML.
+`fixtures/history-hostile` carries `<script>alert(1)</script>` and an instruction-shaped summary so
+the escaping has something real to catch.
+
+Truncation is flagged **per repository, not per commit** — v6 has no per-commit column — so from
+`git_commit.summary` alone a 512-byte summary cannot be told from a cut one. The flag is
+`summaries_truncated` on the ingest. Say "one or more summaries were cut", not "this one was".
+
+### Frontend edits the backend made
+
+**None.** No entity kind, no relation and no evidence source type was added, so nothing the interface
+mirrors changed. The six vocabularies above are 12c's work.
