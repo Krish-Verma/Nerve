@@ -29,8 +29,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use nerve_core::vocab::{
-    ChangeKind, ChangesEnumerated, ParentCompleteness, RenameAmbiguity, RenameEvidence,
-    WalkTermination,
+    ChangeKind, ChangesEnumerated, FirstObservedKind, HistoryFreshness, ParentCompleteness,
+    RenameAmbiguity, RenameEvidence, WalkTermination,
 };
 use nerve_index::gitobj::{self, ObjectStore, Oid};
 use nerve_index::history::{self, ingest_history, HistoryOptions, HistoryOutcome};
@@ -1678,5 +1678,658 @@ fn a_refusal_from_the_object_reader_reaches_the_caller_with_its_form() {
     assert_eq!(
         nerve_index::IndexError::NotAFile(PathBuf::from("/x")).git_object_form(),
         None
+    );
+}
+
+// ---- Slice 12c-i: the derived questions, against Git's own answers -----------------------------
+//
+// The derived queries live in `nerve-store` and are unit-tested there against rows a writer put in.
+// These tests are the other half: the same functions over a **real fixture**, with every expectation
+// read out of `inventory.json` — Git's answer for that fixture's committed bytes — rather than out of
+// a hand-written list. A derived answer that agreed with Nerve's own reader and with nothing else
+// would pass the store tests and fail here.
+
+/// Every path the fixture's commits touch, with `(commit oid, committer epoch, change kind)`.
+///
+/// Read out of the inventory, so the expectations below are Git's `diff-tree` answer rather than a
+/// second reading of the same code under test.
+fn inventory_changes_by_path(
+    inventory: &serde_json::Value,
+) -> BTreeMap<String, Vec<(String, i64, String)>> {
+    let mut out: BTreeMap<String, Vec<(String, i64, String)>> = BTreeMap::new();
+    for commit in inventory["commits"].as_array().expect("commits") {
+        let oid = commit["oid"].as_str().expect("an oid").to_string();
+        let epoch = commit["committer_epoch"].as_i64().expect("an epoch");
+        let Some(changes) = commit["changes"].as_array() else {
+            continue;
+        };
+        for change in changes {
+            out.entry(change["path"].as_str().expect("a path").to_string())
+                .or_default()
+                .push((
+                    oid.clone(),
+                    epoch,
+                    change["change_kind"].as_str().expect("a kind").to_string(),
+                ));
+        }
+    }
+    out
+}
+
+/// The earliest and latest dated change to a path, with the `commit_oid ASC` tiebreak the store
+/// promises, computed here from the inventory.
+fn earliest_and_latest(
+    touched: &[(String, i64, String)],
+) -> (&(String, i64, String), &(String, i64, String)) {
+    let earliest = touched
+        .iter()
+        .min_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)))
+        .expect("at least one change");
+    let latest = touched
+        .iter()
+        .min_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)))
+        .expect("at least one change");
+    (earliest, latest)
+}
+
+fn store_conn(root: &Path) -> (nerve_store::Connection, String) {
+    let conn = common::open_db(root);
+    let repo = nerve_store::repository(&conn)
+        .unwrap()
+        .expect("init records the repository row")
+        .repo_id;
+    (conn, repo)
+}
+
+/// **First and last observed, path by path, against Git's own diff of the fixture.**
+///
+/// `history-basic` is the fixture for this because its clock is deliberately out of order:
+/// `delete src/app/util.rs` is committed at 1767258000 while its two *descendants* are committed at
+/// 1767240000 and 1767243600. So the earliest and latest dated change to a path are not the same
+/// thing as its first and last ancestor, and any implementation that assumed they were has to say so
+/// here rather than in a comment.
+#[test]
+fn first_and_last_observed_match_gits_diff_of_the_basic_fixture() {
+    let (_dir, root) = common::history_fixture("history-basic");
+    ingest(&root, &HistoryOptions::default());
+    let inventory = common::history_inventory("history-basic");
+    let (conn, repo) = store_conn(&root);
+
+    let by_path = inventory_changes_by_path(&inventory);
+    assert!(
+        by_path.len() >= 7,
+        "the fixture must carry several paths, found {}",
+        by_path.len()
+    );
+
+    let mut created = 0;
+    let mut earliest_visible = 0;
+    for (path, touched) in &by_path {
+        let observed = nerve_store::first_last_observed(&conn, &repo, path).unwrap();
+        let (expected_first, expected_last) = earliest_and_latest(touched);
+
+        let first = observed
+            .first
+            .as_ref()
+            .unwrap_or_else(|| panic!("{path} has {} recorded changes", touched.len()));
+        let last = observed.last.as_ref().expect("a latest change");
+        assert_eq!(first.commit.commit_oid, expected_first.0, "{path} first");
+        assert_eq!(
+            first.change.change_kind.as_str(),
+            expected_first.2,
+            "{path} first kind"
+        );
+        assert_eq!(last.commit.commit_oid, expected_last.0, "{path} last");
+        assert_eq!(
+            last.change.change_kind.as_str(),
+            expected_last.2,
+            "{path} last kind"
+        );
+        assert_eq!(
+            observed.changes_in_visible_history,
+            touched.len() as i64,
+            "{path} change count"
+        );
+
+        // The whole reachable history was read and the repository is not shallow, so nothing above
+        // any of these is hidden — and the reason field says so by being absent rather than by
+        // naming one of the four.
+        assert!(!observed.earlier_changes_may_exist, "{path}");
+        assert_eq!(observed.earlier_history_unavailable, None, "{path}");
+
+        // Creation is permitted where Git's own answer shows exactly one addition and the whole
+        // history is readable — not only where the commit is parentless.
+        //
+        // The rule used to require a parentless commit, and on this fixture that made
+        // `src/app/extra.rs` an `EarliestVisibleChange`. Git says it was added at `522afd34`, whose
+        // parent `68cde314` is present and recorded, so Nerve could see that the path did not exist
+        // one commit earlier and reported "the first change I can see, and history above may be
+        // hidden" anyway. That is a disagreement with the authoritative oracle, and per
+        // `docs/plans/slice-15-real-world-validation.md` §3.4 a disagreement with `git` is a Nerve
+        // defect with no "both reasonable" case.
+        let additions = touched.iter().filter(|change| change.2 == "added").count() as i64;
+        assert_eq!(
+            observed.additions_recorded, additions,
+            "{path}: the addition count must be Git's, not Nerve's"
+        );
+        let expected_kind = if expected_first.2 == "added" && additions == 1 {
+            created += 1;
+            FirstObservedKind::CreatedInVisibleHistory
+        } else {
+            earliest_visible += 1;
+            FirstObservedKind::EarliestVisibleChange
+        };
+        assert_eq!(observed.kind, expected_kind, "{path}");
+        assert_eq!(
+            observed.may_claim_created,
+            expected_kind.may_claim_created()
+        );
+    }
+
+    // Every path in this fixture was added exactly once and the whole history is readable, so every
+    // one of them is a creation — which is Git's answer, read out of `inventory.json` above rather
+    // than restated here.
+    assert_eq!(
+        created,
+        by_path.len(),
+        "complete history plus one addition each means every path is a creation"
+    );
+    assert_eq!(
+        earliest_visible, 0,
+        "nothing in a complete history with single additions may hedge"
+    );
+
+    // `src/app/extra.rs` is the path the old rule got wrong: added one commit *after* the root, and
+    // therefore not parentless.
+    let extra = nerve_store::first_last_observed(&conn, &repo, "src/app/extra.rs").unwrap();
+    assert_eq!(extra.kind, FirstObservedKind::CreatedInVisibleHistory);
+    assert!(extra.may_claim_created);
+    assert!(
+        !extra
+            .first
+            .as_ref()
+            .unwrap()
+            .commit
+            .parent_completeness
+            .may_claim_history_begins_here(),
+        "the point of this path: the claim holds although the commit is not parentless"
+    );
+
+    // And `earliest_visible` staying zero above is not this test failing to reach that branch — it is
+    // a property of *complete* history. Re-ingest the same fixture under a bounded budget and the
+    // same fixture hedges, naming Nerve's own boundary rather than the repository's.
+    {
+        let (_bounded_dir, bounded_root) = common::history_fixture("history-basic");
+        // Two commits, not one: with a single commit the only recorded commit's parent is outside the
+        // budget, so its changes are not enumerated and there are no change rows to classify at all.
+        // Two gives the newest commit a present parent, so `docs/guide/deep/notes.md` carries its
+        // `modified` row — Git's answer for `fdb677a9`, read from `inventory.json` above.
+        ingest(
+            &bounded_root,
+            &HistoryOptions {
+                max_commits: 2,
+                ..HistoryOptions::default()
+            },
+        );
+        let (bounded_conn, bounded_repo) = store_conn(&bounded_root);
+        let hedged = nerve_store::first_last_observed(
+            &bounded_conn,
+            &bounded_repo,
+            "docs/guide/deep/notes.md",
+        )
+        .unwrap();
+        assert_eq!(
+            hedged.changes_in_visible_history, 1,
+            "the bounded ingest must still have a row to classify, or this proves nothing"
+        );
+        assert_eq!(hedged.kind, FirstObservedKind::EarliestVisibleChange);
+        assert!(!hedged.may_claim_created);
+        assert_eq!(
+            hedged.earlier_history_unavailable,
+            Some(nerve_store::EarlierHistoryUnavailable::CommitBudget),
+            "Nerve's own bound, never reported as a property of the repository"
+        );
+        assert!(hedged.earlier_changes_may_exist);
+    }
+
+    // A path no tree ever recorded, with no index in this fixture: Nerve cannot consult the current
+    // tree at all, and says which of the three silences that is.
+    let unknown = nerve_store::first_last_observed(&conn, &repo, "src/never.rs").unwrap();
+    assert_eq!(unknown.kind, FirstObservedKind::CurrentTreeUnknown);
+    assert!(
+        !unknown.current_tree.index_exists,
+        "`history sync` needs no index, which is exactly why this value exists"
+    );
+    assert_eq!(unknown.current_tree.entities_at_path, 0);
+    assert_eq!(unknown.changes_in_visible_history, 0);
+    assert_eq!(
+        common::count(&conn, "entity"),
+        0,
+        "the tally that makes `current_tree_unknown` a measurement"
+    );
+}
+
+/// **A bounded ingest produces `present_before_visible_history`, and names Nerve's own boundary.**
+///
+/// The three zero-change answers differ only in what the entity table says, so this is the one test
+/// that indexes the fixture's working tree. `README.md` is materialised on disk and indexed, and the
+/// history is read with a budget of one commit — which HEAD's own change set does not touch. The path
+/// therefore exists now and has no change row, which is the *common* case on a shallow clone and the
+/// value whose absence would report every unchanged file as having no history.
+#[test]
+fn a_bounded_ingest_reports_a_current_file_as_present_before_visible_history() {
+    let (_dir, root) = common::history_fixture("history-basic");
+    let inventory = common::history_inventory("history-basic");
+    let head = inventory["head_oid"].as_str().expect("a head oid");
+    let head_changes: BTreeSet<String> = inventory["commits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|commit| commit["oid"] == serde_json::json!(head))
+        .and_then(|commit| commit["changes"].as_array())
+        .expect("HEAD's changes")
+        .iter()
+        .map(|change| change["path"].as_str().expect("a path").to_string())
+        .collect();
+    assert!(
+        !head_changes.contains("README.md"),
+        "HEAD must not touch README.md, or the budget below proves nothing"
+    );
+
+    // Materialise a current tree. The committed fixture ships only `gitdir/`, so the working tree is
+    // Nerve's to create — and the entity table is the only thing that may be asked what is in it.
+    std::fs::write(root.join("README.md"), "# fixture\n\ncurrent tree\n").unwrap();
+    nerve_index::index_repository(&root).expect("indexing an otherwise empty tree succeeds");
+
+    let outcome = ingest(
+        &root,
+        &HistoryOptions {
+            max_commits: 1,
+            ..HistoryOptions::default()
+        },
+    );
+    assert_eq!(outcome.commits_recorded, 1);
+    assert_eq!(
+        outcome.walk_terminated_by,
+        WalkTermination::CommitBudget,
+        "Nerve's own boundary, not the repository's"
+    );
+    assert!(!outcome.shallow);
+
+    let (conn, repo) = store_conn(&root);
+    assert!(
+        common::count(&conn, "entity") > 0,
+        "the current tree must be knowable, or every answer below is `current_tree_unknown`"
+    );
+
+    let present = nerve_store::first_last_observed(&conn, &repo, "README.md").unwrap();
+    assert_eq!(present.kind, FirstObservedKind::PresentBeforeVisibleHistory);
+    assert!(!present.may_claim_created);
+    assert_eq!(present.changes_in_visible_history, 0);
+    assert!(present.current_tree.index_exists);
+    assert!(present.current_tree.entities_at_path > 0);
+    assert_eq!(
+        present.earlier_history_unavailable,
+        Some(nerve_store::EarlierHistoryUnavailable::CommitBudget),
+        "a bounded read must blame itself rather than the repository"
+    );
+    assert!(present.earlier_changes_may_exist);
+
+    // The control in the same database: a path HEAD *did* touch has a change row, so the zero above
+    // is a property of the budget rather than of the ingest having written nothing.
+    let touched = head_changes.iter().next().expect("HEAD changed something");
+    let seen = nerve_store::first_last_observed(&conn, &repo, touched).unwrap();
+    assert_eq!(seen.kind, FirstObservedKind::EarliestVisibleChange);
+    assert_eq!(seen.changes_in_visible_history, 1);
+
+    // And a path that is neither in the current tree nor in visible history is a fourth answer, not
+    // the same one as `README.md`.
+    let absent = nerve_store::first_last_observed(&conn, &repo, "src/app/util.rs").unwrap();
+    assert_eq!(absent.kind, FirstObservedKind::AbsentFromVisibleHistory);
+    assert!(absent.current_tree.index_exists);
+    assert_eq!(absent.current_tree.entities_at_path, 0);
+    assert_ne!(absent.kind, present.kind);
+}
+
+/// **On the shallow fixture no path may claim creation, and the boundary is named as the reason.**
+///
+/// The gate of the historical model, one query layer up from where 12b enforced it. Every path Git's
+/// diff records for this fixture is asserted, not a sample, and the count is asserted first so an
+/// empty path set cannot satisfy the negatives.
+#[test]
+fn no_path_on_the_shallow_fixture_may_claim_it_was_created() {
+    let (_dir, root) = common::history_fixture("history-shallow");
+    let outcome = ingest(&root, &HistoryOptions::default());
+    assert!(outcome.shallow, "the fixture declares a boundary");
+    let inventory = common::history_inventory("history-shallow");
+    let (conn, repo) = store_conn(&root);
+
+    let by_path = inventory_changes_by_path(&inventory);
+    assert!(
+        !by_path.is_empty(),
+        "no paths to check; the assertions below would prove nothing"
+    );
+    for path in by_path.keys() {
+        let observed = nerve_store::first_last_observed(&conn, &repo, path).unwrap();
+        assert!(observed.first.is_some(), "{path} must have a change row");
+        assert_eq!(
+            observed.kind,
+            FirstObservedKind::EarliestVisibleChange,
+            "{path} on a shallow clone"
+        );
+        assert!(
+            !observed.may_claim_created,
+            "{path} claimed it was created in a checkout that cannot see its own history"
+        );
+        assert_eq!(
+            observed.earlier_history_unavailable,
+            Some(nerve_store::EarlierHistoryUnavailable::ShallowBoundary),
+            "{path} must name the boundary as the reason history stops above it"
+        );
+        assert!(observed.earlier_changes_may_exist, "{path}");
+        assert!(observed.shallow, "{path}");
+    }
+
+    // The boundary tree holds more paths than the visible commits changed, which is why
+    // `present_before_visible_history` exists at all. Those paths are not in the entity table here —
+    // this fixture is never indexed — so they answer `current_tree_unknown` rather than either
+    // neighbour, and that is the sixth value doing its job.
+    let boundary_paths = inventory["shallow"]["boundary_tree_path_counts"]
+        .as_object()
+        .and_then(|counts| counts.values().next())
+        .and_then(serde_json::Value::as_i64)
+        .expect("the inventory counts the boundary tree's paths");
+    assert!(boundary_paths >= 1);
+    let unseen =
+        nerve_store::first_last_observed(&conn, &repo, "src/absent-from-history.txt").unwrap();
+    assert_eq!(unseen.kind, FirstObservedKind::CurrentTreeUnknown);
+}
+
+/// **The state diff over a real fixture, where an ancestry range and a time range disagree.**
+///
+/// `history-basic`'s `delete src/app/util.rs` is committed *later* than both of its descendants, so
+/// the ancestry range `a7ae542a..HEAD` holds three commits while the committer-time window between
+/// the same two endpoints holds two. Both numbers are computed from the inventory here, and the
+/// assertion that they differ comes before the assertion about the store — otherwise the test would
+/// pass against a time-range implementation on a fixture whose clock happened to be monotonic.
+#[test]
+fn the_state_diff_over_a_fixture_is_an_ancestry_range_and_not_a_time_window() {
+    let (_dir, root) = common::history_fixture("history-basic");
+    ingest(&root, &HistoryOptions::default());
+    let inventory = common::history_inventory("history-basic");
+    let (conn, repo) = store_conn(&root);
+
+    let order = json_strings(&inventory["commit_order"]);
+    let from = order[2].clone();
+    let to = inventory["head_oid"].as_str().expect("a head").to_string();
+    let epoch = |oid: &str| -> i64 {
+        inventory["commits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|commit| commit["oid"] == serde_json::json!(oid))
+            .and_then(|commit| commit["committer_epoch"].as_i64())
+            .expect("an epoch")
+    };
+
+    // Git's own topological order: everything after `from` up to and including `to`.
+    let expected: BTreeSet<String> = order[3..].iter().cloned().collect();
+    let by_time: BTreeSet<String> = inventory["commits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|commit| {
+            let at = commit["committer_epoch"].as_i64().expect("an epoch");
+            at > epoch(&from) && at <= epoch(&to)
+        })
+        .map(|commit| commit["oid"].as_str().expect("an oid").to_string())
+        .collect();
+    assert_ne!(
+        expected, by_time,
+        "this fixture's clock is monotonic between the endpoints, so the test proves nothing"
+    );
+    assert_eq!(expected.len(), 3);
+    assert_eq!(by_time.len(), 2);
+
+    let nerve_store::StateDiff::Diff(report) = nerve_store::state_diff(
+        &conn,
+        &repo,
+        &from,
+        &to,
+        nerve_store::StateDiffLimits::DEFAULT,
+    )
+    .unwrap() else {
+        panic!("{from} is an ancestor of {to} in this fixture");
+    };
+    let got: BTreeSet<String> = report
+        .commits
+        .iter()
+        .map(|commit| commit.commit_oid.clone())
+        .collect();
+    assert_eq!(got, expected, "the range must be the ancestry range");
+    assert_eq!(report.merges_in_range, 0, "this fixture has no merges");
+    assert!(report.ancestry_incomplete_at.is_none());
+    assert!(!report.commits_truncated);
+
+    // A recorded commit that is not an ancestor is a refusal, not an empty diff. `from` is an
+    // ancestor of `to`, so reversing the endpoints is exactly that case.
+    assert!(matches!(
+        nerve_store::state_diff(
+            &conn,
+            &repo,
+            &to,
+            &from,
+            nerve_store::StateDiffLimits::DEFAULT
+        )
+        .unwrap(),
+        nerve_store::StateDiff::NotAnAncestor { .. }
+    ));
+}
+
+/// The merge fixture's diff carries its merges, so few changes does not read as little changed.
+#[test]
+fn the_state_diff_over_the_merge_fixture_counts_its_merges() {
+    let (_dir, root) = common::history_fixture("history-merge");
+    ingest(&root, &HistoryOptions::default());
+    let inventory = common::history_inventory("history-merge");
+    let (conn, repo) = store_conn(&root);
+
+    let order = json_strings(&inventory["commit_order"]);
+    let expected_merges = inventory["commits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|commit| commit["is_merge"] == serde_json::json!(true))
+        .count();
+    assert!(
+        expected_merges >= 1,
+        "the merge fixture must contain a merge"
+    );
+
+    let root_oid = order.first().expect("an oldest commit").clone();
+    let head = inventory["head_oid"].as_str().expect("a head").to_string();
+    let nerve_store::StateDiff::Diff(report) = nerve_store::state_diff(
+        &conn,
+        &repo,
+        &root_oid,
+        &head,
+        nerve_store::StateDiffLimits::DEFAULT,
+    )
+    .unwrap() else {
+        panic!("the oldest commit is an ancestor of HEAD");
+    };
+    assert_eq!(report.commits_in_range, order.len() - 1);
+    assert_eq!(report.merges_in_range, expected_merges);
+    assert_eq!(
+        report.changes_enumerated[&ChangesEnumerated::MergeNotEnumerated],
+        expected_merges,
+        "a merge's silence is stored, so the diff can say why it carries no rows for it"
+    );
+    assert!(
+        report.changes.len() < report.commits_in_range * 2,
+        "a merge-heavy range carries few change rows, which is what the tally above explains"
+    );
+}
+
+/// Change frequency and co-change against the fixture's own diff, ordering included.
+#[test]
+fn change_frequency_and_cochange_match_the_fixtures_own_counts() {
+    let (_dir, root) = common::history_fixture("history-basic");
+    ingest(&root, &HistoryOptions::default());
+    let inventory = common::history_inventory("history-basic");
+    let (conn, repo) = store_conn(&root);
+
+    let by_path = inventory_changes_by_path(&inventory);
+    let mut expected: Vec<(String, i64)> = by_path
+        .iter()
+        .map(|(path, touched)| {
+            let commits: BTreeSet<&String> = touched.iter().map(|(oid, _, _)| oid).collect();
+            (path.clone(), commits.len() as i64)
+        })
+        .collect();
+    expected.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    assert!(
+        expected.iter().filter(|(_, count)| *count > 1).count() >= 2,
+        "the fixture must have paths that changed more than once"
+    );
+    let ties = expected
+        .iter()
+        .filter(|(_, count)| *count == expected[0].1)
+        .count();
+    assert!(
+        ties > 1,
+        "the fixture must tie on count, or the explicit tiebreak is untested"
+    );
+
+    let frequency = nerve_store::change_frequency(&conn, &repo, 100).unwrap();
+    assert_eq!(
+        frequency
+            .rows
+            .iter()
+            .map(|row| (row.path.clone(), row.commits))
+            .collect::<Vec<_>>(),
+        expected,
+        "count desc then path asc, against Git's own diff"
+    );
+    assert_eq!(frequency.paths_total, expected.len() as i64);
+    assert!(!frequency.truncated);
+    assert_eq!(frequency.merges, 0);
+
+    // The bound, with the true total surviving it.
+    let cut = nerve_store::change_frequency(&conn, &repo, 2).unwrap();
+    assert_eq!(cut.rows.len(), 2);
+    assert!(cut.truncated);
+    assert_eq!(cut.paths_total, expected.len() as i64);
+
+    // Co-change: every pair of paths that share a commit, counted from the inventory.
+    let mut pairs: BTreeMap<(String, String), i64> = BTreeMap::new();
+    for commit in inventory["commits"].as_array().unwrap() {
+        let Some(changes) = commit["changes"].as_array() else {
+            continue;
+        };
+        let paths: Vec<&str> = changes
+            .iter()
+            .map(|change| change["path"].as_str().expect("a path"))
+            .collect();
+        for (index, left) in paths.iter().enumerate() {
+            for right in &paths[index + 1..] {
+                let key = if left < right {
+                    (left.to_string(), right.to_string())
+                } else {
+                    (right.to_string(), left.to_string())
+                };
+                *pairs.entry(key).or_insert(0) += 1;
+            }
+        }
+    }
+    assert!(
+        pairs.len() >= 6,
+        "the fixture must have a commit touching several paths, found {} pairs",
+        pairs.len()
+    );
+
+    let cochange = nerve_store::cochange(&conn, &repo, None, 1_000).unwrap();
+    assert_eq!(cochange.pairs_total, pairs.len() as i64);
+    assert_eq!(
+        cochange
+            .rows
+            .iter()
+            .map(|row| (
+                (row.path_a.clone(), row.path_b.clone()),
+                row.cochange_observations
+            ))
+            .collect::<BTreeMap<(String, String), i64>>(),
+        pairs,
+        "a shared-commit count, pair by pair, against Git's own diff"
+    );
+    // Ordering: count desc, then both paths asc.
+    let mut previous: Option<(i64, &str, &str)> = None;
+    for row in &cochange.rows {
+        if let Some((count, path_a, path_b)) = previous {
+            let ordered = count > row.cochange_observations
+                || (count == row.cochange_observations
+                    && (path_a, path_b) < (row.path_a.as_str(), row.path_b.as_str()));
+            assert!(ordered, "co-change order is not total at {row:?}");
+        }
+        previous = Some((
+            row.cochange_observations,
+            row.path_a.as_str(),
+            row.path_b.as_str(),
+        ));
+    }
+    assert!(cochange.disclaimer.contains("not a dependency"));
+
+    // No `Relation` and no assertion: co-change exists only in the response. This fixture is never
+    // indexed, so the graph is empty — and that is asserted rather than assumed.
+    assert_eq!(common::count(&conn, "assertion"), 0);
+    assert_eq!(common::count(&conn, "observation"), 0);
+    assert!(common::count(&conn, "git_change") > 0);
+}
+
+/// **Freshness over a real fixture: unverifiable until the tree is indexed, then current.**
+///
+/// `history sync` needs no index, so a synced-but-unindexed repository has no current commit to
+/// compare against — and reporting that as `current` is how a truncated sweep becomes a clean bill of
+/// health. Indexing the same tree supplies the comparison, and moving HEAD afterwards makes it stale.
+#[test]
+fn history_freshness_over_a_fixture_is_unverifiable_before_it_is_current() {
+    let (_dir, root) = common::history_fixture("history-basic");
+    let inventory = common::history_inventory("history-basic");
+    let head = inventory["head_oid"].as_str().expect("a head oid");
+    ingest(&root, &HistoryOptions::default());
+    let (conn, repo) = store_conn(&root);
+
+    let before = nerve_store::history_freshness(&conn, &repo).unwrap();
+    assert_eq!(
+        before.verdict,
+        HistoryFreshness::Unverifiable,
+        "no index, so no current commit; this is not `current`"
+    );
+    assert_ne!(before.verdict, HistoryFreshness::Current);
+    assert_eq!(before.ingest_head_oid.as_deref(), Some(head));
+    assert_eq!(before.current_git_commit, None);
+    drop(conn);
+
+    // Index the tree. The pipeline records `repository_state.git_commit` from `.git/HEAD`, which is
+    // the same commit the ingest walked from.
+    std::fs::write(root.join("README.md"), "# fixture\n").unwrap();
+    nerve_index::index_repository(&root).expect("indexing succeeds");
+
+    let (conn, repo) = store_conn(&root);
+    let after = nerve_store::history_freshness(&conn, &repo).unwrap();
+    assert_eq!(after.current_git_commit.as_deref(), Some(head));
+    assert_eq!(after.verdict, HistoryFreshness::Current);
+    assert!(after.current_state_id.is_some());
+    assert_eq!(after.ingest_head_oid, after.current_git_commit);
+
+    // All three of these verdicts are different answers, and the fourth — no ingest at all — is the
+    // one a repository that has never been synced gives.
+    let (_other_dir, other) = common::history_fixture("history-basic");
+    let (other_conn, other_repo) = store_conn(&other);
+    assert_eq!(
+        nerve_store::history_freshness(&other_conn, &other_repo)
+            .unwrap()
+            .verdict,
+        HistoryFreshness::NoHistoryIngested
     );
 }

@@ -16,6 +16,9 @@ use serde_json::json;
 use nerve_core::Relation;
 use nerve_index::config;
 use nerve_index::error::IndexError;
+// The one history *judgment* — whether an earlier change may exist and not be recorded — is derived
+// in `nerve-store` beside `IngestRow` and never here. See the note above `print_refusals`.
+use nerve_store::earlier_changes_may_exist;
 
 /// Command-line surface.
 #[derive(Debug, Parser)]
@@ -2147,114 +2150,18 @@ fn open_query_only(path: &Path) -> Result<OpenIndex, String> {
     Ok(opened)
 }
 
-/// Why the walk stopped, in words, with Nerve's own boundary kept apart from the repository's.
-fn walk_termination_note(value: nerve_core::WalkTermination) -> &'static str {
-    match value {
-        nerve_core::WalkTermination::Exhausted => {
-            "every commit reachable from the walked tips was read"
-        }
-        // The distinction this whole surface exists for. `commit_budget` is Nerve declining to read
-        // further; it says nothing whatever about how far the repository goes back.
-        nerve_core::WalkTermination::CommitBudget => {
-            "Nerve stopped at its own commit budget, so the repository has more history than this \
-             ingest read"
-        }
-        nerve_core::WalkTermination::ShallowBoundary => {
-            "the walk reached a declared shallow boundary; history before it is unavailable to \
-             this repository"
-        }
-        nerve_core::WalkTermination::MissingObject => {
-            "an object the walk needed was absent; a fault in this repository, not a declared \
-             boundary"
-        }
-        nerve_core::WalkTermination::Refused => "a bound refused an object the walk needed",
-    }
-}
-
-/// What a commit's parent situation means, and whether "history begins here" may be said of it.
-///
-/// The permission is [`nerve_core::ParentCompleteness::may_claim_history_begins_here`] and is never
-/// re-derived here. That method is true for `root` and nothing else; a `matches!` written out again
-/// in the renderer would be a second copy of the one rule this slice exists to get right, free to
-/// drift from the first.
-fn availability_note(value: nerve_core::ParentCompleteness) -> &'static str {
-    if value.may_claim_history_begins_here() {
-        return "no parents in the commit object and no shallow boundary, so the project's history \
-                begins here";
-    }
-    match value {
-        nerve_core::ParentCompleteness::Root => unreachable!("root is the permitted case above"),
-        nerve_core::ParentCompleteness::ParentsAvailable => {
-            "every parent this commit names is present"
-        }
-        nerve_core::ParentCompleteness::ShallowBoundary => {
-            "earliest commit visible in this checkout; history before this point is unavailable \
-             to this repository"
-        }
-        nerve_core::ParentCompleteness::ParentsMissing => {
-            "a parent this commit names is absent and was not declared absent, a fault in this \
-             repository rather than a shallow boundary; history before this point is unavailable \
-             to this repository"
-        }
-        nerve_core::ParentCompleteness::ParentsUnverifiable => {
-            "a parent this commit names is absent and Nerve could not establish whether the \
-             absence was declared, so neither shallow nor corrupt may be asserted"
-        }
-    }
-}
-
-/// Which of the four silences a commit with no change rows is.
-///
-/// Printing a count without this is the defect plan §6.1 exists to prevent: `0` alone reads as
-/// "nothing changed" in all four cases, and only one of them means that.
-fn enumeration_note(value: nerve_core::ChangesEnumerated) -> &'static str {
-    match value {
-        nerve_core::ChangesEnumerated::Enumerated => {
-            "the diff against the single parent ran to completion, so a zero here really is \
-             \"nothing changed\""
-        }
-        nerve_core::ChangesEnumerated::MergeNotEnumerated => {
-            "a merge has several parents and a change is only defined against one, so none were \
-             enumerated — not an empty commit"
-        }
-        nerve_core::ChangesEnumerated::ParentUnavailable => {
-            "the parent tree could not be read, so nothing was enumerated — not an empty commit"
-        }
-        nerve_core::ChangesEnumerated::Refused => {
-            "a bound refused this commit's diff, so nothing was enumerated — see the refusals above"
-        }
-    }
-}
-
-/// How ambiguous a rename hypothesis is, in words. There is no score, and none is invented.
-fn ambiguity_note(value: nerve_core::RenameAmbiguity) -> &'static str {
-    match value {
-        nerve_core::RenameAmbiguity::Unique => {
-            "one deleted path, one added path, one blob — the only unambiguous shape, and still a \
-             hypothesis"
-        }
-        nerve_core::RenameAmbiguity::ManyFrom => {
-            "several deleted paths share this blob — every pairing is recorded and none is promoted"
-        }
-        nerve_core::RenameAmbiguity::ManyTo => {
-            "several added paths share this blob — every pairing is recorded and none is promoted"
-        }
-        nerve_core::RenameAmbiguity::ManyBoth => {
-            "several paths on both sides share this blob — every pairing is recorded and none is \
-             promoted"
-        }
-    }
-}
-
-/// Whether this ingest could not see the whole reachable history, so an earlier change may exist
-/// and not be recorded.
-///
-/// One derived boolean rather than four conditions restated at each call site, and it is on the
-/// output so a consumer never has to re-derive it either. `shallow` is included even when the walk
-/// ended `exhausted`: the walk exhausted what it could *see*.
-fn earlier_changes_may_exist(ingest: &nerve_store::IngestRow) -> bool {
-    ingest.shallow || ingest.walk_terminated_by != nerve_core::WalkTermination::Exhausted
-}
+// The four wording functions and the one interpretation predicate that used to live here were
+// hoisted in Slice 12c-i. The notes are now inherent methods on the vocabularies they render —
+// `WalkTermination::note`, `ParentCompleteness::note`, `ChangesEnumerated::note`,
+// `RenameAmbiguity::note` — so `ParentCompleteness::note` sits beside
+// `may_claim_history_begins_here`, the rule and its rendering in one place. The judgment
+// `earlier_changes_may_exist` moved to `nerve-store` beside `IngestRow`, because it takes one and
+// `nerve-core` does not depend on `nerve-store`.
+//
+// This surface keeps **formatting only**. `crates/nerve-cli/tests/history_wording.rs` scans this
+// crate and `nerve-server` for the note prose and fails if a copy returns, because a surface that
+// re-words `shallow_boundary` slightly is a surface that has restated the invariant Slice 12b exists
+// to protect.
 
 /// The refusal map, printed by form with its counts. Never summarised into one number alone.
 fn print_refusals(output: &Output, refusals: &std::collections::BTreeMap<String, usize>) {
@@ -2290,7 +2197,7 @@ fn ingest_json(ingest: &nerve_store::IngestRow) -> serde_json::Value {
         "commits_recorded": ingest.commits_recorded,
         "commit_budget": ingest.commit_budget,
         "walk_terminated_by": ingest.walk_terminated_by.as_str(),
-        "walk_terminated_note": walk_termination_note(ingest.walk_terminated_by),
+        "walk_terminated_note": ingest.walk_terminated_by.note(),
         "shallow": ingest.shallow,
         "shallow_boundary": ingest.shallow_boundary,
         "promisor": ingest.promisor,
@@ -2327,14 +2234,14 @@ fn commit_json(commit: &nerve_store::CommitRow, changes: Option<usize>) -> serde
         "parent_oids": commit.parent_oids,
         "is_merge": commit.is_merge,
         "parent_completeness": commit.parent_completeness.as_str(),
-        "parent_completeness_note": availability_note(commit.parent_completeness),
+        "parent_completeness_note": commit.parent_completeness.note(),
         // Carried rather than left to the consumer: a UI that re-derived this from the string
         // would be the second copy of the rule, and the one likeliest to say "history begins here"
         // about a shallow boundary.
         "may_claim_history_begins_here":
             commit.parent_completeness.may_claim_history_begins_here(),
         "changes_enumerated": commit.changes_enumerated.as_str(),
-        "changes_enumerated_note": enumeration_note(commit.changes_enumerated),
+        "changes_enumerated_note": commit.changes_enumerated.note(),
         "changes": changes,
         "author_time": commit.author_time,
         "author_tz": commit.author_tz,
@@ -2366,7 +2273,7 @@ fn rename_json(rename: &nerve_store::RenameRow) -> serde_json::Value {
         "evidence": rename.evidence.as_str(),
         "blob_oid": rename.blob_oid,
         "ambiguity": rename.ambiguity.as_str(),
-        "ambiguity_note": ambiguity_note(rename.ambiguity),
+        "ambiguity_note": rename.ambiguity.note(),
         // Stated on every row rather than in a footnote a consumer can drop. Git records no rename;
         // this is a proposal drawn from identical content, and there is no score to sort it by.
         "is_hypothesis": true,
@@ -2405,7 +2312,7 @@ fn print_commit(output: &Output, commit: &nerve_store::CommitRow, changes: Optio
     output.line(format!(
         "  availability   {} — {}",
         commit.parent_completeness.as_str(),
-        availability_note(commit.parent_completeness)
+        commit.parent_completeness.note()
     ));
     match changes {
         Some(count) => output.line(format!(
@@ -2419,7 +2326,7 @@ fn print_commit(output: &Output, commit: &nerve_store::CommitRow, changes: Optio
     }
     output.line(format!(
         "                 {}",
-        enumeration_note(commit.changes_enumerated)
+        commit.changes_enumerated.note()
     ));
     if let Some(ident) = &commit.author_ident {
         output.line(format!("  author         {}", inert_text(ident)));
@@ -2504,7 +2411,7 @@ fn run_history_sync(
             output.line(format!(
                 "  stopped        {} — {}",
                 outcome.walk_terminated_by.as_str(),
-                walk_termination_note(outcome.walk_terminated_by)
+                outcome.walk_terminated_by.note()
             ));
             print_shallow(output, outcome.shallow, &outcome.shallow_boundary);
             output.line(format!("  promisor       {}", outcome.promisor));
@@ -2559,7 +2466,7 @@ fn run_history_sync(
                 "changes_written": outcome.changes_written,
                 "renames_written": outcome.renames_written,
                 "walk_terminated_by": outcome.walk_terminated_by.as_str(),
-                "walk_terminated_note": walk_termination_note(outcome.walk_terminated_by),
+                "walk_terminated_note": outcome.walk_terminated_by.note(),
                 "shallow": outcome.shallow,
                 "shallow_boundary": outcome.shallow_boundary,
                 "promisor": outcome.promisor,
@@ -2717,7 +2624,7 @@ fn print_history_header(output: &Output, read: &HistoryRead) -> bool {
     output.line(format!(
         "  stopped        {} — {}",
         ingest.walk_terminated_by.as_str(),
-        walk_termination_note(ingest.walk_terminated_by)
+        ingest.walk_terminated_by.note()
     ));
     print_shallow(output, ingest.shallow, &ingest.shallow_boundary);
     output.line(format!("  promisor       {}", ingest.promisor));
@@ -2972,7 +2879,7 @@ fn run_history_file(output: &Output, path: &Path, tree_path: &str, limit: usize)
         output.line(format!(
             "  ambiguity      {} — {}",
             rename.ambiguity.as_str(),
-            ambiguity_note(rename.ambiguity)
+            rename.ambiguity.note()
         ));
     }
 

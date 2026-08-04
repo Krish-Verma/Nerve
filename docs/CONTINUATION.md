@@ -12,11 +12,89 @@
 | **Branch** | `main` · **Working tree** clean |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
 | **Last completed slice** | **Slice 12b** — Git history ingestion. **Rows 1–11, 12a and 12b are complete.** Report: `docs/reports/slice-12b-report.md`. |
-| **Next action** | **Slice 12c** — the derived historical questions and every remaining surface. Needs its own plan. Scope is already fixed by 12b's plan §1.1: first/last observed **for path-bearing kinds only** (`File`/`Directory`/`Module`/`Document` — a symbol has `PathRole::None` and `git_change` is path-keyed, so the symbol form is refused), similarity renames as a **second** `RenameEvidence` value never blended with `exact_content`, change frequency, labelled co-change, state-to-state diff, `/api/history*`, MCP tools, the UI view, and **glosses for all six new vocabularies**. Two things to do first, both cheap: extend `scripts/final_acceptance.sh` (its `history` block now prints `PASS … update this script`), and note that `crates/nerve-server/tests/layering.rs` now scans `src/` dynamically so a new `mcp/history.rs` cannot evade the no-SQL, no-graph-walker, loopback-only and no-CORS scans. Then 13, 14, the UI completion pass, real-world validation, acceptance expansion, the clean-checkout audit. |
+| **Next action (2026-08-04, later session)** | **Slice 12c-i-b — the CLI family.** 12c now has a committed plan (`352c824`, corrected `2b558af` and again by the implementation, see the 12c section below) that splits it into **four** sub-slices, and **12c-i-a is done**. Next is 12c-i-b: extend `nerve history file` with the first/last block, add `history diff` / `frequency` / `cochange` / `availability`, and make probes 11 and 12 testable (a symbol selector refused *as a refusal*; `canonical_child` never on a historical path). Then 12c-ii similarity renames, 12c-iii API + MCP, 12c-iv UI + six glosses. Rows 13 and 14 have committed plans too (`307b029`, `eb68830`) — read them before planning, they settle several questions. |
+| **Superseded next action, kept for the record** | **Slice 12c** — the derived historical questions and every remaining surface. Needs its own plan. Scope is already fixed by 12b's plan §1.1: first/last observed **for path-bearing kinds only** (`File`/`Directory`/`Module`/`Document` — a symbol has `PathRole::None` and `git_change` is path-keyed, so the symbol form is refused), similarity renames as a **second** `RenameEvidence` value never blended with `exact_content`, change frequency, labelled co-change, state-to-state diff, `/api/history*`, MCP tools, the UI view, and **glosses for all six new vocabularies**. Two things to do first, both cheap: extend `scripts/final_acceptance.sh` (its `history` block now prints `PASS … update this script`), and note that `crates/nerve-server/tests/layering.rs` now scans `src/` dynamically so a new `mcp/history.rs` cannot evade the no-SQL, no-graph-walker, loopback-only and no-CORS scans. Then 13, 14, the UI completion pass, real-world validation, acceptance expansion, the clean-checkout audit. |
 | **Roadmap status** | **INCOMPLETE.** Rows 1–11, 12a and 12b are done. **12c, 13, 14, the UI completion pass, the real-world validation run, the acceptance expansion and the final audit are not.** The acceptance script gates what is built and is **not** a claim of completeness. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
+
+## Slice 12c-i-a — the derived queries, the wording hoist, and a defect in the plan itself
+
+**Delegation is available again.** A cheap read-only dispatch succeeded on 2026-08-04, and a full
+implementation subagent completed 12c-i-a. The three spend-limit kills recorded under "Environment
+notes" were **not** in force. It cost **109 minutes** for one sub-slice, which is the number to plan
+around: at that rate the remaining rows are many sessions of work, not one.
+
+**What landed:** `FirstObservedKind` (six values) and `HistoryFreshness` (four) in `nerve-core`; the
+four wording functions hoisted out of the CLI binary as inherent methods, `earlier_changes_may_exist`
+hoisted to `nerve-store` beside `IngestRow`; five derived queries (`first_last_observed`, `state_diff`,
+`change_frequency`, `cochange`, `history_freshness`); and `crates/nerve-cli/tests/history_wording.rs`,
+a byte-level recursive source scan proving the notes exist in exactly one crate — with sentinels
+**generated from the vocabulary** rather than retyped, and a planted file containing invalid UTF-8 and a
+NUL to prove the scan cannot be blinded the way `grep` was in `82a6ff3`.
+
+**Schema unchanged at v6.** No table, column, index or migration. `Cargo.lock` unchanged at 106.
+
+### The defect the orchestrator found, and Git settled it
+
+The plan's rule for "may say created" was `Added` **and** `ParentCompleteness::may_claim_history_begins_here()`,
+which is true only for a root commit. So a file added in commit #5 of a **complete** clone returned
+`EarliestVisibleChange` — a kind meaning *history above may be hidden* — while the two fields beside it
+reported `earlier_history_unavailable: None` and `earlier_changes_may_exist: false`. Three statements,
+two of them contradicting the third, and every surface would have rendered the kind.
+
+`fixtures/history-basic/inventory.json` carries **Git's own answers**: seven paths, each with exactly
+**one** addition, `src/app/extra.rs` added at `522afd34` whose parent `68cde314` is present, not shallow.
+Nerve was disagreeing with `git` about a fact `git` is authoritative on — and per the validation plan's
+new §3.4 that has no "both reasonable" reading, unlike a `tsc` disagreement.
+
+**Three corrections, each preserving something the implementer was right about:**
+
+1. **`additions_recorded == 1` replaces the parentless requirement.** The implementer's reason for
+   conservatism was real and nearly lost: `first` is ordered by `committer_time`, which a rebase or a
+   fabricated clock reorders freely, so *"the earliest dated change is an addition"* does not establish
+   it is the topologically first. Exactly one recorded addition does, **without consulting a clock** —
+   a path created, deleted and re-created records two. A path with two additions is
+   `EarliestVisibleChange` **although nothing is hidden**: the refusal there is about *ordering*, not
+   availability, and that is asserted.
+2. **`ParentCompleteness::Root` returns "nothing hidden" immediately.** The orchestrator's own first fix
+   short-circuited on `ingest.shallow` for every path, and **an existing control assertion caught it**:
+   a shallow clone can contain a genuine root, one branch fetched whole and another truncated. That
+   exposed a scope error in the orchestrator's own "coherence invariant" — `earlier_history_unavailable`
+   is **path-level**, `earlier_changes_may_exist` is **repository-level**, and they may only be required
+   to agree when the anchor has *available parents*. The narrow equivalence is asserted over every
+   `WalkTermination`; the independence is asserted for the root anchor.
+3. **`EarlierHistoryUnavailable::WalkRefused` added (five values, was four).** `WalkTermination::Refused`
+   mapped to *no reason* beside a `true` boolean — two derivations of one question disagreeing, which is
+   the duplication this slice exists to remove, occurring inside the slice.
+
+**One residual, carried as data not prose:** a merge enumerates no changes (12b §6.2), so a path created
+inside one merge and deleted inside another has both events unrecorded and a later addition can look
+like a first one. The response carries `merges_in_repository` so a consumer can see whether the
+possibility exists at all. Zero removes it entirely.
+
+### Four findings the implementer proved against the plan — do not relitigate
+
+1. **§4.1's four reasons do not always apply.** A path added in a non-root commit of an exhausted,
+   non-shallow walk has no reason among them. `Option<EarlierHistoryUnavailable>`, with `None` meaning
+   *nothing is hidden* rather than *no reason could be found* — which is only coherent because of
+   correction 1 above.
+2. **`state_diff` needed a fourth refusal, `WalkBudgetExhausted`.** A budget-stopped walk has not
+   established that `from` is not an ancestor, so `not_an_ancestor` there would state an unmeasured
+   property of the repository. It also covers the subtler case: a truncated ancestors-of-`from` prune
+   set would silently **widen** the range, which is a wrong answer rather than a short one.
+3. **The plan's claim that the ordering tiebreak is load-bearing is FALSE on this schema, and it was
+   measured.** `EXPLAIN QUERY PLAN` shows `idx_git_change_path` with **no** temp b-tree for `GROUP BY`,
+   so groups already arrive in `path` order; deleting `path ASC` left **every** ordering assertion
+   passing. Both clauses are kept (a query plan is not part of the contract) and the guard is a
+   **source-level** test, labelled as one, because a behavioural test for this cannot exist while the
+   index does.
+4. **Acceptance criterion 3 was unsatisfiable**, the same shape as 12b's criterion 5a.
+   `fixtures/history-shallow/inventory.json` records `boundary_tree_path_counts = 2` and its single
+   visible commit `68f9ab1f` **modifies both**, so no path in that fixture has zero change rows and it
+   cannot produce `PresentBeforeVisibleHistory`. Produced from `history-basic` under a commit budget
+   plus a materialised working tree and a real index run instead.
 
 ## What exists now that did not before, and where it is
 
@@ -44,6 +122,36 @@ no repair. See `docs/reports/restart-recovery-report.md`.
 - **Nerve does not index Rust**, which the acceptance script learned the hard way. Its own Rust source
   cannot be a self-test subject for a symbol query; `apps/nerve-web` is what lets this repository index
   itself at all.
+
+## Verification state at the Slice 12c-i-a completion commit
+
+Run by the orchestrator, not quoted from the implementer — and the implementer's own figure of 1428 was
+**independently reproduced** before the orchestrator's corrections were applied, which is the first time
+on this project a subagent's count has matched on the first rerun.
+
+```
+cargo fmt --all -- --check                              → clean
+cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
+cargo test --workspace --no-fail-fast                   → 1429 passed, 0 failed, 2 ignored (47 targets)
+Cargo.lock                                              → 106 packages, unchanged
+SCHEMA_VERSION                                          → 6, schema.rs byte-unchanged
+no_network.rs / no_subprocess.rs / no_tracer_reference.rs → byte-unchanged
+```
+
+Test-count history: 1402 (12b) → 1428 (12c-i-a implementer) → **1429** (orchestrator corrections).
+
+**Three orchestrator mutation probes on the corrections, each failing a named test for the intended
+reason** — the file was saved with `cp` and restored, and the diffstat confirmed byte-identical after:
+
+| probe | fails |
+|---|---|
+| `ParentCompleteness::Root` falls through instead of returning `None` | `a_path_level_reason_and_a_repository_level_boolean_agree_only_where_they_should` (`left: Some(CommitBudget)`, `right: None`) **and** `an_addition_at_a_shallow_boundary_is_not_a_creation` (`left: EarliestVisibleChange`, `right: CreatedInVisibleHistory`) |
+| creation no longer requires `additions_recorded == 1` | `every_first_observed_kind_is_produced_by_real_rows` (`left: CreatedInVisibleHistory`, `right: EarliestVisibleChange`) |
+| `WalkTermination::Refused` names no reason | `a_path_level_reason_and_a_repository_level_boolean_agree_only_where_they_should`, message *"Refused: below a visible parent, a named reason and the boolean must agree"* |
+
+`scripts/trace_python_e2e.sh` **was not run and cannot be**, verified rather than assumed this session:
+there is no venv anywhere in the repository and the system `python3` has no `pytest`, so the script's own
+`pip install` step needs the network. Last green at `2d68d58`. Do not claim it passes.
 
 ## Verification state at the Slice 12b completion commit
 
@@ -357,7 +465,7 @@ Rows 1–9 are **complete** and no longer listed here; `docs/ROADMAP.md` is auth
 | 13 | Cross-repository contracts |
 | 14 | Human-confirmed memory |
 | **UI completion** | The frontend freeze is **lifted for function** — see the section above. Three verified pre-existing gaps: `Path.tsx` is dead code, `/api/impact` has no UI, `/api/partial-parses` unverified. |
-| **Validation** | Real-world accuracy — plan and corpus already chosen: `docs/plans/slice-15-real-world-validation.md`. **Needs extending, not rewriting**: it predates Python and framework support, so its corpus table is TypeScript-only and its category list has no Python or framework rows. Network access for the corpus checkout was verified available on 2026-08-01 (`git ls-remote` against GitHub succeeds). |
+| **Validation** | Real-world accuracy — plan and corpus already chosen: `docs/plans/slice-15-real-world-validation.md`. ~~**Needs extending**: it predates Python and framework support, so its corpus table is TypeScript-only and its category list has no Python or framework rows.~~ **That was stale and is corrected (`08b6d9b`).** The plan already had a "Python, added after Slices 9a, 9b and 10a landed" section, a Python oracle §3.1, a framework oracle §3.2, trace evidence §3.3, and Python + Framework category lists in §4 with their own FP/FN lines. The **real** gap was rows 12–14, now filled: history/rename/shallow categories, cross-repository contract categories, a **new §3.4 Git-object oracle**, and the recorded decision that row 14 gets **no precision number** because there is no ground truth for whether a human's note is correct. §3.4 matters beyond its section: `git` is not a second implementation to adjudicate against like `tsc` — it reads the same immutable objects, so a history disagreement is a Nerve defect with no "both reasonable" case. That principle already caught a real defect in 12c-i-a. Network verified available again **2026-08-04** (`git ls-remote` against GitHub succeeds). |
 | **Acceptance** | `docs/FINAL-ACCEPTANCE.md` and `scripts/final_acceptance.sh` **exist and pass 35/35** — this row said they did not, and was stale. The CLI has **14** commands (this row said 13, and so did `FINAL-ACCEPTANCE.md:59`; the script itself was right): `init index coverage trace status check doctor search gaps impact path serve mcp why`. `sync`, `affected`, `trace-tests`, `history` and `memory` are not among them — `affected` is *refused* by ADR-0008 and `trace-tests` by the Slice 11 plan, and the script encodes a refusal as a **pass**, not a gap. `history` arrives with Slice 12b and `memory` with row 14, at which point the script's "must not exist" checks for those two become "must exist". **The 35 checks gate what is built and must grow with rows 12b–14 and the UI pass.** |
 | **Final audit** | Clean-checkout build, command matrix, repository matrix, ~24 audit categories. Not started. |
 
@@ -526,6 +634,20 @@ recorded in `docs/plans/slice-15-real-world-validation.md`.
 
 ## Environment notes
 
+- **Delegation was available on 2026-08-04 (later session) and is the recorded state to assume next.**
+  A cheap read-only dispatch succeeded, then a full implementation subagent completed 12c-i-a. **It took
+  109 minutes for one sub-slice**, which is the planning number that matters: the remaining rows (12c-i-b
+  through 12c-iv, 13a–13d, 14, the UI pass, validation, acceptance expansion, the clean-checkout audit)
+  are **many sessions**, not one. Test delegation with one cheap dispatch each session anyway — the
+  spend limit reset silently and could return the same way.
+- **Two background jobs were killed mid-run on 2026-08-04** by an infrastructure event, not a spend
+  limit. Nothing was lost: `fmt`/`clippy` results and a partial test count survived in the scratchpad
+  and the working tree was untouched. The lesson that worked is to **commit each plan as its own
+  commit** rather than batching — six commits were already durable when the kill happened.
+- **Probing is much cheaper per target than per workspace.** A `cargo test --workspace` probe cycle
+  exceeds a two-minute foreground limit and had to be backgrounded; `cargo test -p nerve-store --test
+  history` is seconds once warm. Probe with the narrowest target that can fail, and save/restore the
+  file with `cp` rather than `git checkout` — a checkout would discard the whole uncommitted slice.
 - **An org monthly spend limit killed the Slice 12b CLI agent mid-slice** (2026-08-04) — the **third**
   such kill on this project, after Slice 7b and Slice 9b. Its 1029 surviving lines in
   `crates/nerve-cli/src/main.rs` compiled and smoke-tested correctly, so they were inspected, kept,

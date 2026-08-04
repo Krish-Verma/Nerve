@@ -125,7 +125,7 @@ creation.
 
 | value | condition | may say "created" |
 |---|---|---|
-| `CreatedInVisibleHistory` | earliest change is `Added`, at a commit whose `parent_completeness.may_claim_history_begins_here()` | **yes** |
+| `CreatedInVisibleHistory` | earliest change is `Added`, **nothing is hidden above this path**, and **exactly one addition is recorded** — see §4.2.1 | **yes** |
 | `EarliestVisibleChange` | changes exist; history above is unavailable for one of §4.1's four reasons, which is named | no |
 | `PresentBeforeVisibleHistory` | zero change rows, **and** the path is an indexed entity — so it exists now and was never touched in visible history | no |
 | `AbsentFromVisibleHistory` | zero change rows, the path is not an indexed entity, **and an index exists** | no |
@@ -151,6 +151,53 @@ as a field so a caller knows which it got.
 
 A method `FirstObservedKind::may_claim_created()` is the **only** copy of the permission, exported in
 JSON exactly as `may_claim_history_begins_here` already is, so no surface re-derives it.
+
+### 4.2.1 The creation rule, corrected twice during implementation
+
+This section first said the licence was `may_claim_history_begins_here()` on the earliest change's
+commit — that is, a parentless commit. Two corrections, both found by running the code:
+
+**First: it rests on no date, and that is why the parentless requirement looked right.** `first` is the
+earliest change by `committer_time`, which a rebase or a fabricated clock reorders freely. So
+*"the earliest dated change is an addition"* does **not** establish that it is the topologically first
+change, and a rule resting on it would over-claim. Requiring a parentless commit sidesteps dates
+entirely — nothing precedes a root.
+
+But it also made the value **unreachable for every file outside a root commit** — on a complete clone
+of this repository, 6 files of roughly 420 — while the response simultaneously reported
+`earlier_history_unavailable: None` and `earlier_changes_may_exist: false`. A result kind meaning
+*"history above may be hidden"* beside two fields stating nothing is hidden is not caution; it is a
+third statement contradicting both, and every surface would have rendered it.
+
+The rule that keeps the date-proofing without the incoherence is three facts:
+
+1. the earliest recorded change is an `Added` — so the path was absent from a parent tree Nerve read;
+2. **nothing is hidden above this path** (`earlier_history_unavailable` is `None`);
+3. **exactly one addition is recorded** for the path.
+
+(3) is what replaces the parentless requirement as the clock-independent part: a path created, deleted
+and re-created records **two** additions, so one addition in a history where nothing is hidden means one
+creation, whatever the timestamps say. A path with two additions is `EarliestVisibleChange` even though
+nothing is hidden — the refusal there is about *ordering*, not availability, and that distinction is
+asserted.
+
+**Second: the two questions are at different scopes, and demanding they agree denies a provable
+creation.** `earlier_history_unavailable` is about **this path**; `earlier_changes_may_exist` is about
+**the repository's ingest**. A shallow clone can contain a genuine root — one branch fetched whole,
+another truncated — so a path created at that root has nothing hidden above it while the repository
+still reports that earlier commits may exist. A first draft of the fix short-circuited on
+`ingest.shallow` for every path and broke exactly that case, caught by an existing control assertion.
+
+So: `ParentCompleteness::Root` returns "nothing hidden" immediately; `ParentsAvailable` falls through to
+the repository-wide checks, because a visible parent settles the immediate question and no more. The
+narrow equivalence — that the path-level reason and the repository-level boolean agree **when the anchor
+has available parents** — is asserted over every `WalkTermination`, and the independence is asserted for
+the root anchor.
+
+**One residual, carried as data.** A merge enumerates no changes (12b §6.2), so a path created inside one
+merge and deleted inside another has both events unrecorded, and a later addition can look like a first
+one. The response carries the repository's merge count, so a consumer can see whether the possibility
+exists at all rather than reading it in prose.
 
 ### 4.3 `last_observed` has its own trap, and it is the opposite one
 

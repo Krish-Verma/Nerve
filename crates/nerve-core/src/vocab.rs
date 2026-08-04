@@ -786,6 +786,42 @@ impl ParentCompleteness {
     pub fn may_claim_history_begins_here(self) -> bool {
         matches!(self, ParentCompleteness::Root)
     }
+
+    /// What this commit's parent situation means, and whether "history begins here" may be said.
+    ///
+    /// **The permitted case is taken from [`ParentCompleteness::may_claim_history_begins_here`] and
+    /// is never re-derived here.** That method is true for [`ParentCompleteness::Root`] and nothing
+    /// else; a `matches!` written out again in a renderer would be a second copy of the one rule
+    /// this vocabulary exists to get right, free to drift from the first.
+    ///
+    /// This lives in `nerve-core`, beside the rule it renders, because Slice 12b left it inside the
+    /// CLI binary and three further surfaces were about to each write their own — and a surface that
+    /// re-words [`ParentCompleteness::ShallowBoundary`] slightly is a surface that has restated the
+    /// invariant the historical model exists to protect. `crates/nerve-cli/tests/history_wording.rs`
+    /// enforces the single copy by scanning for this prose outside this crate.
+    pub fn note(self) -> &'static str {
+        if self.may_claim_history_begins_here() {
+            return "no parents in the commit object and no shallow boundary, so the project's \
+                    history begins here";
+        }
+        match self {
+            ParentCompleteness::Root => unreachable!("root is the permitted case above"),
+            ParentCompleteness::ParentsAvailable => "every parent this commit names is present",
+            ParentCompleteness::ShallowBoundary => {
+                "earliest commit visible in this checkout; history before this point is \
+                 unavailable to this repository"
+            }
+            ParentCompleteness::ParentsMissing => {
+                "a parent this commit names is absent and was not declared absent, a fault in \
+                 this repository rather than a shallow boundary; history before this point is \
+                 unavailable to this repository"
+            }
+            ParentCompleteness::ParentsUnverifiable => {
+                "a parent this commit names is absent and Nerve could not establish whether the \
+                 absence was declared, so neither shallow nor corrupt may be asserted"
+            }
+        }
+    }
 }
 
 impl fmt::Display for ParentCompleteness {
@@ -844,6 +880,31 @@ impl ChangesEnumerated {
             ChangesEnumerated::MergeNotEnumerated => "merge_not_enumerated",
             ChangesEnumerated::ParentUnavailable => "parent_unavailable",
             ChangesEnumerated::Refused => "refused",
+        }
+    }
+
+    /// Which of the four silences a commit with no change rows is, in words.
+    ///
+    /// Printing a count without this is the defect the column exists to prevent: `0` alone reads as
+    /// "nothing changed" in all four cases, and only [`ChangesEnumerated::Enumerated`] means that.
+    /// Hoisted out of the CLI in Slice 12c-i so that every surface says the same sentence.
+    pub fn note(self) -> &'static str {
+        match self {
+            ChangesEnumerated::Enumerated => {
+                "the diff against the single parent ran to completion, so a zero here really is \
+                 \"nothing changed\""
+            }
+            ChangesEnumerated::MergeNotEnumerated => {
+                "a merge has several parents and a change is only defined against one, so none \
+                 were enumerated — not an empty commit"
+            }
+            ChangesEnumerated::ParentUnavailable => {
+                "the parent tree could not be read, so nothing was enumerated — not an empty commit"
+            }
+            ChangesEnumerated::Refused => {
+                "a bound refused this commit's diff, so nothing was enumerated — see the refusals \
+                 above"
+            }
         }
     }
 }
@@ -906,6 +967,33 @@ impl WalkTermination {
             WalkTermination::ShallowBoundary => "shallow_boundary",
             WalkTermination::MissingObject => "missing_object",
             WalkTermination::Refused => "refused",
+        }
+    }
+
+    /// Why the walk stopped, in words, with Nerve's own boundary kept apart from the repository's.
+    ///
+    /// Hoisted out of the CLI in Slice 12c-i. [`WalkTermination::CommitBudget`] is the sentence that
+    /// matters: it is Nerve declining to read further and says nothing whatever about how far the
+    /// repository goes back, so a surface that re-worded it could turn a bound into a claim about
+    /// the project's origin.
+    pub fn note(self) -> &'static str {
+        match self {
+            WalkTermination::Exhausted => "every commit reachable from the walked tips was read",
+            // The distinction this whole surface exists for. `commit_budget` is Nerve declining to
+            // read further; it says nothing whatever about how far the repository goes back.
+            WalkTermination::CommitBudget => {
+                "Nerve stopped at its own commit budget, so the repository has more history than \
+                 this ingest read"
+            }
+            WalkTermination::ShallowBoundary => {
+                "the walk reached a declared shallow boundary; history before it is unavailable to \
+                 this repository"
+            }
+            WalkTermination::MissingObject => {
+                "an object the walk needed was absent; a fault in this repository, not a declared \
+                 boundary"
+            }
+            WalkTermination::Refused => "a bound refused an object the walk needed",
         }
     }
 }
@@ -1014,6 +1102,31 @@ impl RenameAmbiguity {
             RenameAmbiguity::ManyBoth => "many_both",
         }
     }
+
+    /// How ambiguous a rename hypothesis is, in words. There is no score, and none is invented.
+    ///
+    /// Hoisted out of the CLI in Slice 12c-i. Every value's sentence says that no pairing is
+    /// promoted, including [`RenameAmbiguity::Unique`], which is still a hypothesis.
+    pub fn note(self) -> &'static str {
+        match self {
+            RenameAmbiguity::Unique => {
+                "one deleted path, one added path, one blob — the only unambiguous shape, and \
+                 still a hypothesis"
+            }
+            RenameAmbiguity::ManyFrom => {
+                "several deleted paths share this blob — every pairing is recorded and none is \
+                 promoted"
+            }
+            RenameAmbiguity::ManyTo => {
+                "several added paths share this blob — every pairing is recorded and none is \
+                 promoted"
+            }
+            RenameAmbiguity::ManyBoth => {
+                "several paths on both sides share this blob — every pairing is recorded and none \
+                 is promoted"
+            }
+        }
+    }
 }
 
 impl fmt::Display for RenameAmbiguity {
@@ -1030,6 +1143,189 @@ impl FromStr for RenameAmbiguity {
             .into_iter()
             .find(|a| a.as_str() == s)
             .ok_or_else(|| NerveError::unknown("RenameAmbiguity", s))
+    }
+}
+
+/// What "when was this path first observed" actually answers — and whether *created* is one of them.
+///
+/// The earliest `git_change` row for a path is **not** when the path was created; it is the earliest
+/// change Nerve can see. Reporting one as the other is the defect
+/// [`ParentCompleteness::may_claim_history_begins_here`] exists to prevent, one query layer up. Six
+/// values, and exactly one of them may be rendered as creation — see
+/// [`FirstObservedKind::may_claim_created`].
+///
+/// The last three values are the ones a happy-path draft omits, and each is a different fact:
+///
+/// - [`FirstObservedKind::PresentBeforeVisibleHistory`] is the **common** case on a shallow clone,
+///   where every unchanged file has zero change rows. Without it the answer is an empty result,
+///   which reads as "this file has no history".
+/// - [`FirstObservedKind::CurrentTreeUnknown`] exists because `nerve history sync` requires only
+///   `nerve init`, not an index. Telling "exists now, never changed" from "does not exist now"
+///   requires knowing the current tree, and the only thing that knows it is the entity table; with
+///   no index Nerve genuinely cannot tell them apart, and collapsing them either way is a claim it
+///   has no evidence for.
+/// - [`FirstObservedKind::NoHistoryIngested`] is the absence of a `git_history_ingest` row, which is
+///   not a failure and not "this project has no history".
+///
+/// Derived in Slice 12c-i. Stored nowhere: this vocabulary exists in responses only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum FirstObservedKind {
+    /// The path was created at the change Nerve can see, and the claim rests on no date.
+    ///
+    /// Three facts, all established by the store layer and none of them a timestamp: the earliest
+    /// recorded change is an **addition**, so the path was absent from the tree it was diffed
+    /// against; **nothing is hidden above it**, which is reachable only when the walk ran out of
+    /// commits rather than stopping at a boundary, a missing object, a refusal or Nerve's own budget;
+    /// and **exactly one addition is recorded** for the path, so it was created once — a path
+    /// created, deleted and re-created records two.
+    ///
+    /// The third fact is what makes this clock-independent, and it exists because the second alone is
+    /// not enough: change order is `committer_time` order, which a rebase or a fabricated clock can
+    /// reorder freely, so "the earliest *dated* change is an addition" does not establish that it is
+    /// the topologically first one.
+    ///
+    /// One residual, reported as data rather than hidden in prose: a path created inside one merge
+    /// and deleted inside another has both events unrecorded, because 12b enumerates no changes for a
+    /// merge. The response carries the repository's merge count so a consumer can see whether that
+    /// possibility exists at all.
+    CreatedInVisibleHistory,
+    /// Changes exist, and this is the earliest one Nerve can see. It may or may not be the first, and
+    /// the response always names which of the five reasons puts history above it out of reach.
+    EarliestVisibleChange,
+    /// Zero change rows, and the path is an indexed entity: it exists now and was never touched in
+    /// visible history.
+    PresentBeforeVisibleHistory,
+    /// Zero change rows, the path is not an indexed entity, and an index exists — so the current
+    /// tree was consulted and does not contain it.
+    AbsentFromVisibleHistory,
+    /// Zero change rows and **no index**, so the current tree could not be consulted at all.
+    CurrentTreeUnknown,
+    /// No `git_history_ingest` row: history has never been read here.
+    NoHistoryIngested,
+}
+
+impl FirstObservedKind {
+    /// Every value, in declaration order.
+    pub const ALL: [FirstObservedKind; 6] = [
+        FirstObservedKind::CreatedInVisibleHistory,
+        FirstObservedKind::EarliestVisibleChange,
+        FirstObservedKind::PresentBeforeVisibleHistory,
+        FirstObservedKind::AbsentFromVisibleHistory,
+        FirstObservedKind::CurrentTreeUnknown,
+        FirstObservedKind::NoHistoryIngested,
+    ];
+
+    /// Canonical lower-case name, carried in every response that reports a first-observed answer.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FirstObservedKind::CreatedInVisibleHistory => "created_in_visible_history",
+            FirstObservedKind::EarliestVisibleChange => "earliest_visible_change",
+            FirstObservedKind::PresentBeforeVisibleHistory => "present_before_visible_history",
+            FirstObservedKind::AbsentFromVisibleHistory => "absent_from_visible_history",
+            FirstObservedKind::CurrentTreeUnknown => "current_tree_unknown",
+            FirstObservedKind::NoHistoryIngested => "no_history_ingested",
+        }
+    }
+
+    /// May a consumer render this answer as *"the path was created then"*?
+    ///
+    /// **True for [`FirstObservedKind::CreatedInVisibleHistory`] and nothing else, and this is the
+    /// only copy of that permission in the workspace.** It is a method rather than prose for the
+    /// same reason [`ParentCompleteness::may_claim_history_begins_here`] is: it is the single claim
+    /// the derived history layer is built to avoid making wrongly, and a seventh value added to
+    /// [`FirstObservedKind::ALL`] without an answer here would inherit whatever a `matches!`
+    /// happened to say — a default, not a decision.
+    ///
+    /// [`FirstObservedKind::EarliestVisibleChange`] answers `false` even when the change is an
+    /// `added` row, because an addition seen above an unavailable parent is an addition *to what
+    /// Nerve can see*: the five reasons visible history stops — a shallow boundary, a missing parent,
+    /// an unverifiable one, Nerve's own commit budget, and Nerve's own refusal of an object the walk
+    /// needed — each mean an earlier row may exist and not be recorded. It also answers `false` for a
+    /// second, clock-shaped reason: a path with more than one recorded addition was created more than
+    /// once, and which addition came first is a question about ancestry that `committer_time` order
+    /// cannot answer.
+    pub fn may_claim_created(self) -> bool {
+        matches!(self, FirstObservedKind::CreatedInVisibleHistory)
+    }
+}
+
+impl fmt::Display for FirstObservedKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for FirstObservedKind {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        FirstObservedKind::ALL
+            .into_iter()
+            .find(|k| k.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("FirstObservedKind", s))
+    }
+}
+
+/// Whether the recorded history still describes the repository's current HEAD.
+///
+/// `git_history_ingest.head_oid` against the current `repository_state.git_commit`. Four verdicts,
+/// and [`HistoryFreshness::Unverifiable`] is not a cosmetic fourth: reporting *unknown* as
+/// *current* is how a truncated sweep becomes a clean bill of health, which is the distinction
+/// `nerve check` already draws between `Freshness::Stale` and `Freshness::Unverified` (Slice 7c-i).
+/// A history whose freshness cannot be established has not been shown to be fresh.
+///
+/// [`HistoryFreshness::Stale`] is a qualification rather than an error. The recorded facts are true
+/// of an older HEAD, which is exactly what makes a `last_observed` answer bounded above by the
+/// ingest rather than by the repository.
+///
+/// Derived in Slice 12c-i. Stored nowhere: this vocabulary exists in responses only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum HistoryFreshness {
+    /// The ingest's HEAD equals the current repository state's commit.
+    Current,
+    /// They differ. The recorded history describes an older HEAD; both oids are named.
+    Stale,
+    /// The current repository state records no commit, so the comparison cannot be made. **Not
+    /// [`HistoryFreshness::Current`].**
+    Unverifiable,
+    /// No `git_history_ingest` row. There is nothing whose freshness could be judged.
+    NoHistoryIngested,
+}
+
+impl HistoryFreshness {
+    /// Every value, in declaration order.
+    pub const ALL: [HistoryFreshness; 4] = [
+        HistoryFreshness::Current,
+        HistoryFreshness::Stale,
+        HistoryFreshness::Unverifiable,
+        HistoryFreshness::NoHistoryIngested,
+    ];
+
+    /// Canonical lower-case name, carried in every response that reports freshness.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HistoryFreshness::Current => "current",
+            HistoryFreshness::Stale => "stale",
+            HistoryFreshness::Unverifiable => "unverifiable",
+            HistoryFreshness::NoHistoryIngested => "no_history_ingested",
+        }
+    }
+}
+
+impl fmt::Display for HistoryFreshness {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for HistoryFreshness {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        HistoryFreshness::ALL
+            .into_iter()
+            .find(|f| f.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("HistoryFreshness", s))
     }
 }
 
@@ -1701,5 +1997,254 @@ mod tests {
             assert!(scored.parse::<RenameEvidence>().is_err());
             assert!(scored.parse::<RenameAmbiguity>().is_err());
         }
+    }
+
+    // ---- Slice 12c-i: the derived historical vocabularies --------------------------------------
+
+    /// Every first-observed value, and the one consequence each is allowed to have.
+    ///
+    /// The third column is the claim this vocabulary exists to control. Exactly one value permits
+    /// *"the path was created then"*, and a value added to [`FirstObservedKind::ALL`] without an
+    /// answer here fails this test rather than inheriting one — the same discipline
+    /// `every_parent_completeness_states_whether_history_may_begin_there` applies one layer down.
+    #[test]
+    fn every_first_observed_kind_states_whether_creation_may_be_claimed() {
+        let pinned: [(FirstObservedKind, &str, bool); 6] = [
+            // The only value that may say "created", and it borrows its licence from
+            // `ParentCompleteness::may_claim_history_begins_here`.
+            (
+                FirstObservedKind::CreatedInVisibleHistory,
+                "created_in_visible_history",
+                true,
+            ),
+            // An `added` row above an unavailable parent is an addition to what Nerve can see.
+            (
+                FirstObservedKind::EarliestVisibleChange,
+                "earliest_visible_change",
+                false,
+            ),
+            // The common case on a shallow clone: in the tree now, never touched in visible history.
+            (
+                FirstObservedKind::PresentBeforeVisibleHistory,
+                "present_before_visible_history",
+                false,
+            ),
+            // Not in the current tree, and the current tree was genuinely consulted.
+            (
+                FirstObservedKind::AbsentFromVisibleHistory,
+                "absent_from_visible_history",
+                false,
+            ),
+            // History syncs without an index, so the current tree may be unknowable.
+            (
+                FirstObservedKind::CurrentTreeUnknown,
+                "current_tree_unknown",
+                false,
+            ),
+            // Absence of an ingest is not absence of history.
+            (
+                FirstObservedKind::NoHistoryIngested,
+                "no_history_ingested",
+                false,
+            ),
+        ];
+
+        for (value, name, may_claim) in pinned {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<FirstObservedKind>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+            assert_eq!(
+                value.may_claim_created(),
+                may_claim,
+                "{name} changed what a consumer may claim about the creation of a path"
+            );
+        }
+
+        // Exhaustiveness. A seventh value cannot be classified by a `_` arm somewhere else, because
+        // it fails here first.
+        let mut listed: Vec<FirstObservedKind> =
+            pinned.iter().map(|(value, _, _)| *value).collect();
+        listed.sort_unstable();
+        let mut all = FirstObservedKind::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a first-observed value was added without stating what it permits"
+        );
+
+        assert_eq!(
+            FirstObservedKind::ALL
+                .iter()
+                .filter(|kind| kind.may_claim_created())
+                .count(),
+            1,
+            "exactly one value may be rendered as creation"
+        );
+
+        // The three pairs whose collapse is the whole class of defect this vocabulary guards.
+        // "Never touched in visible history" is not "absent", and neither is "we could not look".
+        assert_ne!(
+            FirstObservedKind::PresentBeforeVisibleHistory,
+            FirstObservedKind::AbsentFromVisibleHistory
+        );
+        assert_ne!(
+            FirstObservedKind::CurrentTreeUnknown,
+            FirstObservedKind::AbsentFromVisibleHistory
+        );
+        assert_ne!(
+            FirstObservedKind::NoHistoryIngested,
+            FirstObservedKind::AbsentFromVisibleHistory
+        );
+
+        // The names that would restore the ambiguity, and the one that would over-claim.
+        for invented in [
+            "created",
+            "first_commit",
+            "not_in_visible_history",
+            "unknown",
+            "",
+        ] {
+            assert!(
+                invented.parse::<FirstObservedKind>().is_err(),
+                "{invented:?} parsed as a FirstObservedKind"
+            );
+        }
+    }
+
+    /// Four freshness verdicts, and `unverifiable` is not `current`.
+    ///
+    /// Slice 7c-i is an entire slice about the difference between *stale* and *unverified*: reporting
+    /// "unknown" as "current" is how a truncated sweep becomes a clean bill of health. The verdict
+    /// for a repository state with no recorded commit is therefore its own value.
+    #[test]
+    fn every_history_freshness_verdict_keeps_unknown_apart_from_current() {
+        let pinned: [(HistoryFreshness, &str); 4] = [
+            (HistoryFreshness::Current, "current"),
+            (HistoryFreshness::Stale, "stale"),
+            // Not `current`. The comparison could not be made.
+            (HistoryFreshness::Unverifiable, "unverifiable"),
+            (HistoryFreshness::NoHistoryIngested, "no_history_ingested"),
+        ];
+
+        for (value, name) in pinned {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<HistoryFreshness>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+        }
+
+        let mut listed: Vec<HistoryFreshness> = pinned.iter().map(|(value, _)| *value).collect();
+        listed.sort_unstable();
+        let mut all = HistoryFreshness::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a freshness verdict was added to the vocabulary without a name above"
+        );
+
+        assert_ne!(HistoryFreshness::Unverifiable, HistoryFreshness::Current);
+        assert_ne!(HistoryFreshness::Unverifiable, HistoryFreshness::Stale);
+        assert_ne!(
+            HistoryFreshness::NoHistoryIngested,
+            HistoryFreshness::Unverifiable
+        );
+
+        for invented in ["fresh", "unverified", "unknown", "ok", ""] {
+            assert!(
+                invented.parse::<HistoryFreshness>().is_err(),
+                "{invented:?} parsed as a HistoryFreshness"
+            );
+        }
+    }
+
+    /// Every value of the four rendered vocabularies has a note, and no two share one.
+    ///
+    /// The notes were four functions inside the CLI binary until Slice 12c-i moved them here. This
+    /// test is what makes the move a property rather than a tidy-up: a value added without a
+    /// sentence would fall into a `match` arm that does not exist and fail to compile, and a value
+    /// given a *copy* of its neighbour's sentence fails on the uniqueness check below — which is the
+    /// drift the single-copy source scan in `crates/nerve-cli/tests/history_wording.rs` cannot see,
+    /// because a duplicate inside this file is still inside this file.
+    #[test]
+    fn every_rendered_history_value_has_its_own_note() {
+        let mut notes: Vec<&'static str> = Vec::new();
+        for value in WalkTermination::ALL {
+            notes.push(value.note());
+        }
+        for value in ParentCompleteness::ALL {
+            notes.push(value.note());
+        }
+        for value in ChangesEnumerated::ALL {
+            notes.push(value.note());
+        }
+        for value in RenameAmbiguity::ALL {
+            notes.push(value.note());
+        }
+        assert_eq!(
+            notes.len(),
+            WalkTermination::ALL.len()
+                + ParentCompleteness::ALL.len()
+                + ChangesEnumerated::ALL.len()
+                + RenameAmbiguity::ALL.len()
+        );
+        for note in &notes {
+            assert!(
+                note.len() > 20,
+                "{note:?} is too short to be an explanation"
+            );
+        }
+        let mut unique = notes.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            notes.len(),
+            "two values share one sentence, so one of them is described by the other's rule"
+        );
+
+        // The one sentence that must exist, and the four that must not be said of a boundary.
+        assert!(ParentCompleteness::Root
+            .note()
+            .contains("the project's history begins here"));
+        for value in ParentCompleteness::ALL {
+            if value.may_claim_history_begins_here() {
+                continue;
+            }
+            for forbidden in [
+                "history begins here",
+                "first commit in project",
+                "beginning of repository history",
+            ] {
+                assert!(
+                    !value.note().contains(forbidden),
+                    "{value} claims {forbidden:?}: {:?}",
+                    value.note()
+                );
+            }
+        }
+        // Nerve's own boundary must never read as the repository's.
+        assert!(WalkTermination::CommitBudget
+            .note()
+            .contains("more history than this ingest read"));
+        assert!(!WalkTermination::CommitBudget.note().contains("shallow"));
+        // Three of the four silences must say they are not emptiness.
+        assert_eq!(
+            ChangesEnumerated::ALL
+                .iter()
+                .filter(|value| value.note().contains("not an empty commit"))
+                .count(),
+            2,
+            "the merge and the unreadable parent each say they are not an empty commit"
+        );
+        assert!(ChangesEnumerated::Enumerated
+            .note()
+            .contains("\"nothing changed\""));
     }
 }
