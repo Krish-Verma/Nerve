@@ -1,5 +1,5 @@
-//! Schema v1 (ADR-0003), v2 (Slice 3), v3 (Slice 3b), v4 (Slice 5d-i), v5 (Slice 10a), and
-//! migrations.
+//! Schema v1 (ADR-0003), v2 (Slice 3), v3 (Slice 3b), v4 (Slice 5d-i), v5 (Slice 10a),
+//! v6 (Slice 12b), and migrations.
 //!
 //! Migrations are append-only. `V1` is immutable: a database written by an older build must be
 //! upgradable by replaying the later steps, so editing an already-shipped step in place would
@@ -12,7 +12,7 @@ use nerve_core::ids;
 use crate::error::{Result, StoreError};
 
 /// The schema version this build writes and understands.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// Human-readable description recorded in `schema_version`.
 pub const SCHEMA_V1_DESCRIPTION: &str =
@@ -36,6 +36,11 @@ pub const SCHEMA_V4_DESCRIPTION: &str =
 pub const SCHEMA_V5_DESCRIPTION: &str =
     "Slice 10a: module_facts.framework_version, the cache slot a third extractor per language \
      family needs; defaults to '' so every row written before the framework rules misses";
+
+/// Human-readable description recorded in `schema_version` for the Slice 12b upgrade.
+pub const SCHEMA_V6_DESCRIPTION: &str =
+    "Slice 12b: the historical model — git_commit, git_change, git_rename_hypothesis and \
+     git_history_ingest; history availability recorded as data, never inferred from absence";
 
 const V1: &str = r#"
 CREATE TABLE repository (
@@ -282,6 +287,114 @@ const V5: &str = r#"
 ALTER TABLE module_facts ADD COLUMN framework_version TEXT NOT NULL DEFAULT '';
 "#;
 
+/// Schema v6 — Slice 12b, the historical model. Four new tables, no `ALTER` of any existing one.
+///
+/// History is **not** in the evidence model, and that is a decision rather than an omission
+/// (`docs/plans/slice-12b-historical-model.md` §3). A tree diff is a primary-source fact read out
+/// of an immutable object: every field an `observation` carries — source type, directness,
+/// extractor version, match quality, query-time freshness — exists to qualify a *derived* claim,
+/// and routing a certainty through them would cost three rows per fact to express doubt that does
+/// not exist. Nerve already keeps primary facts in plain tables: `repository_state`,
+/// `extractor_run`, `module_facts`. Nothing is collapsed; the model is declined for facts it was
+/// not built for.
+///
+/// The one genuinely uncertain fact here is a **rename hypothesis**, and the reason it still
+/// cannot be an observation is mechanical: an `observation` requires an `assertion_id`, and an
+/// `assertion` requires two `entity_id`s. A rename relates two *paths*, and a rename's `from_path`
+/// is by definition no longer in the tree, so there is no entity to point at. Its uncertainty is
+/// carried by two named columns — `evidence` and `ambiguity` — which is weaker than an evidence
+/// profile and is recorded as such rather than dressed up.
+///
+/// Three columns exist so that an **absence is never inferred**, which is the whole point of the
+/// slice:
+///
+/// - `git_commit.parent_completeness` — five reasons a commit may have no visible parent, of which
+///   exactly one means the project's history begins there. A shallow boundary diffed against the
+///   empty tree would report every file in the boundary tree as newly added, which is *"history
+///   begins here"* stated as data.
+/// - `git_commit.changes_enumerated` — which of four silences a commit with zero `git_change` rows
+///   is. Stored rather than inferred, because "the parent was unreadable" and "nothing changed"
+///   look identical from the row count alone.
+/// - `git_history_ingest.walk_terminated_by` — whether the boundary is the repository's or Nerve's
+///   own. A bounded ingest that read as a complete history would turn a budget into a claim about
+///   the project's origin.
+///
+/// Storage is a **delta**, measured rather than assumed: per-commit snapshots cost
+/// `O(commits × tree_size)` against the delta's `O(total churn)`, measured at 30.1× on this
+/// repository at 85 commits and 177× on a 1,214-commit one (§4). The row amplification grows with
+/// history depth, so the larger the repository the worse the alternative gets.
+///
+/// **`repo_id` is on every table** rather than reached through a join, because every read is
+/// scoped to one repository and the composite primary keys are what make re-ingest of an immutable
+/// commit an `INSERT OR IGNORE` instead of a diff.
+///
+/// No `IF NOT EXISTS`: no permanent table in this schema has it, and a migration that tolerated
+/// re-application would hide a real double-apply.
+const V6: &str = r#"
+CREATE TABLE git_commit (
+    repo_id              TEXT    NOT NULL REFERENCES repository(repo_id),
+    commit_oid           TEXT    NOT NULL,   -- 40 lowercase hex
+    tree_oid             TEXT    NOT NULL,
+    parent_oids          TEXT    NOT NULL,   -- JSON array, listed order; [] for a root commit
+    parent_completeness  TEXT    NOT NULL,   -- closed vocabulary: ParentCompleteness
+    changes_enumerated   TEXT    NOT NULL,   -- closed vocabulary: ChangesEnumerated
+    author_time          INTEGER NOT NULL,   -- epoch seconds, signed, as the object records it
+    author_tz            TEXT    NOT NULL,
+    committer_time       INTEGER NOT NULL,
+    committer_tz         TEXT    NOT NULL,
+    author_ident         TEXT,               -- NULL unless --with-identity
+    committer_ident      TEXT,               -- NULL unless --with-identity
+    summary              TEXT    NOT NULL,   -- first message line, bounded, lossy UTF-8
+    is_merge             INTEGER NOT NULL,
+    PRIMARY KEY (repo_id, commit_oid)
+);
+
+CREATE INDEX idx_git_commit_time ON git_commit(repo_id, committer_time);
+
+CREATE TABLE git_change (
+    repo_id        TEXT    NOT NULL REFERENCES repository(repo_id),
+    commit_oid     TEXT    NOT NULL,
+    path           TEXT    NOT NULL,   -- as recorded in the tree
+    change_kind    TEXT    NOT NULL,   -- added | modified | deleted | mode_changed
+    blob_oid       TEXT,               -- NULL iff deleted
+    prev_blob_oid  TEXT,               -- NULL iff added
+    mode           INTEGER,
+    prev_mode      INTEGER,
+    PRIMARY KEY (repo_id, commit_oid, path),
+    FOREIGN KEY (repo_id, commit_oid) REFERENCES git_commit(repo_id, commit_oid)
+);
+
+CREATE INDEX idx_git_change_path ON git_change(repo_id, path);
+CREATE INDEX idx_git_change_blob ON git_change(repo_id, blob_oid);
+
+CREATE TABLE git_rename_hypothesis (
+    repo_id       TEXT NOT NULL REFERENCES repository(repo_id),
+    commit_oid    TEXT NOT NULL,
+    from_path     TEXT NOT NULL,
+    to_path       TEXT NOT NULL,
+    evidence      TEXT NOT NULL,   -- exact_content (12b); similar_content added in 12c
+    blob_oid      TEXT NOT NULL,
+    ambiguity     TEXT NOT NULL,   -- unique | many_from | many_to | many_both
+    PRIMARY KEY (repo_id, commit_oid, from_path, to_path),
+    FOREIGN KEY (repo_id, commit_oid) REFERENCES git_commit(repo_id, commit_oid)
+);
+
+CREATE TABLE git_history_ingest (
+    repo_id             TEXT    PRIMARY KEY REFERENCES repository(repo_id),
+    head_oid            TEXT,               -- NULL on an unborn branch
+    walked_from         TEXT    NOT NULL,   -- JSON array of tip oids
+    commits_recorded    INTEGER NOT NULL,
+    commit_budget       INTEGER NOT NULL,
+    walk_terminated_by  TEXT    NOT NULL,   -- closed vocabulary: WalkTermination
+    shallow             INTEGER NOT NULL,
+    shallow_boundary    TEXT    NOT NULL,   -- JSON array of boundary oids, [] when not shallow
+    promisor            INTEGER NOT NULL,
+    refusals            TEXT    NOT NULL,   -- JSON object, form -> count
+    reader_version      TEXT    NOT NULL,
+    ingested_at         TEXT    NOT NULL
+);
+"#;
+
 /// One migration step. Almost all of them are SQL; v3 is not, because it must recompute a
 /// BLAKE3 digest and SQLite has no such function.
 enum Step {
@@ -294,12 +407,13 @@ enum Step {
 /// Migration steps, in application order: `(version, description, step)`.
 ///
 /// Appending to this list is how the schema evolves. Editing an existing entry is prohibited.
-const MIGRATIONS: [(i64, &str, Step); 5] = [
+const MIGRATIONS: [(i64, &str, Step); 6] = [
     (1, SCHEMA_V1_DESCRIPTION, Step::Sql(V1)),
     (2, SCHEMA_V2_DESCRIPTION, Step::Sql(V2)),
     (3, SCHEMA_V3_DESCRIPTION, Step::Rust(migrate_v3)),
     (4, SCHEMA_V4_DESCRIPTION, Step::Rust(migrate_v4)),
     (5, SCHEMA_V5_DESCRIPTION, Step::Sql(V5)),
+    (6, SCHEMA_V6_DESCRIPTION, Step::Sql(V6)),
 ];
 
 /// Apply [`V3`], then restate every `occurrence_id` under the ADR-0006 tuple.

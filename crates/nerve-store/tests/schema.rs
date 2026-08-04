@@ -103,6 +103,31 @@ INSERT INTO schema_version (version, applied_at, description)
     VALUES (3, '2026-01-01T00:00:00.000Z', 'Slice 3b');
 "#;
 
+/// What v4 did to the shape on disk, which is **nothing**: Slice 5d-i is a data correction with no
+/// DDL, so the only trace a v4 build left is its marker row.
+///
+/// Written out anyway, so that "a v5 database" can be assembled from the same written-out steps as
+/// every other starting point rather than by calling `migrate` part of the way and trusting it.
+const V4_ONLY: &str = r#"
+INSERT INTO schema_version (version, applied_at, description)
+    VALUES (4, '2026-01-01T00:00:00.000Z', 'Slice 5d-i');
+"#;
+
+/// What v5 added on top of v4, exactly as the Slice 10a build shipped it.
+const V5_ONLY: &str = r#"
+ALTER TABLE module_facts ADD COLUMN framework_version TEXT NOT NULL DEFAULT '';
+INSERT INTO schema_version (version, applied_at, description)
+    VALUES (5, '2026-01-01T00:00:00.000Z', 'Slice 10a');
+"#;
+
+/// The four tables schema v6 adds, in the order the migration creates them.
+const V6_TABLES: [&str; 4] = [
+    "git_commit",
+    "git_change",
+    "git_rename_hypothesis",
+    "git_history_ingest",
+];
+
 /// Filesystem containment as every build before Slice 5d-i wrote it, plus the two controls that
 /// must survive the v4 rewrite untouched.
 ///
@@ -199,6 +224,33 @@ fn v2_database_with_rows() -> nerve_store::Connection {
         "INSERT INTO module_facts VALUES ('r','src/math.ts','h','typescript','1.1.0','1.0.0','{}');",
     )
     .unwrap();
+    conn
+}
+
+/// Build a database as the Slice 10a (v5) build would have left it, with rows in it.
+///
+/// v5 is the version every database in existence is at before Slice 12b, so this is the upgrade
+/// path a real user takes. Assembled from the written-out steps rather than by migrating to 5 and
+/// stopping, so "a v5 database" means what v5 shipped.
+fn v5_database_with_rows() -> nerve_store::Connection {
+    let conn = open_in_memory().unwrap();
+    conn.execute_batch(V1_ONLY).unwrap();
+    conn.execute_batch(V2_ONLY).unwrap();
+    conn.execute_batch(SKELETON).unwrap();
+    conn.execute_batch(&rows_at_state("s", "o1", 1, 1)).unwrap();
+    conn.execute_batch(
+        "INSERT INTO assertion_state VALUES ('a1','s','SUPPORTED','AST_DIRECT',1,1,0,'s');",
+    )
+    .unwrap();
+    conn.execute_batch(V3_ONLY).unwrap();
+    conn.execute_batch(V4_ONLY).unwrap();
+    conn.execute_batch(V5_ONLY).unwrap();
+    conn.execute_batch(
+        "INSERT INTO module_facts
+             VALUES ('r','src/math.ts','h','typescript','1.1.0','1.0.0','{}','2.0.0');",
+    )
+    .unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), Some(5));
     conn
 }
 
@@ -341,13 +393,22 @@ fn fresh_database_reaches_the_current_schema_version() {
     assert_eq!(schema_version(&conn).unwrap(), None);
     migrate(&conn).unwrap();
     assert_eq!(schema_version(&conn).unwrap(), Some(SCHEMA_VERSION));
-    assert_eq!(SCHEMA_VERSION, 5);
-    // A fresh database reaches v5 directly, without a v1, v2, v3 or v4 database ever existing.
+    assert_eq!(SCHEMA_VERSION, 6);
+    // A fresh database reaches v6 directly, without a v1, v2, v3, v4 or v5 database ever existing.
     // v5's column is present from the start, with the default that makes a *migrated* row miss the
     // framework cache. On a fresh database nothing has been cached yet, so the default is inert
     // here and the upgrade path is what has to be tested separately.
     assert!(column_names(&conn, "module_facts").contains(&"framework_version".to_string()));
     assert!(table_names(&conn).contains(&"module_facts".to_string()));
+    // v6's four tables, present and empty. Empty is the correct state: v6 adds tables and touches
+    // no user row, so it is not a destructive migration and there is nothing for it to fill in.
+    for table in V6_TABLES {
+        assert!(
+            table_names(&conn).contains(&table.to_string()),
+            "v6 table {table} is missing from a fresh database"
+        );
+        assert_eq!(scalar(&conn, &format!("SELECT count(*) FROM {table}")), 0);
+    }
     for (table, column) in [
         ("occurrence", "state_id"),
         ("observation", "state_id"),
@@ -569,6 +630,335 @@ fn re_running_v4_on_an_already_migrated_database_changes_nothing() {
     migrate(&conn).unwrap();
     assert_eq!(observation_labels(&conn), after_first);
     assert_eq!(scalar(&conn, "SELECT count(*) FROM observation"), 5);
+}
+
+// ---- v6: the historical model ------------------------------------------------------------------
+
+/// The rows a v5 database holds, so that "nothing was lost" is checked rather than asserted.
+const V5_ROW_COUNTS: [(&str, i64); 9] = [
+    ("repository", 1),
+    ("repository_state", 1),
+    ("entity", 2),
+    ("assertion", 1),
+    ("occurrence", 1),
+    ("observation", 1),
+    ("assertion_state", 1),
+    ("extractor_run", 1),
+    ("module_facts", 1),
+];
+
+fn assert_row_counts(conn: &nerve_store::Connection, expected: &[(&str, i64)]) {
+    for (table, count) in expected {
+        assert_eq!(
+            scalar(conn, &format!("SELECT count(*) FROM {table}")),
+            *count,
+            "{table} lost or gained rows"
+        );
+    }
+}
+
+/// **The upgrade path every existing database takes.** v5 is where Slice 10a left them.
+#[test]
+fn a_v5_database_upgrades_to_v6_and_the_history_tables_appear() {
+    let conn = v5_database_with_rows();
+    for table in V6_TABLES {
+        assert!(
+            !table_names(&conn).contains(&table.to_string()),
+            "{table} exists before v6; the test would prove nothing"
+        );
+    }
+
+    migrate(&conn).unwrap();
+
+    assert_eq!(schema_version(&conn).unwrap(), Some(6));
+    for table in V6_TABLES {
+        assert!(
+            table_names(&conn).contains(&table.to_string()),
+            "v6 did not create {table}"
+        );
+        assert_eq!(scalar(&conn, &format!("SELECT count(*) FROM {table}")), 0);
+    }
+    // v6 adds tables and touches no user row, which is why it is not a destructive migration.
+    assert_row_counts(&conn, &V5_ROW_COUNTS);
+    // And v5's own column is still there with its value, not re-defaulted by the replay.
+    assert_eq!(
+        conn.query_row("SELECT framework_version FROM module_facts", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .unwrap(),
+        "2.0.0"
+    );
+}
+
+/// Every starting point Nerve can still read reaches v6, by three different routes.
+///
+/// One test rather than three, because the assertion is identical and the only thing that varies is
+/// how the database got to where it started — the same shape `database_with_filesystem_rows` was
+/// written for. The v4 correction is asserted on the way past, so this covers "every existing
+/// migration still does its job with a sixth step appended" as well as "the sixth step runs".
+#[test]
+fn every_pre_v6_starting_version_reaches_v6_with_the_history_tables() {
+    for version in [1, 2, 3] {
+        let conn = database_with_filesystem_rows(version);
+        for table in V6_TABLES {
+            assert!(
+                !table_names(&conn).contains(&table.to_string()),
+                "{table} exists at v{version}; the test would prove nothing"
+            );
+        }
+
+        migrate(&conn).unwrap();
+
+        assert_eq!(
+            schema_version(&conn).unwrap(),
+            Some(6),
+            "a v{version} database did not reach v6"
+        );
+        for table in V6_TABLES {
+            assert!(
+                table_names(&conn).contains(&table.to_string()),
+                "v{version} → v6 did not create {table}"
+            );
+        }
+        // The rest of the chain still runs: v3's identity restatement, v4's re-attribution, v5's
+        // column. A sixth step must not have displaced any of them.
+        assert_v4_re_attributed(&conn);
+        assert!(column_names(&conn, "module_facts").contains(&"framework_version".to_string()));
+        assert_eq!(
+            scalar(&conn, "SELECT count(*) FROM schema_version"),
+            SCHEMA_VERSION,
+            "one row per applied step, whichever version the database started at"
+        );
+    }
+}
+
+/// Re-migrating a v6 database changes nothing and appends no version row.
+///
+/// Worth its own test beside the existing no-op ones because v6 is pure DDL with no `IF NOT
+/// EXISTS`: if the version guard ever let step 6 replay, `CREATE TABLE git_commit` would be a hard
+/// error rather than a silent no-op, and this is where that would surface.
+#[test]
+fn re_migrating_a_v6_database_changes_nothing_and_appends_no_version_row() {
+    let conn = v5_database_with_rows();
+    migrate(&conn).unwrap();
+    let tables_before = table_names(&conn);
+    let versions_before = scalar(&conn, "SELECT count(*) FROM schema_version");
+    assert_eq!(versions_before, SCHEMA_VERSION);
+
+    migrate(&conn).unwrap();
+    migrate(&conn).unwrap();
+
+    assert_eq!(table_names(&conn), tables_before);
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM schema_version"),
+        versions_before,
+        "re-migrating must not append a version row"
+    );
+    assert_eq!(schema_version(&conn).unwrap(), Some(SCHEMA_VERSION));
+    assert_row_counts(&conn, &V5_ROW_COUNTS);
+}
+
+/// **A failing step commits nothing at all — not even the statements that succeeded before it.**
+///
+/// Each entry in `MIGRATIONS` runs inside its own transaction, and that is the property this test
+/// exists for. The sabotage is deliberately placed on the migration's **last** statement:
+/// `git_history_ingest` is created after `git_commit`, `git_change`, `git_rename_hypothesis` and
+/// all four indexes, so without a transaction those seven objects would survive a failure and the
+/// database would sit at v5 with three quarters of v6 already in it — a state no migration path
+/// could ever repair, because step 6 would never run again to finish the job.
+///
+/// Sabotaging the *first* statement instead would pass whether or not the transaction existed,
+/// which is why the version-row assertion alone is not enough.
+#[test]
+fn an_interrupted_v6_migration_commits_nothing() {
+    let conn = v5_database_with_rows();
+    // A table with v6's last name and nothing else in common, so `CREATE TABLE` must fail.
+    conn.execute_batch("CREATE TABLE git_history_ingest (sabotage TEXT);")
+        .unwrap();
+
+    let err = migrate(&conn).unwrap_err();
+    assert!(
+        matches!(err, nerve_store::StoreError::Sqlite(_)),
+        "expected the CREATE to fail, got {err}"
+    );
+
+    // The version row was never written, so the next run replays step 6 in full.
+    assert_eq!(
+        schema_version(&conn).unwrap(),
+        Some(5),
+        "a failed step must not record its version"
+    );
+    // And the statements that had already succeeded were rolled back with it.
+    for table in ["git_commit", "git_change", "git_rename_hypothesis"] {
+        assert!(
+            !table_names(&conn).contains(&table.to_string()),
+            "{table} survived a failed migration; step 6 is not transactional"
+        );
+    }
+    for index in [
+        "idx_git_commit_time",
+        "idx_git_change_path",
+        "idx_git_change_blob",
+    ] {
+        assert_eq!(
+            scalar(
+                &conn,
+                &format!("SELECT count(*) FROM sqlite_master WHERE name = '{index}'")
+            ),
+            0,
+            "{index} survived a failed migration"
+        );
+    }
+    // Nothing else moved either, and the sabotaged table is exactly as it was.
+    assert_row_counts(&conn, &V5_ROW_COUNTS);
+    assert_eq!(
+        column_names(&conn, "git_history_ingest"),
+        vec!["sabotage".to_string()]
+    );
+
+    // The control: the identical fixture without the sabotage reaches v6. Without this the test
+    // would pass just as well against a migration that could never succeed.
+    let clean = v5_database_with_rows();
+    migrate(&clean).unwrap();
+    assert_eq!(schema_version(&clean).unwrap(), Some(6));
+    for table in V6_TABLES {
+        assert!(table_names(&clean).contains(&table.to_string()));
+    }
+}
+
+/// The same, sabotaged on the migration's **first** statement.
+///
+/// The complementary half: a failure before anything has been created must also leave the version
+/// at 5 rather than recording a step that did nothing. `IF NOT EXISTS` on `CREATE TABLE git_commit`
+/// would turn this failure into silence, which is the double-apply
+/// `nerve-index/tests/documents.rs` refuses to let a migration hide.
+#[test]
+fn a_v6_migration_that_collides_on_its_first_table_leaves_the_version_at_five() {
+    let conn = v5_database_with_rows();
+    conn.execute_batch("CREATE TABLE git_commit (sabotage TEXT);")
+        .unwrap();
+
+    let err = migrate(&conn).unwrap_err();
+    assert!(
+        matches!(err, nerve_store::StoreError::Sqlite(_)),
+        "expected the CREATE to fail, got {err}"
+    );
+
+    assert_eq!(schema_version(&conn).unwrap(), Some(5));
+    for table in ["git_change", "git_rename_hypothesis", "git_history_ingest"] {
+        assert!(!table_names(&conn).contains(&table.to_string()));
+    }
+    assert_eq!(
+        column_names(&conn, "git_commit"),
+        vec!["sabotage".to_string()],
+        "the pre-existing table was rewritten rather than left alone"
+    );
+    assert_row_counts(&conn, &V5_ROW_COUNTS);
+}
+
+/// A change row for a commit that was never recorded is **refused**, not orphaned.
+///
+/// `PRAGMA foreign_keys=ON` is set when the database is opened, so the composite foreign key onto
+/// `git_commit` is genuinely enforced rather than decorative. This is the constraint that makes
+/// `insert_changes`' plain `INSERT` meaningful: under `INSERT OR IGNORE` the same row would vanish
+/// and the commit would read as one that did not touch the path.
+#[test]
+fn a_change_for_an_unrecorded_commit_is_refused() {
+    let conn = open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+    conn.execute("INSERT INTO repository VALUES ('r','p','/tmp','t')", [])
+        .unwrap();
+    let commit = "1".repeat(40);
+    let absent = "2".repeat(40);
+
+    conn.execute(
+        "INSERT INTO git_commit VALUES
+             ('r', ?1, 'aa', '[]', 'root', 'enumerated', 100, '+0000', 100, '+0000',
+              NULL, NULL, 'first', 0)",
+        [&commit],
+    )
+    .unwrap();
+
+    // The control: the identical row against the recorded commit is accepted, so the refusal below
+    // is the foreign key doing its job and not the statement being malformed.
+    conn.execute(
+        "INSERT INTO git_change VALUES ('r', ?1, 'src/a.ts', 'added', 'bb', NULL, 33188, NULL)",
+        [&commit],
+    )
+    .unwrap();
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM git_change"), 1);
+
+    let err = conn
+        .execute(
+            "INSERT INTO git_change VALUES ('r', ?1, 'src/a.ts', 'added', 'bb', NULL, 33188, NULL)",
+            [&absent],
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("foreign key"),
+        "expected a foreign-key refusal, got {err}"
+    );
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM git_change"),
+        1,
+        "the refused row must not have landed"
+    );
+}
+
+/// A rename hypothesis for a commit that was never recorded is refused too.
+///
+/// **The v6 DDL carries the same composite foreign key on `git_rename_hypothesis` as on
+/// `git_change`**, and that is a decision this slice made rather than one the plan's §7.1 listing
+/// stated. The reason is that a hypothesis is derived from one commit's tree diff, so a hypothesis
+/// whose commit is unrecorded cannot be reported by any read — `renames_touching_path` joins
+/// `git_commit` to order its results, so such a row would be silently invisible rather than merely
+/// orphaned. A migration cannot be edited once shipped, so the choice had to be made now, and the
+/// strictly stronger one costs nothing: every writer already has to record the commit first.
+#[test]
+fn a_rename_hypothesis_for_an_unrecorded_commit_is_refused() {
+    let conn = open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+    conn.execute("INSERT INTO repository VALUES ('r','p','/tmp','t')", [])
+        .unwrap();
+    let commit = "1".repeat(40);
+    let absent = "2".repeat(40);
+    let blob = "3".repeat(40);
+
+    conn.execute(
+        "INSERT INTO git_commit VALUES
+             ('r', ?1, 'aa', '[]', 'root', 'enumerated', 100, '+0000', 100, '+0000',
+              NULL, NULL, 'first', 0)",
+        [&commit],
+    )
+    .unwrap();
+
+    conn.execute(
+        "INSERT INTO git_rename_hypothesis
+             VALUES ('r', ?1, 'old.ts', 'new.ts', 'exact_content', ?2, 'unique')",
+        [&commit, &blob],
+    )
+    .unwrap();
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM git_rename_hypothesis"),
+        1
+    );
+
+    let err = conn
+        .execute(
+            "INSERT INTO git_rename_hypothesis
+                 VALUES ('r', ?1, 'old.ts', 'new.ts', 'exact_content', ?2, 'unique')",
+            [&absent, &blob],
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("foreign key"),
+        "expected a foreign-key refusal, got {err}"
+    );
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM git_rename_hypothesis"),
+        1,
+        "the refused row must not have landed"
+    );
 }
 
 /// ADR-0006 consequence 3, made explicit rather than left to be discovered.

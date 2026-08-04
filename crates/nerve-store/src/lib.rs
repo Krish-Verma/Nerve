@@ -24,6 +24,7 @@ pub mod facts;
 pub mod freshness;
 pub mod gaps;
 pub mod graph;
+pub mod history;
 pub mod impact;
 pub mod prune;
 pub mod query;
@@ -45,6 +46,11 @@ pub use graph::{
     explain, find_paths, neighbourhood, AssertionEvidence, Direction, EdgeDirection, GraphPath,
     NeighbourEdge, NeighbourNode, NeighbourhoodQuery, NeighbourhoodReport, ObservationEvidence,
     PathHop, PathQuery, PathReport, WhyDirection, WhyQuery, WhyReport,
+};
+pub use history::{
+    changes_for_commit, commit_log, commits_touching_path, history_ingest, history_totals,
+    insert_changes, insert_commit, insert_renames, recorded_commit_oids, renames_touching_path,
+    upsert_history_ingest, ChangeRow, CommitRow, HistoryTotals, IngestRow, RenameRow,
 };
 pub use impact::{
     impact, ImpactQuery, ImpactReport, ImpactRow, ImpactTotals, UnresolvedAccount,

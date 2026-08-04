@@ -19,6 +19,7 @@ pub use model::{
     AssertionRecord, EntityRecord, GraphBatch, ObservationRecord, OccurrenceRecord, Span,
 };
 pub use vocab::{
-    AssertionStatus, Directness, EndpointKind, EntityKind, EvidenceSourceType, PathRole, Relation,
-    UnresolvedCategory,
+    AssertionStatus, ChangeKind, ChangesEnumerated, Directness, EndpointKind, EntityKind,
+    EvidenceSourceType, ParentCompleteness, PathRole, Relation, RenameAmbiguity, RenameEvidence,
+    UnresolvedCategory, WalkTermination,
 };

@@ -656,6 +656,383 @@ impl FromStr for AssertionStatus {
     }
 }
 
+/// What one commit did to one path, as a tree diff against a single parent states it.
+///
+/// Closed, and **four**-valued rather than three. `mode_changed` is a real change to a tracked
+/// file whose bytes are identical, so folding it into [`ChangeKind::Modified`] would claim content
+/// moved when it did not, and omitting it would report the commit as touching nothing.
+///
+/// There is deliberately **no `renamed` member**. Git records no rename; a rename is *detected*,
+/// and in Nerve it is a hypothesis with its own evidence and ambiguity
+/// ([`RenameEvidence`], [`RenameAmbiguity`]) rather than a change kind. A `renamed` value here
+/// would state as fact the one thing about history that is a guess.
+///
+/// Added in Slice 12b. `git_change.change_kind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ChangeKind {
+    /// The path is in this commit's tree and not in the parent's.
+    Added,
+    /// The path is in both trees with different content.
+    Modified,
+    /// The path is in the parent's tree and not in this commit's.
+    Deleted,
+    /// The path is in both trees with the same content and a different file mode.
+    ModeChanged,
+}
+
+impl ChangeKind {
+    /// Every change kind, in declaration order.
+    pub const ALL: [ChangeKind; 4] = [
+        ChangeKind::Added,
+        ChangeKind::Modified,
+        ChangeKind::Deleted,
+        ChangeKind::ModeChanged,
+    ];
+
+    /// Canonical lower-case name, stored in `git_change.change_kind`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ChangeKind::Added => "added",
+            ChangeKind::Modified => "modified",
+            ChangeKind::Deleted => "deleted",
+            ChangeKind::ModeChanged => "mode_changed",
+        }
+    }
+}
+
+impl fmt::Display for ChangeKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ChangeKind {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ChangeKind::ALL
+            .into_iter()
+            .find(|k| k.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("ChangeKind", s))
+    }
+}
+
+/// Why a commit has the parents it has — and, when it has none visible, *which* reason that is.
+///
+/// This is the vocabulary the historical model exists to get right. Two of its members mean
+/// "cannot see further" and they are kept apart because one is declared and expected while the
+/// other is a fault: collapsing them would report a corrupt repository as a shallow one, and
+/// collapsing either into [`ParentCompleteness::Root`] would state "the project's history begins
+/// here" about a checkout that merely cannot see past its own boundary.
+///
+/// See `docs/plans/slice-12b-historical-model.md` §5.1 for the derivation of each member and
+/// [`ParentCompleteness::may_claim_history_begins_here`] for the one consequence that must not be
+/// got wrong. Added in Slice 12b. `git_commit.parent_completeness`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ParentCompleteness {
+    /// No parents in the commit object, **and** not a shallow boundary. This is the beginning.
+    Root,
+    /// Listed in `.git/shallow`. The commit object may name parents; they are absent by
+    /// declaration, so "earliest commit visible in this checkout" is all that may be said.
+    ShallowBoundary,
+    /// Has parents, all present in the object store.
+    ParentsAvailable,
+    /// Has parents, at least one absent, and the shallow declaration was read cleanly and does
+    /// not list this commit. Promisor, or corrupt — unexpected, and distinct from shallow.
+    ParentsMissing,
+    /// Has parents, at least one absent, and Nerve **could not establish** whether that absence
+    /// was declared.
+    ///
+    /// Exists because `.git/shallow` can be present and unreadable, over a size bound, or have a
+    /// line dropped while the rest is kept — so "not shallow" and "shallow, but we could not
+    /// tell" are different facts. Without this member the undecidable case would be labelled
+    /// [`ParentCompleteness::ParentsMissing`], which reports a shallow repository as corrupt.
+    /// It may not be called corrupt and it may not be called shallow.
+    ParentsUnverifiable,
+}
+
+impl ParentCompleteness {
+    /// Every value, in declaration order.
+    pub const ALL: [ParentCompleteness; 5] = [
+        ParentCompleteness::Root,
+        ParentCompleteness::ShallowBoundary,
+        ParentCompleteness::ParentsAvailable,
+        ParentCompleteness::ParentsMissing,
+        ParentCompleteness::ParentsUnverifiable,
+    ];
+
+    /// Canonical lower-case name, stored in `git_commit.parent_completeness`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ParentCompleteness::Root => "root",
+            ParentCompleteness::ShallowBoundary => "shallow_boundary",
+            ParentCompleteness::ParentsAvailable => "parents_available",
+            ParentCompleteness::ParentsMissing => "parents_missing",
+            ParentCompleteness::ParentsUnverifiable => "parents_unverifiable",
+        }
+    }
+
+    /// May a consumer state that the project's history begins at this commit?
+    ///
+    /// **True for [`ParentCompleteness::Root`] and nothing else.** This is stated as a method
+    /// rather than left in prose because it is the single claim the historical model is built to
+    /// avoid making wrongly, and because a value added to [`ParentCompleteness::ALL`] without an
+    /// answer here would default to whatever a `matches!` happened to say — a default, not a
+    /// decision, which is the drift `EntityKind::path_role` was written for.
+    ///
+    /// A commit with available parents answers `false` for the plain reason that its history
+    /// demonstrably does not begin there; the two boundary values and the undecidable one answer
+    /// `false` because the absence in front of them is an absence of *visibility*.
+    pub fn may_claim_history_begins_here(self) -> bool {
+        matches!(self, ParentCompleteness::Root)
+    }
+}
+
+impl fmt::Display for ParentCompleteness {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ParentCompleteness {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ParentCompleteness::ALL
+            .into_iter()
+            .find(|c| c.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("ParentCompleteness", s))
+    }
+}
+
+/// Whether a commit's changes were enumerated, and if not, why not.
+///
+/// A commit with zero `git_change` rows is never ambiguous: this value says which of the four
+/// reasons it is. That is the whole purpose of the column — "no rows" is a fact about Nerve's
+/// reading of the commit, not about the commit, and inferring one from the other is how an
+/// unreadable parent becomes "nothing changed".
+///
+/// Added in Slice 12b. `git_commit.changes_enumerated`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ChangesEnumerated {
+    /// The tree diff against the single parent ran to completion. Zero rows means the commit
+    /// genuinely changed nothing.
+    Enumerated,
+    /// A merge. Change enumeration is defined against one parent and a merge has several, so
+    /// nothing was enumerated by decision rather than by failure.
+    MergeNotEnumerated,
+    /// The parent tree could not be read — a shallow boundary, or a missing object — so there was
+    /// nothing to diff against. Not a claim that every path in this tree is new.
+    ParentUnavailable,
+    /// A bound was hit while enumerating. The count is in `git_history_ingest.refusals`.
+    Refused,
+}
+
+impl ChangesEnumerated {
+    /// Every value, in declaration order.
+    pub const ALL: [ChangesEnumerated; 4] = [
+        ChangesEnumerated::Enumerated,
+        ChangesEnumerated::MergeNotEnumerated,
+        ChangesEnumerated::ParentUnavailable,
+        ChangesEnumerated::Refused,
+    ];
+
+    /// Canonical lower-case name, stored in `git_commit.changes_enumerated`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ChangesEnumerated::Enumerated => "enumerated",
+            ChangesEnumerated::MergeNotEnumerated => "merge_not_enumerated",
+            ChangesEnumerated::ParentUnavailable => "parent_unavailable",
+            ChangesEnumerated::Refused => "refused",
+        }
+    }
+}
+
+impl fmt::Display for ChangesEnumerated {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ChangesEnumerated {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ChangesEnumerated::ALL
+            .into_iter()
+            .find(|c| c.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("ChangesEnumerated", s))
+    }
+}
+
+/// Why the history walk stopped.
+///
+/// A concept distinct from history *availability*: [`WalkTermination::CommitBudget`] means the
+/// history was present on disk and Nerve declined to read all of it. It is the one boundary
+/// reason that is Nerve's own doing, and a derived "first observed" must be qualified by it as
+/// well as by shallow state or a bounded ingest silently becomes a claim about the project's
+/// origin.
+///
+/// Added in Slice 12b. `git_history_ingest.walk_terminated_by`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum WalkTermination {
+    /// No unvisited parent remained. The walk saw everything reachable from its tips.
+    Exhausted,
+    /// The commit budget was reached. Nerve stopped; the history did not.
+    CommitBudget,
+    /// A declared shallow boundary was reached.
+    ShallowBoundary,
+    /// A parent object was absent from the store.
+    MissingObject,
+    /// A refusal — a bound or an unreadable object — stopped the walk. Counted, never silent.
+    Refused,
+}
+
+impl WalkTermination {
+    /// Every value, in declaration order.
+    pub const ALL: [WalkTermination; 5] = [
+        WalkTermination::Exhausted,
+        WalkTermination::CommitBudget,
+        WalkTermination::ShallowBoundary,
+        WalkTermination::MissingObject,
+        WalkTermination::Refused,
+    ];
+
+    /// Canonical lower-case name, stored in `git_history_ingest.walk_terminated_by`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WalkTermination::Exhausted => "exhausted",
+            WalkTermination::CommitBudget => "commit_budget",
+            WalkTermination::ShallowBoundary => "shallow_boundary",
+            WalkTermination::MissingObject => "missing_object",
+            WalkTermination::Refused => "refused",
+        }
+    }
+}
+
+impl fmt::Display for WalkTermination {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for WalkTermination {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        WalkTermination::ALL
+            .into_iter()
+            .find(|t| t.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("WalkTermination", s))
+    }
+}
+
+/// What a rename hypothesis rests on.
+///
+/// **Slice 12b has exactly one member.** [`RenameEvidence::ExactContent`] means a path was
+/// deleted and another added in the same commit with the *same blob oid* — the oids were already
+/// in hand from the tree diff, so there is no similarity computation and no threshold.
+///
+/// **Slice 12c adds `SimilarContent` as a second value of this vocabulary, and the two are never
+/// blended into a score.** Content similarity is a different kind of evidence, not a weaker
+/// amount of this one: a blended number would let an exact match and a 60%-similar match arrive
+/// at the same figure and become indistinguishable. Which evidence a hypothesis has, and how
+/// ambiguous the pairing is ([`RenameAmbiguity`]), are separate columns because they are separate
+/// facts.
+///
+/// Added in Slice 12b. `git_rename_hypothesis.evidence`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RenameEvidence {
+    /// The deleted path and the added path name the same blob oid. Byte-identical content.
+    ExactContent,
+}
+
+impl RenameEvidence {
+    /// Every value, in declaration order.
+    pub const ALL: [RenameEvidence; 1] = [RenameEvidence::ExactContent];
+
+    /// Canonical lower-case name, stored in `git_rename_hypothesis.evidence`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RenameEvidence::ExactContent => "exact_content",
+        }
+    }
+}
+
+impl fmt::Display for RenameEvidence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for RenameEvidence {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        RenameEvidence::ALL
+            .into_iter()
+            .find(|e| e.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("RenameEvidence", s))
+    }
+}
+
+/// How many ways a rename hypothesis could have been drawn.
+///
+/// This is the point of the hypothesis being a hypothesis. Files with identical content — an
+/// empty file, a copied licence header, a re-exported barrel — split and merge constantly, so
+/// when one deleted blob matches several added paths **every pairing is recorded and none is
+/// promoted**. There is no threshold, no tie-break, and no single confidence number.
+///
+/// Added in Slice 12b. `git_rename_hypothesis.ambiguity`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RenameAmbiguity {
+    /// One deleted path, one added path, one blob. The only unambiguous shape.
+    Unique,
+    /// Several deleted paths share this blob with one added path.
+    ManyFrom,
+    /// One deleted path shares this blob with several added paths.
+    ManyTo,
+    /// Several on both sides.
+    ManyBoth,
+}
+
+impl RenameAmbiguity {
+    /// Every value, in declaration order.
+    pub const ALL: [RenameAmbiguity; 4] = [
+        RenameAmbiguity::Unique,
+        RenameAmbiguity::ManyFrom,
+        RenameAmbiguity::ManyTo,
+        RenameAmbiguity::ManyBoth,
+    ];
+
+    /// Canonical lower-case name, stored in `git_rename_hypothesis.ambiguity`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RenameAmbiguity::Unique => "unique",
+            RenameAmbiguity::ManyFrom => "many_from",
+            RenameAmbiguity::ManyTo => "many_to",
+            RenameAmbiguity::ManyBoth => "many_both",
+        }
+    }
+}
+
+impl fmt::Display for RenameAmbiguity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for RenameAmbiguity {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        RenameAmbiguity::ALL
+            .into_iter()
+            .find(|a| a.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("RenameAmbiguity", s))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1018,6 +1395,311 @@ mod tests {
         }
         for s in AssertionStatus::ALL {
             assert_eq!(s.as_str().parse::<AssertionStatus>().unwrap(), s);
+        }
+    }
+
+    // ---- Slice 12b: the historical vocabularies -----------------------------------------------
+
+    /// Every change kind's canonical name, pinned one by one, and the one name that must not exist.
+    ///
+    /// `git_change.change_kind` is `TEXT`, so the vocabulary is closed in Rust and nowhere else: a
+    /// variant added without a name here would be stored as whatever `as_str` happened to return.
+    /// `renamed` is refused deliberately — Git records no rename, so a change kind saying otherwise
+    /// would state as fact the one thing about history that is inferred.
+    #[test]
+    fn every_change_kind_states_its_canonical_name() {
+        let pinned: [(ChangeKind, &str); 4] = [
+            (ChangeKind::Added, "added"),
+            (ChangeKind::Modified, "modified"),
+            (ChangeKind::Deleted, "deleted"),
+            // A tracked file whose bytes are identical and whose mode moved. Its own value, so
+            // that neither `modified` over-claims nor an omission under-reports the commit.
+            (ChangeKind::ModeChanged, "mode_changed"),
+        ];
+
+        for (kind, name) in pinned {
+            assert_eq!(kind.as_str(), name, "{kind:?} is pinned against this list");
+            assert_eq!(name.parse::<ChangeKind>().unwrap(), kind);
+            assert_eq!(kind.to_string(), name);
+        }
+
+        let mut listed: Vec<ChangeKind> = pinned.iter().map(|(kind, _)| *kind).collect();
+        listed.sort_unstable();
+        let mut all = ChangeKind::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a change kind was added to the vocabulary without a canonical name above"
+        );
+
+        for invented in ["renamed", "copied", "unmerged", "type_changed", ""] {
+            assert!(
+                invented.parse::<ChangeKind>().is_err(),
+                "{invented:?} parsed as a ChangeKind without a diff rule that produces it"
+            );
+        }
+    }
+
+    /// Every parent-completeness value, and the one consequence each is allowed to have.
+    ///
+    /// The second column is the claim this whole vocabulary exists to control. Exactly one value
+    /// permits *"the project's history begins here"*, and a value added to
+    /// [`ParentCompleteness::ALL`] without an answer here fails this test rather than inheriting
+    /// one — the same reason `EntityKind::path_role` is pinned kind by kind.
+    #[test]
+    fn every_parent_completeness_states_whether_history_may_begin_there() {
+        let pinned: [(ParentCompleteness, &str, bool); 5] = [
+            // The beginning, and the only value that is.
+            (ParentCompleteness::Root, "root", true),
+            // Declared and expected: "earliest commit visible in this checkout".
+            (
+                ParentCompleteness::ShallowBoundary,
+                "shallow_boundary",
+                false,
+            ),
+            // Its history is demonstrably in front of it.
+            (
+                ParentCompleteness::ParentsAvailable,
+                "parents_available",
+                false,
+            ),
+            // A fault, not a boundary. Never to be reported as shallow.
+            (ParentCompleteness::ParentsMissing, "parents_missing", false),
+            // Undecidable. Neither shallow nor corrupt may be asserted.
+            (
+                ParentCompleteness::ParentsUnverifiable,
+                "parents_unverifiable",
+                false,
+            ),
+        ];
+
+        for (value, name, may_claim) in pinned {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<ParentCompleteness>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+            assert_eq!(
+                value.may_claim_history_begins_here(),
+                may_claim,
+                "{name} changed what a consumer may claim about the start of history"
+            );
+        }
+
+        let mut listed: Vec<ParentCompleteness> =
+            pinned.iter().map(|(value, _, _)| *value).collect();
+        listed.sort_unstable();
+        let mut all = ParentCompleteness::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a parent-completeness value was added without stating what it permits"
+        );
+
+        assert_eq!(
+            ParentCompleteness::ALL
+                .iter()
+                .filter(|c| c.may_claim_history_begins_here())
+                .count(),
+            1,
+            "exactly one value means the history genuinely begins here"
+        );
+
+        // The three ways this vocabulary would be wrong if it were collapsed. A shallow boundary
+        // is not a root, a fault is not a boundary, and an undecidable case is neither.
+        assert_ne!(
+            ParentCompleteness::Root,
+            ParentCompleteness::ShallowBoundary
+        );
+        assert_ne!(
+            ParentCompleteness::ShallowBoundary,
+            ParentCompleteness::ParentsMissing
+        );
+        assert_ne!(
+            ParentCompleteness::ParentsUnverifiable,
+            ParentCompleteness::ParentsMissing
+        );
+
+        for invented in ["shallow", "corrupt", "orphan", "unknown", ""] {
+            assert!(
+                invented.parse::<ParentCompleteness>().is_err(),
+                "{invented:?} parsed as a ParentCompleteness"
+            );
+        }
+    }
+
+    /// Every reason a commit can have zero change rows, pinned one by one.
+    ///
+    /// The vocabulary is what stops "no rows" being read as "nothing changed", so the names that
+    /// would reintroduce that ambiguity — `empty`, `none`, `no_changes` — must not parse.
+    #[test]
+    fn every_changes_enumerated_value_states_which_silence_it_is() {
+        let pinned: [(ChangesEnumerated, &str); 4] = [
+            // Zero rows here, and only here, means the commit changed nothing.
+            (ChangesEnumerated::Enumerated, "enumerated"),
+            (
+                ChangesEnumerated::MergeNotEnumerated,
+                "merge_not_enumerated",
+            ),
+            (ChangesEnumerated::ParentUnavailable, "parent_unavailable"),
+            (ChangesEnumerated::Refused, "refused"),
+        ];
+
+        for (value, name) in pinned {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<ChangesEnumerated>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+        }
+
+        let mut listed: Vec<ChangesEnumerated> = pinned.iter().map(|(value, _)| *value).collect();
+        listed.sort_unstable();
+        let mut all = ChangesEnumerated::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a changes-enumerated value was added to the vocabulary without a name above"
+        );
+
+        // A merge with no rows and an empty commit with no rows are different facts.
+        assert_ne!(
+            ChangesEnumerated::MergeNotEnumerated,
+            ChangesEnumerated::Enumerated
+        );
+        // An unreadable parent and a completed diff are different facts.
+        assert_ne!(
+            ChangesEnumerated::ParentUnavailable,
+            ChangesEnumerated::Enumerated
+        );
+
+        for invented in ["empty", "none", "no_changes", "unknown", ""] {
+            assert!(
+                invented.parse::<ChangesEnumerated>().is_err(),
+                "{invented:?} parsed as a ChangesEnumerated and would restore the ambiguity"
+            );
+        }
+    }
+
+    /// Every walk-termination reason, pinned one by one.
+    ///
+    /// `commit_budget` is the member that makes this vocabulary worth having: it is Nerve's own
+    /// decision to stop reading, and it must never be confused with the repository being unable to
+    /// go further. `complete` is refused because it would read as a claim about the history rather
+    /// than about the walk.
+    #[test]
+    fn every_walk_termination_reason_states_who_stopped_the_walk() {
+        let pinned: [(WalkTermination, &str); 5] = [
+            (WalkTermination::Exhausted, "exhausted"),
+            // Nerve stopped. The history did not.
+            (WalkTermination::CommitBudget, "commit_budget"),
+            (WalkTermination::ShallowBoundary, "shallow_boundary"),
+            (WalkTermination::MissingObject, "missing_object"),
+            (WalkTermination::Refused, "refused"),
+        ];
+
+        for (value, name) in pinned {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<WalkTermination>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+        }
+
+        let mut listed: Vec<WalkTermination> = pinned.iter().map(|(value, _)| *value).collect();
+        listed.sort_unstable();
+        let mut all = WalkTermination::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a walk-termination reason was added to the vocabulary without a name above"
+        );
+
+        // A bounded ingest of a complete repository is not a shallow one.
+        assert_ne!(
+            WalkTermination::CommitBudget,
+            WalkTermination::ShallowBoundary
+        );
+        assert_ne!(WalkTermination::CommitBudget, WalkTermination::Exhausted);
+
+        for invented in ["complete", "budget", "error", "truncated", ""] {
+            assert!(
+                invented.parse::<WalkTermination>().is_err(),
+                "{invented:?} parsed as a WalkTermination"
+            );
+        }
+    }
+
+    /// The rename vocabulary claims exactly what 12b's evidence carries, and no more.
+    ///
+    /// `similar_content` is a plausible future member and **must not parse until Slice 12c writes
+    /// the rule that produces it** — the same discipline `EndpointKind` applies to `cli_command`.
+    /// Evidence and ambiguity are two vocabularies rather than one number, because "what this rests
+    /// on" and "how many ways it could have been drawn" are separate facts and a single score
+    /// would make an exact match indistinguishable from a similar one.
+    #[test]
+    fn the_rename_vocabulary_keeps_evidence_and_ambiguity_apart() {
+        assert_eq!(RenameEvidence::ALL.len(), 1);
+        assert_eq!(RenameEvidence::ExactContent.as_str(), "exact_content");
+        for evidence in RenameEvidence::ALL {
+            assert_eq!(
+                evidence.as_str().parse::<RenameEvidence>().unwrap(),
+                evidence
+            );
+            assert_eq!(evidence.to_string(), evidence.as_str());
+        }
+        for not_yet in ["similar_content", "similarity", "content_similarity", ""] {
+            assert!(
+                not_yet.parse::<RenameEvidence>().is_err(),
+                "{not_yet:?} parsed as a RenameEvidence without a rule that emits it"
+            );
+        }
+
+        let pinned: [(RenameAmbiguity, &str); 4] = [
+            // The only unambiguous shape.
+            (RenameAmbiguity::Unique, "unique"),
+            (RenameAmbiguity::ManyFrom, "many_from"),
+            (RenameAmbiguity::ManyTo, "many_to"),
+            (RenameAmbiguity::ManyBoth, "many_both"),
+        ];
+        for (value, name) in pinned {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<RenameAmbiguity>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+        }
+        let mut listed: Vec<RenameAmbiguity> = pinned.iter().map(|(value, _)| *value).collect();
+        listed.sort_unstable();
+        let mut all = RenameAmbiguity::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a rename-ambiguity value was added to the vocabulary without a name above"
+        );
+
+        // Three of the four values mean "do not promote this pairing".
+        assert_eq!(
+            RenameAmbiguity::ALL
+                .iter()
+                .filter(|a| **a != RenameAmbiguity::Unique)
+                .count(),
+            3
+        );
+
+        // A score is exactly what this design does not have. No name suggesting one may parse as
+        // either half of it.
+        for scored in ["confidence", "score", "probable", "likely"] {
+            assert!(scored.parse::<RenameEvidence>().is_err());
+            assert!(scored.parse::<RenameAmbiguity>().is_err());
         }
     }
 }

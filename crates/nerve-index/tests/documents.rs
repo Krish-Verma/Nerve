@@ -361,14 +361,27 @@ fn a_real_v3_database_migrates_to_exactly_what_the_current_build_produces() {
         );
         // A v3 build derived its state from those labels, so the downgrade has to as well.
         nerve_store::rebuild_assertion_state(&conn).unwrap();
-        // Rewind every marker above v3, and rewind v5's *shape* as well as its marker: replaying
-        // `ALTER TABLE module_facts ADD COLUMN framework_version` against a column that already
-        // exists is an error, and it should be — a migration that tolerated re-application would
-        // hide a real double-apply. So the downgrade has to be a real one.
+        // Rewind every marker above v3, and rewind v5's and v6's *shape* as well as their
+        // markers: replaying `ALTER TABLE module_facts ADD COLUMN framework_version` against a
+        // column that already exists is an error, and so is replaying `CREATE TABLE git_commit`
+        // against a table that already exists. Both should be — a migration that tolerated
+        // re-application would hide a real double-apply. So the downgrade has to be a real one.
+        //
+        // The four v6 tables go in dependency order: `git_change` and `git_rename_hypothesis`
+        // carry a foreign key onto `git_commit`, so dropping the parent first would leave two
+        // tables referencing a table that is gone.
         conn.execute("DELETE FROM schema_version WHERE version >= 4", [])
             .unwrap();
         conn.execute("ALTER TABLE module_facts DROP COLUMN framework_version", [])
             .unwrap();
+        for table in [
+            "git_change",
+            "git_rename_hypothesis",
+            "git_history_ingest",
+            "git_commit",
+        ] {
+            conn.execute(&format!("DROP TABLE {table}"), []).unwrap();
+        }
         assert_eq!(nerve_store::schema_version(&conn).unwrap(), Some(3));
         assert_ne!(
             nerve_store::canonical_dump(&conn).unwrap(),

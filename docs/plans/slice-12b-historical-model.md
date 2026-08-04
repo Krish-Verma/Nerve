@@ -1,8 +1,8 @@
 # Slice 12b — the historical model
 
-**Status:** accepted, not yet implemented
+**Status:** storage layer implemented and verified; ingestion and CLI outstanding
 **Depends on:** Slice 12a (`e2ecb23`) — the Git object reader
-**Schema:** v5 → **v6** (additive; three new tables, no change to any existing table)
+**Schema:** v5 → **v6** (additive; four new tables, no change to any existing table)
 **Roadmap row:** 12b
 
 ---
@@ -70,7 +70,7 @@ describing the *current* repository:
 - `EntityKind::is_symbol()` feeds `symbols_total`, which Slice **7a-iii was an entire corrective
   slice about**. A historical symbol counted there makes the rail lie.
 - `entity_fts` is populated by an `AFTER INSERT` trigger on `entity`
-  (`schema.rs:171`). A historical symbol is therefore searchable, and `nerve search` would
+  (`schema.rs:172`). A historical symbol is therefore searchable, and `nerve search` would
   return symbols deleted years ago with nothing in the row to say so.
 - `EntityKind::path_role()` (Slice 8b-i) makes a path name whatever is at it. A historical path
   resolves as a selector to something that no longer exists.
@@ -106,7 +106,7 @@ today's edges to yesterday's commit. Refused with the reason, in the manner of `
 
 ## 3. What 12b does **not** put in the evidence model, and why
 
-**Decision: commits are not entities, changes are not assertions.** History lives in three
+**Decision: commits are not entities, changes are not assertions.** History lives in four
 dedicated tables. This contradicts the roadmap row's phrase "commit entities" and the
 contradiction is deliberate.
 
@@ -339,7 +339,7 @@ count of paths it wrongly reported.
 
 ## 6. Schema v6
 
-Additive. Three new tables, no `ALTER` of any existing table, no data migration.
+Additive. Four new tables, no `ALTER` of any existing table, no data migration.
 `Step::Sql(V6)`, appended to `MIGRATIONS` with the array length `5` → `6`, `SCHEMA_VERSION`
 5 → 6, and `crates/nerve-store/tests/schema.rs:344` updated.
 
@@ -623,9 +623,43 @@ Gitlinks (submodule commits, mode `0o160000`) are recorded as a change to the gi
 
 ### 8.5 Incremental re-ingest
 
-`git_commit` is keyed `(repo_id, commit_oid)` and a commit is immutable, so re-ingest is an
+`git_commit` is keyed `(repo_id, commit_oid)` and a commit object is immutable, so re-ingest is an
 `INSERT OR IGNORE` over commits already present and a walk that stops as soon as it reaches one.
 New commits cost their own changes and nothing more.
+
+#### 8.5.1 Two columns are *not* immutable, and the ingester must repair them
+
+Found by the storage implementation, verified, and accepted against this plan's own earlier
+wording. "A commit is immutable" is true of `commit_oid`, `tree_oid`, `parent_oids`, the times and
+`summary`. It is **false** of `parent_completeness` and `changes_enumerated`: those record what
+*this repository could see at read time*, and a `git fetch --unshallow` — or a fetch that fills a
+promisor hole — changes them.
+
+Because `insert_commit` ignores the second insert, an unshallowed repository would otherwise keep a
+former boundary commit at `shallow_boundary` / `parent_unavailable` with **zero change rows
+forever**. That is availability data which is now false, at exactly the boundary §5.3 calls the most
+likely way this slice ships the error it exists to avoid.
+
+**The rule, and it is provable rather than heuristic:** a commit classified by what was *missing*
+must be re-examined; a commit classified by what was *present* need not be. So on every sync, before
+walking, the ingester deletes every commit whose `parent_completeness` is neither `root` nor
+`parents_available` — together with its `git_change` and `git_rename_hypothesis` rows, in foreign-key
+order — and lets the walk re-record them. `root` and `parents_available` are conclusions from
+presence and cannot be improved by fetching; the other three are conclusions from absence and can.
+
+This needs one store function, `delete_commits_with_unavailable_parents`, and it is cheap: on a
+complete repository the set is empty, so an ordinary re-sync pays one indexed count.
+
+#### 8.5.2 A commit and its changes are one transaction
+
+Also found by the storage implementation. Nothing in the store layer can enforce it, and the
+consequence of getting it wrong is precisely the ambiguity `changes_enumerated` exists to remove: a
+crash between `insert_commit` and `insert_changes` leaves a commit claiming `enumerated` with no
+change rows, and the next sync **skips it**, because `insert_commit` now returns `false`. The
+ambiguity would then be permanent and indistinguishable from a legitimately empty commit.
+
+The ingester wraps each commit's rows in one transaction. Tested by making `insert_changes` fail
+mid-commit and asserting the commit row is absent afterwards, so a later sync re-records it.
 
 **Rewritten history** (rebase, amend, force-update) leaves commits recorded that HEAD no longer
 reaches. They are not deleted — they were really read, and deleting them would lose the record
