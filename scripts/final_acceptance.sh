@@ -125,8 +125,12 @@ refused trace-tests \
   "Nerve must not run a repository's test runner (THREAT-MODEL T1, no_subprocess.rs)"
 
 # Absent because unbuilt. A gap, and named as one rather than blended into the row above.
-for pair in "history:Slice 12 — Git history and the temporal layer" \
-            "memory:Slice 14 — human-confirmed memory"; do
+#
+# `history` left this list in Slice 12b. It is now exercised for real in section 4b, which is the
+# update the old row was asking for: while it sat here, the script printed
+# `PASS — nerve history exists — update this script`, which counted as a pass while checking nothing
+# about what the command does. A placeholder that scores is worse than a gap that does not.
+for pair in "memory:Slice 14 — human-confirmed memory"; do
   command="${pair%%:*}"; reason="${pair#*:}"
   if "$NERVE" help "$command" >/dev/null 2>&1; then
     printf '  [%s] nerve %s exists — update this script\n' "$(green PASS)" "$command"
@@ -175,6 +179,93 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------
+section "4b. Git history, and the sentence it must never print"
+
+# The committed fixtures are used rather than this repository's own `.git`, for two reasons: a
+# shallow checkout cannot be produced from the repository under test without network, and the
+# fixtures carry an `inventory.json` whose values are Git's own answers. Each stores its git
+# directory under the plain name `gitdir/`, because Git will not track a nested `.git`.
+history_repo() {
+  local fixture="$1" dest="$2"
+  cp -R "$ROOT/fixtures/$fixture" "$dest" || return 1
+  mv "$dest/gitdir" "$dest/.git" || return 1
+  "$NERVE" init "$dest" >/dev/null 2>&1
+}
+
+if [ -d "$ROOT/fixtures/history-basic" ] && [ -d "$ROOT/fixtures/history-shallow" ]; then
+  HWORK=$(mktemp -d)
+  trap 'rm -rf "$WORK" "$HWORK"' EXIT
+
+  check "nerve history sync reads a repository's own commits" bash -c "
+    $(declare -f history_repo)
+    ROOT='$ROOT' NERVE='$NERVE'
+    history_repo history-basic '$HWORK/basic' &&
+    '$NERVE' history sync '$HWORK/basic' >/dev/null &&
+    '$NERVE' history log --path '$HWORK/basic' --json | grep -q '\"answerable\": *true'"
+
+  check "nerve history log counts what Git counted" bash -c "
+    declared=\$(python3 -c \"import json;print(len(json.load(open('$ROOT/fixtures/history-basic/inventory.json'))['commits']))\")
+    got=\$('$NERVE' history log --path '$HWORK/basic' --json | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"totals\"][\"commits\"])')
+    [ \"\$declared\" = \"\$got\" ]"
+
+  # A path that no longer exists must still have a history. Under a guard that canonicalized — which
+  # is what `discover::canonical_child` does — every deleted path would have been refused, and the
+  # refusal counted as a path-safety success. This is the check that would have caught that.
+  check "a deleted path still has a history" bash -c "
+    '$NERVE' history file src/app/util.rs --path '$HWORK/basic' --json |
+      python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d[\"count\"]>0 and any(c[\"change\"][\"change_kind\"]==\"deleted\" for c in d[\"commits\"]) else 1)'"
+
+  check "history reads leave the database byte-identical" bash -c "
+    before=\$(shasum -a 256 '$HWORK/basic/.nerve/nerve.db' | cut -d' ' -f1)
+    '$NERVE' history log --path '$HWORK/basic' >/dev/null 2>&1
+    '$NERVE' history file README.md --path '$HWORK/basic' >/dev/null 2>&1
+    after=\$(shasum -a 256 '$HWORK/basic/.nerve/nerve.db' | cut -d' ' -f1)
+    [ \"\$before\" = \"\$after\" ]"
+
+  # **The product assertion of row 12b, on the shipped binary.** A shallow boundary means "history
+  # before this point is unavailable to this repository", never "the project's history begins here".
+  # Diffing a boundary against the empty tree would report every file in it as newly added — the
+  # claim, stated as data. Both directions are checked: the boundary must be *named* (or a command
+  # that printed nothing would pass) and the forbidden phrasing must be absent.
+  check "a shallow boundary is never described as the start of history" bash -c "
+    $(declare -f history_repo)
+    ROOT='$ROOT' NERVE='$NERVE'
+    history_repo history-shallow '$HWORK/shallow' || exit 1
+    '$NERVE' history sync '$HWORK/shallow' >/dev/null || exit 1
+    boundary=\$(python3 -c \"import json;print(json.load(open('$ROOT/fixtures/history-shallow/inventory.json'))['shallow']['boundary_oids'][0])\")
+    out=\$('$NERVE' history log --path '$HWORK/shallow')
+    printf '%s' \"\$out\" | grep -q \"\$boundary\" || exit 1
+    printf '%s' \"\$out\" | grep -q 'unavailable to this repository' || exit 1
+    ! printf '%s' \"\$out\" | grep -qiE \"history begins here|first commit in project|beginning of repository history\""
+
+  check "a shallow boundary enumerates no changes, and says why" bash -c "
+    '$NERVE' history log --path '$HWORK/shallow' --json | python3 -c '
+import json,sys
+rows = json.load(sys.stdin)[\"commits\"]
+b = [r for r in rows if r[\"parent_completeness\"] == \"shallow_boundary\"]
+sys.exit(0 if len(b) == 1
+         and b[0][\"changes\"] == 0
+         and b[0][\"changes_enumerated\"] == \"parent_unavailable\"
+         and b[0][\"may_claim_history_begins_here\"] is False
+         and len(b[0][\"parent_oids\"]) == 1
+         else 1)'"
+
+  # Nerve stopping is not the repository ending. A different reason, and it must read differently.
+  check "a bounded ingest is a different reason from a shallow boundary" bash -c "
+    $(declare -f history_repo)
+    ROOT='$ROOT' NERVE='$NERVE'
+    history_repo history-basic '$HWORK/bounded' || exit 1
+    '$NERVE' history sync '$HWORK/bounded' --max-commits 1 --json |
+      python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d[\"walk_terminated_by\"]==\"commit_budget\" and d[\"shallow\"] is False else 1)'"
+
+  check "an over-large --max-commits is refused with the clamp stated" bash -c "
+    out=\$('$NERVE' history sync '$HWORK/bounded' --max-commits 999999 2>&1); rc=\$?
+    [ \$rc -eq 10 ] && printf '%s' \"\$out\" | grep -q 5000"
+else
+  skip "git history" "fixtures/history-* are missing"
+fi
+
+# ---------------------------------------------------------------------------------------------
 section "5. Supply chain"
 
 LOCKED=$(grep -c '^name = ' "$ROOT/Cargo.lock")
@@ -198,7 +289,7 @@ section "6. What this script cannot check, and does not pretend to"
 
 note "MANUAL" "Real-world accuracy: docs/plans/slice-15-real-world-validation.md needs a corpus, two oracles, and network to acquire them"
 note "MANUAL" "The Python tracer end to end: scripts/trace_python_e2e.sh needs pytest in a venv, which needs network"
-note "MANUAL" "Visual QA of apps/nerve-web: the frontend is frozen and owned by the user"
+note "MANUAL" "Browser QA of apps/nerve-web: no headless browser is assumed here. The freeze was lifted for *function* on 2026-08-03 — the interface must expose every finalized capability — so this is a real gap, not a deferral"
 
 # ---------------------------------------------------------------------------------------------
 printf '\n\033[1mSummary\033[0m\n'
