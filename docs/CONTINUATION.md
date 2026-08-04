@@ -8,11 +8,11 @@
 
 | | |
 |---|---|
-| **Last slice commit** | **Slice 12a** (`e2ecb23`) — Git object access. Since then: `ee7f124` (corrective, the server layering guard) and `3d7ffe9` (the Slice 12b plan). `git log --oneline -15` is authoritative. |
-| **Branch** | `main` · **Working tree** clean at `3d7ffe9` |
+| **Last slice commit** | **Slice 12b ingestion** (`848af72`). Row 12b is in three commits: `4b0d926` storage/schema v6, `848af72` the ingestion engine, plus fixtures at `24da6ef`. `git log --oneline -20` is authoritative. |
+| **Branch** | `main` · **Working tree** clean at `848af72` |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
-| **Last completed slice** | **Slice 12a** — Git object access. **Rows 1–11 and 12a are complete.** |
-| **Next action** | **Implement Slice 12b** against the accepted plan `docs/plans/slice-12b-historical-model.md`. Row 12 is now split again into **12b** (ingestion, storage, availability, `nerve history sync`/`log`/`file`) and **12c** (derived questions + API + MCP + UI). The storage strategy is **measured and settled** — do not reopen it. Then 12c, 13, 14, UI completion, real-world validation, acceptance expansion, the clean-checkout audit. |
+| **Last completed slice** | **Slice 12b storage + ingestion.** Rows 1–11, 12a are complete; **12b lacks only its CLI surface**. |
+| **Next action** | **`nerve history sync` / `log` / `file`** — the CLI over the committed engine. Then: extend `scripts/final_acceptance.sh` (its `history` "NOT BUILT" block at line 128 becomes a real check — the script already prints `PASS … update this script` when the command appears), mark row 12b complete, write its report, then **12c** (derived questions + API + MCP + UI, and the six new vocabularies need UI glosses), 13, 14, the UI completion pass, real-world validation, acceptance expansion, the clean-checkout audit. |
 | **Roadmap status** | **INCOMPLETE.** Rows 1–11 and 12a are done. **12b, 12c, 13, 14, the UI completion pass, the real-world validation run, the acceptance expansion and the final audit are not.** `scripts/final_acceptance.sh` passes 35/35, which gates what is built and is **not** a claim of completeness. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
@@ -45,17 +45,32 @@ no repair. See `docs/reports/restart-recovery-report.md`.
   cannot be a self-test subject for a symbol query; `apps/nerve-web` is what lets this repository index
   itself at all.
 
-## Verification state at the Slice 12a commit
+## Verification state at `848af72` (Slice 12b ingestion)
+
+Run by the orchestrator, not quoted from an implementer.
 
 ```
 cargo fmt --all -- --check                              → clean
 cargo clippy --workspace --all-targets -- -D warnings   → 0 warnings
-cargo test --workspace --no-fail-fast                   → 1321 passed, 0 failed, 2 ignored
+cargo test --workspace --no-fail-fast                   → 1391 passed, 0 failed, 2 ignored
 cargo build --release                                   → Finished
-python3 -m unittest discover -s tracers/python          → 115 tests, OK (skipped=1)
-scripts/trace_python_e2e.sh                             → all checks passed (needs pytest; ran)
-scripts/final_acceptance.sh                             → 35 passed, 0 failed, 0 skipped
-Cargo.lock                                              → 106 packages (101 + flate2's five)
+Cargo.lock                                              → 106 packages, unchanged by row 12b
+```
+
+**Schema is at v6.** Four new tables — `git_commit`, `git_change`, `git_rename_hypothesis`,
+`git_history_ingest` — and no change to any existing table, so `entity_fts`, `symbols_total`,
+`entities_total`, selector resolution and `ui_vocabulary.rs` are untouched. Six new closed
+vocabularies in `nerve-core`; **none of them is mirrored into the UI yet**, which is 12c's job.
+
+Test-count history: 1321 (12a) → 1349 (12b storage) → 1391 (12b ingestion).
+
+Still to re-run at the end of row 12b, because they were last run at `2d68d58`:
+
+```
+python3 -m unittest discover -s tracers/python          → was 115 tests, OK
+scripts/trace_python_e2e.sh                             → was all checks passed (needs pytest)
+scripts/final_acceptance.sh                             → was 35 passed; will change once
+                                                          `nerve history` exists
 ```
 
 `Cargo.lock` is at **106** packages. It was 101 through Slice 11b — which added none, being pure standard
