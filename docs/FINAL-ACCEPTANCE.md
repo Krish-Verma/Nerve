@@ -56,8 +56,11 @@ after it. A gate that under-reports failures is worse than no gate.
 no Rust source references the trace producer. Product code that knows the tracer's name is one step
 from knowing how to launch it.
 
-**3. Command surface** — all 13 commands exist; the two refusals do not; the two unbuilt commands are
-reported as gaps.
+**3. Command surface** — all **14** commands exist; the two refusals do not; the unbuilt commands are
+reported as gaps. The 14 are `init` `index` `coverage` `trace` `status` `check` `doctor` `search`
+`gaps` `impact` `path` `serve` `mcp` `why`, each verified against `nerve <cmd> --help`. This said 13
+until 2026-08-03, as did `docs/CONTINUATION.md`; `scripts/final_acceptance.sh` was right all along,
+which is the argument for a script over a sentence.
 
 **4. End to end on a clean checkout** — `git archive HEAD` into a temporary directory, then `init`,
 `index`, `status`, `doctor`, `search`, `gaps`, `impact`, `why`, `path`, `check`. It never touches your
