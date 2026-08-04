@@ -287,10 +287,22 @@ were pending.
 
 Known gaps against that bar, verified 2026-08-03 and not yet fixed:
 
-- `apps/nerve-web/src/views/Path.tsx` is **dead code** — 264 lines imported by nothing. `App.tsx`
-  mounts five views; `routing.ts`'s `Route` union has no `path` case and `ENTITY_TABS` is
-  `relations|evidence|graph|source`. Slice 2b's `/api/path` has no reachable UI.
-- `/api/impact` (Slice 7b, "the 11th route") has **no UI at all**.
+- ~~`views/Path.tsx` is dead code.~~ **This was wrong, and the way it was wrong matters more than
+  the claim.** `views/Graph.tsx:31` imports `PathFinder` from `./Path`, and `/api/path` is reachable
+  at `#/entity/<id>/graph?to=<selector>`. The finding came from `grep -rn PathFinder`, which printed
+  nothing — because **`Graph.tsx` contained a literal NUL byte**, so `grep` classified it as binary
+  and suppressed every match. `file(1)` called it "data". Fixed: the NUL separators in `Graph.tsx`
+  and `search.ts` are now `\u0000` escapes, and
+  `ui_vocabulary.rs::no_interface_source_file_contains_a_raw_control_byte` fails if any interface
+  source regains a raw control byte. **Never audit this repository with plain `grep` alone** — use
+  `grep -a`, or a byte-level scan.
+  The real `path` defect is narrower: a path is a question about *two* entities and can only be
+  asked from inside one of them, so it has no top-level route and is undiscoverable.
+- `/api/impact` (Slice 7b, "the 11th route") has **no UI at all** — the string `impact` appears
+  nowhere under `apps/nerve-web/src/`, not even as a TypeScript type.
+- **Nothing renders `selectors` / `alternatives`.** The API sends it on every selector answer and
+  four TypeScript mirrors omit the field, so "resolved by this rule, and here is what it passed
+  over" never reaches a human. That is Slice 8b-i's whole point, unsurfaced.
 - `/api/partial-parses` — surfacing unverified.
 
 ### The superseded entry, kept for the record (2026-08-02)

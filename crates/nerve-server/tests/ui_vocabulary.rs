@@ -60,6 +60,195 @@ fn types_ts() -> String {
     read("apps/nerve-web/src/api/types.ts")
 }
 
+/// The gloss tables this file checks, by declaring file and constant name.
+///
+/// One list, used by both the source-side vocabulary tests' companion below and the
+/// bundle-staleness check, so a new gloss table cannot be added to one and forgotten by the other.
+const GLOSS_TABLES: [(&str, &str); 11] = [
+    ("format.ts", "FRESHNESS"),
+    ("format.ts", "SOURCE_TYPES"),
+    ("format.ts", "DIRECTNESS"),
+    ("format.ts", "RELATION_VERB"),
+    ("format.ts", "STATUS_GLOSS"),
+    ("vocab.ts", "UNRESOLVED_REASON"),
+    ("vocab.ts", "UNMODELLED_FORM"),
+    ("vocab.ts", "KIND_GLOSS"),
+    ("vocab.ts", "COVERAGE_STATE"),
+    ("vocab.ts", "UNRESOLVED_CATEGORY"),
+    ("vocab.ts", "ADR_STATUS"),
+];
+
+/// The interface compiled into the binary must be built from the interface source.
+///
+/// `crates/nerve-server/assets/assets/nerve.js` is a **tracked build artifact**, compiled in with
+/// `include_bytes!` so `nerve serve` needs no Node. Nothing checked that it corresponded to the
+/// TypeScript beside it, and it did not: the committed bundle was missing `is served by`, `was
+/// observed calling` and `was observed called by` — the glosses for `SERVED_BY` (Slice 10a) and
+/// `TEST_OBSERVED_CALL` (Slice 11a). Both vocabularies were added to the source, and the assets
+/// were never re-embedded, so the shipped interface rendered fallback text for two relations the
+/// backend emits.
+///
+/// Every vocabulary test in this file reads the TypeScript **source**, which is why they all passed
+/// while the binary shipped something else. That is precisely the defect Slice 5d-iii existed to
+/// close — it found 120 sites rendering fallback text — recurring one layer down, in the artifact
+/// rather than in the source.
+///
+/// The check is a containment test rather than a rebuild: `cargo test` cannot run Vite, and should
+/// not try. Every prose gloss the source declares must appear as a literal in the bundle. A
+/// minifier renames identifiers but does not rewrite string contents, which is what makes this
+/// sound — and it is exactly the class of drift that goes unnoticed, because adding a gloss and
+/// forgetting `npm run build` leaves every other test green.
+#[test]
+fn the_embedded_bundle_carries_every_gloss_the_source_declares() {
+    let bundle_bytes =
+        std::fs::read(repository_root().join("crates/nerve-server/assets/assets/nerve.js"))
+            .expect("the embedded bundle must exist — run `npm run build` in apps/nerve-web");
+    let bundle = String::from_utf8_lossy(&bundle_bytes);
+
+    let mut checked = 0;
+    let mut missing = Vec::new();
+    for (file, table) in GLOSS_TABLES {
+        let source = read(&format!("apps/nerve-web/src/{file}"));
+        for phrase in quoted_prose_in_table(&source, table) {
+            checked += 1;
+            if !bundle.contains(&phrase) {
+                missing.push(format!("{file}/{table}: {phrase:?}"));
+            }
+        }
+    }
+
+    // Anti-vacuity. A parser that returned nothing would make this pass by checking nothing, which
+    // is the whole failure mode being closed.
+    assert!(
+        checked >= 60,
+        "expected to check the gloss tables, found only {checked} phrases"
+    );
+    assert!(
+        missing.is_empty(),
+        "{} gloss(es) are in the interface source but not in the embedded bundle — \
+         run `npm run build` in apps/nerve-web and commit crates/nerve-server/assets:\n  {}",
+        missing.len(),
+        missing.join("\n  ")
+    );
+}
+
+/// Prose string literals inside one object literal, at any depth.
+///
+/// "Prose" means it contains a space: a gloss is a sentence, while a key, a CSS class and a tone
+/// name are single tokens. Restricting to one named table keeps the check away from strings that
+/// tree-shaking may legitimately drop.
+fn quoted_prose_in_table(source: &str, name: &str) -> Vec<String> {
+    let start = body_start(source, name, "{");
+    let chars: Vec<char> = source[start..].chars().collect();
+    let mut found = Vec::new();
+    let mut depth = 1usize;
+    let mut index = 0usize;
+
+    while index < chars.len() {
+        if let Some(next) = skip_comment(&chars, index) {
+            index = next;
+            continue;
+        }
+        match chars[index] {
+            '{' | '[' => depth += 1,
+            '}' | ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            quote @ ('\'' | '"') => {
+                let mut cursor = index + 1;
+                let mut text = String::new();
+                while cursor < chars.len() && chars[cursor] != quote {
+                    if chars[cursor] == '\\' {
+                        cursor += 1;
+                    }
+                    if let Some(ch) = chars.get(cursor) {
+                        text.push(*ch);
+                    }
+                    cursor += 1;
+                }
+                if text.contains(' ') {
+                    found.push(text);
+                }
+                index = cursor;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    found
+}
+
+/// No interface source file may contain a raw C0 control byte.
+///
+/// `views/Graph.tsx` and `search.ts` each used a **literal NUL byte** as an in-band separator —
+/// a composite sort key in one, a temporary split marker for camel-case words in the other. The
+/// technique is sound; writing the byte instead of the `\u0000` escape is not, for three reasons
+/// that all bit at once:
+///
+/// 1. **`grep` treats a file containing NUL as binary and prints no matches.** An audit of this
+///    repository concluded that `views/Path.tsx` was dead code, because `grep -rn PathFinder`
+///    found nothing — while `Graph.tsx:31` imports it. `file(1)` called the file "data". A
+///    silent false negative from the tool an audit trusts most is worse than a loud defect.
+/// 2. **Subagent file tools strip C0 bytes** — recorded in `docs/CONTINUATION.md` under
+///    environment notes. Any agent asked to edit either file would have removed the separator and
+///    silently changed what the code means.
+/// 3. Slice 5a closed an identity-forgery vector by making `discover::canonical_child` refuse the
+///    **entire C0 range** in a path, because a literal `0x1f` could merge two entities onto one
+///    identity. Refusing those bytes in repository input while writing them into our own source
+///    is not a position this project can hold.
+///
+/// Tab, newline and carriage return are permitted: they are C0 and they are what text is made of.
+#[test]
+fn no_interface_source_file_contains_a_raw_control_byte() {
+    let src = repository_root().join("apps/nerve-web/src");
+    let mut scanned = 0;
+    let mut offenders = Vec::new();
+
+    let mut stack = vec![src.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("apps/nerve-web/src must be readable") {
+            let path = entry.expect("a readable directory entry").path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let is_source = path.extension().is_some_and(|ext| {
+                ["ts", "tsx", "mjs", "js", "jsx", "css"]
+                    .iter()
+                    .any(|k| ext == *k)
+            });
+            if !is_source {
+                continue;
+            }
+            scanned += 1;
+            let bytes = std::fs::read(&path).expect("a source file must be readable");
+            for (offset, byte) in bytes.iter().enumerate() {
+                if *byte < 0x20 && !matches!(byte, b'\t' | b'\n' | b'\r') {
+                    let line = bytes[..offset].iter().filter(|b| **b == b'\n').count() + 1;
+                    offenders.push(format!(
+                        "{}:{line} holds byte 0x{byte:02x} — write it as an escape",
+                        path.strip_prefix(&src).unwrap_or(&path).display()
+                    ));
+                }
+            }
+        }
+    }
+
+    // Anti-vacuity: a walk that found nothing would pass by scanning nothing.
+    assert!(
+        scanned >= 20,
+        "expected to scan the interface source, found {scanned} files"
+    );
+    assert!(
+        offenders.is_empty(),
+        "raw control bytes in interface source:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 // ---- a very small object-literal reader ------------------------------------------------------
 
 /// Skip a `//` or `/* */` comment starting at `index`; returns the index just past it.
