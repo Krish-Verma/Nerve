@@ -8,12 +8,12 @@
 
 | | |
 |---|---|
-| **Last slice commit** | **Slice 12a** (`e2ecb23`) — Git object access. Row 11 closed earlier in the same session (11a-i `871aef3`, 11b `dcff528`). `git log --oneline -15` is authoritative. |
-| **Branch** | `main` · **Working tree** clean at that commit |
+| **Last slice commit** | **Slice 12a** (`e2ecb23`) — Git object access. Since then: `ee7f124` (corrective, the server layering guard) and `3d7ffe9` (the Slice 12b plan). `git log --oneline -15` is authoritative. |
+| **Branch** | `main` · **Working tree** clean at `3d7ffe9` |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
 | **Last completed slice** | **Slice 12a** — Git object access. **Rows 1–11 and 12a are complete.** |
-| **Next action** | **Slice 12b** — the historical model on top of 12a's reader: commit entities, first/last seen, moves, rename *hypotheses* kept separate from identity links, change frequency, labelled co-change. **The storage strategy must be measured, not assumed** — duplicating the graph per commit needs proof. This is the first slice in row 12 that adds entities, a schema migration and a CLI surface, so it needs its own plan first. Then 13, 14, validation execution, the final audit. |
-| **Roadmap status** | **INCOMPLETE.** Rows 1–11 and 12a are done. **12b, 13, 14, the real-world validation run and the final backend audit are not.** The acceptance package now exists and passes 35/35, which gates what is built and is not a claim of completeness. |
+| **Next action** | **Implement Slice 12b** against the accepted plan `docs/plans/slice-12b-historical-model.md`. Row 12 is now split again into **12b** (ingestion, storage, availability, `nerve history sync`/`log`/`file`) and **12c** (derived questions + API + MCP + UI). The storage strategy is **measured and settled** — do not reopen it. Then 12c, 13, 14, UI completion, real-world validation, acceptance expansion, the clean-checkout audit. |
+| **Roadmap status** | **INCOMPLETE.** Rows 1–11 and 12a are done. **12b, 12c, 13, 14, the UI completion pass, the real-world validation run, the acceptance expansion and the final audit are not.** `scripts/final_acceptance.sh` passes 35/35, which gates what is built and is **not** a claim of completeness. |
 
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
@@ -264,20 +264,42 @@ and — the orchestrator's — disabling the traversal pre-check (3 tests).
 
 ---
 
-## The interface is frozen (2026-08-02)
+## The interface freeze is lifted for *function* and kept for *visuals* (2026-08-03)
 
-The user owns `apps/nerve-web/` from this date and is working on it separately. Backend work
-continues.
+**This supersedes the 2026-08-02 freeze below it.** The user's instruction of 2026-08-03 requires
+the existing frontend to become a **functionally complete reference UI** for the finished product,
+so that the whole product can be tested before the frontend is redesigned. Direct user instruction
+outranks a repository decision, and the earlier entry is kept only so the change is visible rather
+than silent.
 
-**Do not** do visual redesign, new views, layout, typography, responsive work, screenshot-driven
-refinement, or any discretionary edit under `apps/nerve-web/`. Do not block a backend slice on
-browser or screenshot QA.
+**Do** implement every finalized human-facing capability in `apps/nerve-web/`: routes or panels,
+working API integration, stable types, and every required state — loading, empty, error, partial,
+stale, unsupported, ambiguous, truncated. Perform real browser QA on new or materially changed
+surfaces. Keep `docs/UI-BACKEND-HANDOFF.md` current for contracts, and maintain
+`docs/UI-FEATURE-SPEC.md` as the authoritative handoff for the later redesign.
 
-**Do** complete the backend contract, add API and CLI tests, and record every new frontend
-integration requirement in `docs/UI-BACKEND-HANDOFF.md` — endpoint, fields, states, example
-response, display language. A frontend edit is permitted only when the repository would otherwise
-not build, must be minimal, and must be documented there. Slice 7a-iii's two edits (four lines
-across `types.ts` and `App.tsx:144`) are the model.
+**Still do not** do visual redesign, rebranding, typography or layout work, or speculative polish.
+Use the existing information architecture and design vocabulary. A backend feature is not complete
+until the UI provides a usable way to inspect or operate it — and an operation that is
+intentionally CLI-only for security reasons must **show its imported results, explain the
+boundary, and print the exact command**, never present a disabled button as though implementation
+were pending.
+
+Known gaps against that bar, verified 2026-08-03 and not yet fixed:
+
+- `apps/nerve-web/src/views/Path.tsx` is **dead code** — 264 lines imported by nothing. `App.tsx`
+  mounts five views; `routing.ts`'s `Route` union has no `path` case and `ENTITY_TABS` is
+  `relations|evidence|graph|source`. Slice 2b's `/api/path` has no reachable UI.
+- `/api/impact` (Slice 7b, "the 11th route") has **no UI at all**.
+- `/api/partial-parses` — surfacing unverified.
+
+### The superseded entry, kept for the record (2026-08-02)
+
+The user owned `apps/nerve-web/` from that date and was working on it separately; backend work
+continued, and discretionary frontend edits were forbidden. Slice 7a-iii's two four-line edits
+were the model for the only permitted kind. That constraint held for rows 8b through 12a and
+explains why those slices recorded UI requirements in `docs/UI-BACKEND-HANDOFF.md` instead of
+implementing them.
 
 ## Remaining roadmap
 
@@ -288,9 +310,11 @@ Rows 1–9 are **complete** and no longer listed here; `docs/ROADMAP.md` is auth
 | **10** | ✅ **Complete** as 10a + 10b. HTTP routes only: FastAPI, Flask, Express. `EntityKind::Endpoint`, `Relation::ServedBy`, schema v5, `FRAMEWORK_RULE` emitted for the first time. **Events, DI, Django, NestJS and pytest fixtures were each rejected with a reason** in `docs/plans/slice-10-framework-rules.md` §2 — read that before "finishing" row 10, because it is finished as scoped. |
 | **11** | ✅ **Complete** as 11a + 11a-i + 11b. `nerve trace-tests` **was refused and stayed refused** — tracing is ingest-only, because `no_subprocess.rs`'s own module doc names "no test runners" as what it exists to refuse, and coverage and `gitinfo.rs` had both already chosen ingestion. The cost was accepted openly: `tracers/python/` is non-Rust product surface, and **no Rust source may name it**. Read `docs/reports/slice-11a-i-report.md` before touching the hostile fixtures — four of them were attacking nothing while a green suite reported them as passing. |
 | **12a** | ✅ **Complete.** A reader only: zero entities, zero rows, schema unchanged. `flate2` added with `rust_backend`; the **measured** delta was **+5 (101 → 106)**, not the +3 the analysis estimated. `.git` object data is now untrusted input — the bound that matters is that the inflate is capped **as it streams**, and a probe turning that into a post-hoc check allocates **805 MB against a 64 MiB bound**. |
-| **12b** | **Next.** The historical model on 12a's reader: commit entities, first/last seen, moves, rename **hypotheses kept separate from identity links**, change frequency, labelled co-change. **It needs its own plan first** — it is the first slice in row 12 that adds entities, a schema migration and a CLI surface, and the storage strategy must be **measured**: duplicating the whole graph per commit needs proof, not intuition. 12a's `StoreLimits` is the input to get right — a shallow or partial clone means *"I cannot see further"*, which must never be modelled as *"the history ends here"*. |
+| **12b** | **Next — plan accepted and committed** (`3d7ffe9`), `docs/plans/slice-12b-historical-model.md`. Ingestion, storage, availability, `nerve history sync`/`log`/`file`, schema **v6**. Settled and **not to be reopened**: storage is delta, measured at 30.1× and 177× row amplification against per-commit snapshots; **commits are not entities and changes are not assertions** (a commit is provenance for a change fact whose subject is a path, and a historical path is not a current entity — the CoverageRun/TraceRun rule); symbol-level history and historical impact are **refused in row 12** with their costs stated. The plan carries ten verified refutations from adversarial review in its §12, including two pre-existing defects it must fix (`canonical_child` cannot guard a path that no longer exists; `gitinfo::head_commit` does not follow `commondir`). |
+| **12c** | Derived historical questions (first/last observed **for path-bearing kinds only**, similarity renames as a second evidence value, change frequency, labelled co-change, state-to-state diff) plus API, MCP and the UI view. Must add UI glosses for the six vocabularies 12b introduces. |
 | 13 | Cross-repository contracts |
 | 14 | Human-confirmed memory |
+| **UI completion** | The frontend freeze is **lifted for function** — see the section above. Three verified pre-existing gaps: `Path.tsx` is dead code, `/api/impact` has no UI, `/api/partial-parses` unverified. |
 | **Validation** | Real-world accuracy — plan and corpus already chosen: `docs/plans/slice-15-real-world-validation.md`. **Needs extending, not rewriting**: it predates Python and framework support, so its corpus table is TypeScript-only and its category list has no Python or framework rows. Network access for the corpus checkout was verified available on 2026-08-01 (`git ls-remote` against GitHub succeeds). |
 | **Acceptance** | `docs/FINAL-ACCEPTANCE.md` and `scripts/final_acceptance.sh` **do not exist yet**. Note when writing them: the CLI has **13** commands, and `sync`, `affected`, `trace-tests`, `history` and `memory` are **not** among them. `affected` is *refused* by ADR-0008 rather than missing, and `trace-tests` is refused by the Slice 11 plan — the script must encode a refusal as a pass, not as a gap. |
 | **Final audit** | Clean-checkout build, command matrix, repository matrix, ~24 audit categories. Not started. |
@@ -487,6 +511,27 @@ recorded in `docs/plans/slice-15-real-world-validation.md`.
 - Node v24.15.0 / npm 11.17.0 at `~/.nvm/versions/node/v24.15.0/bin`.
 - Subagent file tools **strip C0 bytes**, so a fixture needing a literal `0x1f` must store an
   escape and substitute at test time.
+
+## Found 2026-08-03 while preparing Slice 12b — open unless marked fixed
+
+- **FIXED (`ee7f124`)** — `crates/nerve-server/tests/layering.rs` scanned a hand-written
+  `include_str!` array of **16** files against a `src/` holding **17**. Four invariants read from
+  it (no SQL, no second graph walker, loopback-only bind, no CORS header), so a new module was one
+  commit from being exempt from all four — and `token.rs`, the omitted file, had never been scanned
+  by any of them. Now a recursive `read_dir` with an anti-vacuity floor, mirroring the fix Slice
+  7c-ii already made in `crates/nerve-cli/tests/cli.rs`. Probe: a new `src/mcp/probe_history.rs`
+  containing `SELECT` fails the test by name.
+- **OPEN, fixed by 12b** — `gitinfo::head_commit` does not follow `commondir`. Measured on a real
+  `git worktree add`: it returns `None`, so **indexing a linked worktree records no
+  `repository_state.git_commit`**. Pre-existing; `pipeline.rs:649` is the only caller.
+- **OPEN, guarded by 12b** — `discover::canonical_child` ends in `std::fs::canonicalize` and so
+  requires the path to *exist*. It cannot validate a historical or otherwise absent path. Not a
+  defect in the function; a trap for any slice that reaches for it. Rows 13 and 14 can make the
+  same mistake.
+- **OPEN** — four slice reports do not exist: `slice-10b-report.md`, `slice-11a-report.md`,
+  `slice-11b-report.md`, `slice-12a-report.md`. CLAUDE.md §7 requires one per slice. The ROADMAP
+  rows for those slices are unusually detailed and carry the substance. Address in the
+  documentation audit; do not fabricate detail the roadmap and plans do not already record.
 
 ## Known limitations carried forward
 
