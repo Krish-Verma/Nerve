@@ -8,34 +8,67 @@
 //! The check mirrors `crates/nerve-cli/tests/cli.rs`. It is deliberately crude: a grep that
 //! fails loudly is worth more than a convention nobody rechecks.
 
-const SOURCES: [(&str, &str); 16] = [
-    ("lib.rs", include_str!("../src/lib.rs")),
-    ("api.rs", include_str!("../src/api.rs")),
-    ("assets.rs", include_str!("../src/assets.rs")),
-    ("error.rs", include_str!("../src/error.rs")),
-    ("guard.rs", include_str!("../src/guard.rs")),
-    ("mcp.rs", include_str!("../src/mcp.rs")),
-    ("mcp/gaps.rs", include_str!("../src/mcp/gaps.rs")),
-    ("mcp/impact.rs", include_str!("../src/mcp/impact.rs")),
-    (
-        "mcp/investigate.rs",
-        include_str!("../src/mcp/investigate.rs"),
-    ),
-    ("mcp/path.rs", include_str!("../src/mcp/path.rs")),
-    ("mcp/search.rs", include_str!("../src/mcp/search.rs")),
-    ("mcp/tool.rs", include_str!("../src/mcp/tool.rs")),
-    ("request.rs", include_str!("../src/request.rs")),
-    ("respond.rs", include_str!("../src/respond.rs")),
-    ("router.rs", include_str!("../src/router.rs")),
-    ("shapes.rs", include_str!("../src/shapes.rs")),
-];
+use std::path::Path;
 
-/// Product code only.
+/// Every `.rs` file under `src/`, read at run time rather than listed here.
 ///
-/// A unit test that proves `Host: 0.0.0.0` is refused necessarily contains the string
-/// `0.0.0.0`, and a test that proves no CORS header is emitted necessarily names one. Scanning
-/// test code for the very strings the tests exist to refuse would make the two checks mutually
-/// exclusive, so the scan stops at the test module.
+/// This was a hand-maintained `include_str!` array until a new module under `src/mcp/` was one
+/// commit away from evading all four scans below — not only the SQL one, but the loopback-binding
+/// and CORS ones too. A file nobody remembered to add would have been silently exempt from the
+/// invariants this file exists to enforce.
+///
+/// `crates/nerve-cli/tests/cli.rs` already reads its crate's `src/` directory for exactly this
+/// reason, with the comment "scanning one file would let it be escaped by adding a second one" —
+/// Slice 7c-ii widened it there after the guard had only ever looked at `main.rs`. The server's
+/// copy kept the older shape. This is that correction, one crate over, and it recurses because
+/// `nerve-server/src/` has an `mcp/` subdirectory where the CLI's has none.
+///
+/// The returned text is already stripped to product code. A unit test proving `Host: 0.0.0.0` is
+/// refused necessarily contains the string `0.0.0.0`, and a test proving no CORS header is
+/// emitted necessarily names one, so scanning test code for the very strings the tests exist to
+/// refuse would make the two checks mutually exclusive.
+fn sources() -> Vec<(String, String)> {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut found = Vec::new();
+    collect(&src, &src, &mut found);
+    found.sort();
+
+    // Anti-vacuity. A walk that silently found nothing would make every scan below pass by
+    // iterating an empty list, which is the failure mode a directory read introduces and the
+    // hand-written array could not have.
+    //
+    // 17 is the measured count, not the 16 the old array listed — the discrepancy is the defect
+    // this function was written to close. A floor rather than an equality so the crate may grow,
+    // but tight enough that deleting a module has to be deliberate.
+    assert!(
+        found.len() >= 17,
+        "expected to scan the whole crate, found {} files: {:?}",
+        found.len(),
+        found.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
+    found
+}
+
+fn collect(base: &Path, dir: &Path, found: &mut Vec<(String, String)>) {
+    let entries = std::fs::read_dir(dir)
+        .unwrap_or_else(|error| panic!("{} must be readable: {error}", dir.display()));
+    for entry in entries {
+        let path = entry.expect("a readable directory entry").path();
+        if path.is_dir() {
+            collect(base, &path, found);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()));
+            let name = path
+                .strip_prefix(base)
+                .expect("every collected path is under src/")
+                .to_string_lossy()
+                .into_owned();
+            found.push((name, product_code(&text).to_owned()));
+        }
+    }
+}
+
 fn product_code(source: &str) -> &str {
     match source.find("#[cfg(test)]") {
         Some(index) => &source[..index],
@@ -45,7 +78,7 @@ fn product_code(source: &str) -> &str {
 
 #[test]
 fn the_server_contains_no_sql_and_no_traversal() {
-    for (name, source) in SOURCES.map(|(name, source)| (name, product_code(source))) {
+    for (name, source) in sources() {
         for forbidden in [
             "SELECT ",
             "INSERT INTO",
@@ -69,9 +102,22 @@ fn the_server_contains_no_sql_and_no_traversal() {
 }
 
 /// The graph is walked in one place. A second walker is a second set of answers.
+///
+/// The file-opening half of this scan exempts `token.rs`, and the exemption is written here
+/// rather than being a consequence of a list nobody maintained. Replacing the hand-written
+/// source array with a directory read revealed that the array held 16 entries while `src/` holds
+/// 17 `.rs` files: **`token.rs` was never scanned at all**, so it was also exempt from the SQL,
+/// loopback-binding and CORS scans, which it has no business being exempt from. It is now
+/// scanned by all of them, and its one legitimate `File::open` — the randomness source, whose
+/// narrowness `the_only_file_the_server_opens_itself_is_the_randomness_source` pins separately —
+/// is the single named exception.
 #[test]
 fn the_server_computes_no_graph_of_its_own() {
-    for (name, source) in SOURCES.map(|(name, source)| (name, product_code(source))) {
+    /// The one file permitted to open a file, and the only exemption in this module.
+    const OPENS_THE_RANDOMNESS_SOURCE: &str = "token.rs";
+
+    let mut exempted = 0;
+    for (name, source) in sources() {
         for forbidden in [
             "fn traverse",
             "fn walk",
@@ -79,16 +125,31 @@ fn the_server_computes_no_graph_of_its_own() {
             "adjacency",
             "breadth_first",
             "content_hash(",
-            "canonicalize(",
-            "std::fs::read",
-            "File::open",
         ] {
             assert!(
                 !source.contains(forbidden),
                 "nerve-server/{name} must not contain {forbidden:?}"
             );
         }
+
+        if name == OPENS_THE_RANDOMNESS_SOURCE {
+            exempted += 1;
+            continue;
+        }
+        for forbidden in ["canonicalize(", "std::fs::read", "File::open"] {
+            assert!(
+                !source.contains(forbidden),
+                "nerve-server/{name} must not contain {forbidden:?}"
+            );
+        }
     }
+
+    // The exemption must apply to a file that exists. A renamed `token.rs` would otherwise turn
+    // this into an exemption for nothing while the real module went unscanned.
+    assert_eq!(
+        exempted, 1,
+        "expected to exempt exactly {OPENS_THE_RANDOMNESS_SOURCE}"
+    );
 }
 
 /// One exception, deliberately narrow: `token.rs` opens `/dev/urandom`. Reading the operating
@@ -124,7 +185,7 @@ fn the_server_does_not_depend_on_a_database_or_a_parser() {
 /// No route may bind anything but loopback, and no code path may construct another address.
 #[test]
 fn nothing_in_the_crate_can_bind_a_non_loopback_address() {
-    for (name, source) in SOURCES.map(|(name, source)| (name, product_code(source))) {
+    for (name, source) in sources() {
         for forbidden in ["0.0.0.0", "UNSPECIFIED", "Ipv4Addr::new", "to_socket_addrs"] {
             assert!(
                 !source.contains(forbidden),
@@ -143,7 +204,7 @@ fn nothing_in_the_crate_can_bind_a_non_loopback_address() {
 /// modules carry, deliberately — is not a header.
 #[test]
 fn no_module_can_emit_a_cors_header() {
-    for (name, source) in SOURCES.map(|(name, source)| (name, product_code(source))) {
+    for (name, source) in sources() {
         let lowered = source.to_ascii_lowercase();
         for forbidden in ["\"access-control", "'access-control", "b\"access-control"] {
             assert!(
