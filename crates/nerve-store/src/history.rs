@@ -828,6 +828,42 @@ impl EarlierHistoryUnavailable {
             EarlierHistoryUnavailable::WalkRefused => "walk_refused",
         }
     }
+
+    /// Why visible history stops above a path's earliest recorded change, in words.
+    ///
+    /// This note lives here rather than in `nerve-core` for the reason the enum does: it composes
+    /// [`ParentCompleteness`] and [`WalkTermination`] rather than being a third axis, and putting it
+    /// in `nerve-core` would create a second place where "a shallow boundary hides history" is
+    /// defined. `crates/nerve-cli/tests/history_wording.rs` enforces the single copy per note *by
+    /// crate*, which is why the guard records an owner for each note instead of one global answer.
+    ///
+    /// Hoisted out of the CLI binary in Slice 12c-iii-a. The
+    /// [`EarlierHistoryUnavailable::WalkRefused`] arm is deliberately **not** a restatement of
+    /// [`WalkTermination::Refused`]'s note — a first draft of it reproduced that sentence verbatim
+    /// and the wording guard failed it, which is the whole reason the guard exists.
+    pub fn note(self) -> &'static str {
+        match self {
+            EarlierHistoryUnavailable::ShallowBoundary => {
+                "a declared shallow boundary sits above what Nerve read of this path, so an earlier \
+                 change to it may exist and not be recorded; expected, and not a fault"
+            }
+            EarlierHistoryUnavailable::ParentsMissing => {
+                "a parent object is absent and was not declared absent — a fault in this \
+                 repository, never called shallow"
+            }
+            EarlierHistoryUnavailable::ParentsUnverifiable => {
+                "a parent object is absent and Nerve could not establish whether the absence was \
+                 declared, so neither answer may be asserted"
+            }
+            EarlierHistoryUnavailable::CommitBudget => {
+                "Nerve's own commit budget stopped the read; the history did not stop, the read did"
+            }
+            EarlierHistoryUnavailable::WalkRefused => {
+                "Nerve declined an object the walk required and stopped there — Nerve's own doing, \
+                 never a property of the repository"
+            }
+        }
+    }
 }
 
 /// One change to one path, with the commit that made it.

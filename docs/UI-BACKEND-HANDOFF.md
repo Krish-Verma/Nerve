@@ -645,3 +645,121 @@ Truncation is flagged **per repository, not per commit** — v6 has no per-commi
 
 **None.** No entity kind, no relation and no evidence source type was added, so nothing the interface
 mirrors changed. The six vocabularies above are 12c's work.
+
+---
+
+## Entry 7 — Slice 12c: the history endpoints, and the one sentence a view may not write
+
+Seven read-only routes, `ROUTES` 11 → 18. Every one is `GET`, token-gated, `Host`- and
+`Origin`-checked by the same `guard.check` the other eleven use — which runs **before** dispatch, so
+there is no per-route opt-in to forget.
+
+| route | parameters | answers |
+|---|---|---|
+| `/api/history` | — | is history ingested, is it shallow, where is the boundary, is it fresh |
+| `/api/history/commits` | `limit`, `offset` | the commit log, newest committer time first |
+| `/api/history/commit` | `commit` | what one commit changed |
+| `/api/history/path` | `path`, `limit` | one path's history **plus the first/last-observed block** |
+| `/api/history/diff` | `from`, `to`, bounds | what lies between two recorded states |
+| `/api/history/frequency` | `limit` | which paths changed most often in visible history |
+| `/api/history/cochange` | `path`, `limit` | which paths changed in the same commits |
+
+### The availability block is on every answer, and it is not decoration
+
+Every response carries the same block, assembled in one place in the server:
+
+```
+repository_id · current_repository_state{state_id, git_commit} · requested_subject
+history_ingested · shallow · shallow_boundary · promisor
+walk_terminated_by + walk_terminated_note · commits_recorded · commit_budget
+refusals · refusals_total · reader_version · totals
+result_kind · freshness + freshness_note · ingest_head_oid
+truncation · continuation · limitations{earlier_changes_may_exist, …}
+```
+
+**Render it.** A history answer without it is a set of dates with no statement of what they are dates
+*of*, which is the whole failure this row exists to prevent.
+
+### The one sentence a view may not write
+
+**Only `may_claim_created: true` licenses the word "created".** The flag is on the response, it comes
+from `FirstObservedKind::may_claim_created()` in `nerve-core`, and it is the only copy of that
+permission in the product. Beside it is `may_claim_created_note`, the sentence the backend wrote for
+this case. Render the note; do not compose your own from the `kind`.
+
+`kind` has **six** values and only one of them is a creation:
+
+| `kind` | render as | never |
+|---|---|---|
+| `created_in_visible_history` | "created at this change" | — |
+| `earliest_visible_change` | "the earliest change Nerve can see" | "first ever", "created" |
+| `present_before_visible_history` | "in the tree now, untouched in visible history" | "no history" |
+| `absent_from_visible_history` | "not in the tree, and no recorded commit touched it" | "deleted" |
+| `current_tree_unknown` | "no index, so the current tree could not be consulted" | "does not exist" |
+| `no_history_ingested` | "history has never been read here" | "no history" |
+
+The last three are the shallow-clone reality: `present_before_visible_history` is the **common** case
+there, because every unchanged file has zero change rows. Rendering it as an empty result says the
+file has no history, which is false.
+
+`earlier_history_unavailable` names which of five reasons puts history above the earliest change out
+of reach — `shallow_boundary`, `parents_missing`, `parents_unverifiable`, `commit_budget`,
+`walk_refused` — and each carries its own note. **The last two are Nerve's own doing**, never a
+property of the repository, and the notes say so. `null` means nothing is hidden above **this path**.
+
+Note the scope trap: `earlier_history_unavailable` is about the **path**;
+`limitations.earlier_changes_may_exist` is about the **repository's ingest**. They legitimately
+disagree — a shallow clone can hold a genuine root commit, so a path created at that root has nothing
+hidden above it while the repository still reports that earlier commits may exist. Do not "fix" that
+by showing only one.
+
+### `history/diff`: `null` is not `[]`
+
+Five outcomes. Four are refusals — `state_not_recorded`, `not_an_ancestor`, `ancestry_incomplete`,
+`walk_budget_exhausted` — and **every diff-shaped key is present on every outcome, `null` on the
+four**. So `commits: null` means no range was computed and `commits: []` means one was and holds
+nothing. A view that treats absent-or-empty alike turns a refusal into "nothing changed", which is
+the failure the shape exists to make impossible.
+
+A merge enumerates **no** changes by 12b's decision, so a merge-heavy range with few changes is
+expected. `merges_in_range` and per-commit `changes_enumerated` are what stop that reading as "little
+changed".
+
+### `history/cochange`: an observation, and the word is load-bearing
+
+The response carries `disclaimer`, which is `nerve_store::COCHANGE_IS_NOT_A_DEPENDENCY` verbatim.
+**Print it.** Two files changing together is equally consistent with coupling, a formatting sweep, a
+version bump, and one commit that did two unrelated things. The count is a raw shared-commit count and
+never a normalised affinity, because a normalised number invites exactly the comparison the label
+forbids. Do not label it `related`, `coupled`, `depends` or `affinity` — a server test fails on those
+words, and the UI should hold the same line.
+
+### A symbol selector is refused, and nothing is guessed
+
+`path` names a **path as a tree recorded it** — matched literally, never resolved against the working
+tree, because a historical path routinely does not exist on disk. A symbol-shaped selector
+(`src/app.ts#parse`, `function:parse`) is refused with `reason: "symbol_selector_refused"`,
+`path_guessed: false`, `nothing_was_looked_up: true`.
+
+**Do not offer the containing file as a fallback.** `git_change` is path-keyed, so a symbol's dates
+would be *its file's* dates — a different claim wearing the same words. Surface the refusal.
+
+One HTTP detail the UI must get right: a raw `#` in a query string is a fragment and is **dropped by
+the browser before the request is sent**, so `?path=README.md#parse` arrives as `path=README.md` and
+is answered for the file. **Encode it as `%23`** when a user types a symbol selector, or the refusal
+never fires and the answer looks right while describing something else.
+
+### Untrusted text
+
+`summary`, `path`, `from_path`, `to_path` and every refusal key are repository-derived. Render as
+text, never as HTML, never as a field name. `fixtures/history-hostile` carries
+`<script>alert(1)</script>` and an instruction-shaped summary; a server test asserts no raw `<`
+reaches the wire and that a summary never becomes a key.
+
+### Frontend edits the backend made
+
+**None.** This entry is the contract; the views are 12c-iv. Eight vocabularies still have no gloss —
+the six from 12b plus `FirstObservedKind` and `HistoryFreshness` — and
+`crates/nerve-server/tests/ui_vocabulary.rs` does **not** yet know they exist, so it cannot fail for
+them. See `docs/plans/ui-parity-matrix.md` §3: the glosses and the guard extension belong in one
+commit, or the next vocabulary is unguarded again.

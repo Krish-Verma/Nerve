@@ -1247,6 +1247,86 @@ impl FirstObservedKind {
     pub fn may_claim_created(self) -> bool {
         matches!(self, FirstObservedKind::CreatedInVisibleHistory)
     }
+
+    /// What this answer means, in one sentence, with the creation permission as the gate.
+    ///
+    /// **The permission is read from [`FirstObservedKind::may_claim_created`], never re-derived**,
+    /// which is what makes "created" impossible to say about the other five answers without deleting
+    /// a branch. The mirror arm below is [`unreachable`] for the same reason
+    /// [`ParentCompleteness::note`]'s is: the permitted case is handled once, above the match.
+    ///
+    /// Hoisted out of the CLI binary in Slice 12c-iii-a. Slice 12c-i-b was forbidden from editing
+    /// this crate and so wrote the prose inside `nerve-cli`, recording that three further surfaces
+    /// were about to copy it. `crates/nerve-cli/tests/history_wording.rs` scans for this text outside
+    /// this crate and fails a copy by name.
+    pub fn note(self) -> &'static str {
+        if self.may_claim_created() {
+            return "the path was created at this change: the earliest recorded change is an \
+                    addition, nothing above it is hidden, and exactly one addition is recorded, so \
+                    the claim rests on no clock";
+        }
+        match self {
+            FirstObservedKind::CreatedInVisibleHistory => {
+                unreachable!("creation is the permitted case above")
+            }
+            FirstObservedKind::EarliestVisibleChange => {
+                "the earliest change Nerve can see, which is not established as the first one; the \
+                 reason history above it is out of reach is named below"
+            }
+            FirstObservedKind::PresentBeforeVisibleHistory => {
+                "present before visible history: the path is in the current tree and no recorded \
+                 commit touched it, so it predates everything Nerve read"
+            }
+            FirstObservedKind::AbsentFromVisibleHistory => {
+                "absent from visible history: no recorded commit touched it, and the current tree \
+                 was consulted and does not hold it"
+            }
+            FirstObservedKind::CurrentTreeUnknown => {
+                "no recorded commit touched it, and with no index the current tree could not be \
+                 consulted at all, so whether it exists now is unknown rather than no"
+            }
+            FirstObservedKind::NoHistoryIngested => {
+                "history has never been read here, which is not the same fact as a path with no \
+                 history"
+            }
+        }
+    }
+
+    /// Whether the word *created* may be used of this answer, in words.
+    ///
+    /// The gate is [`FirstObservedKind::may_claim_created`] and the refusals say *why* rather than
+    /// repeating one sentence: a path with changes is refused for an ordering reason, a path without
+    /// any is refused because there is nothing that could be a creation, and a repository with no
+    /// ingest is refused because nothing was read at all. One sentence for all three would have said
+    /// something false about two of them.
+    ///
+    /// Hoisted with [`FirstObservedKind::note`] and for the same reason: it is prose gated on the
+    /// one permission this vocabulary exists to hold, and every surface that renders the answer
+    /// renders it.
+    pub fn created_claim_note(self) -> &'static str {
+        if self.may_claim_created() {
+            return "permitted — this is the one answer of six that licenses it";
+        }
+        match self {
+            FirstObservedKind::CreatedInVisibleHistory => {
+                unreachable!("creation is the permitted case above")
+            }
+            FirstObservedKind::EarliestVisibleChange => {
+                "not permitted — the earliest recorded change is not established as the first one, \
+                 so this answer may only be rendered as the earliest change Nerve can see"
+            }
+            FirstObservedKind::PresentBeforeVisibleHistory
+            | FirstObservedKind::AbsentFromVisibleHistory
+            | FirstObservedKind::CurrentTreeUnknown => {
+                "not permitted — no change to this path is recorded at all, so there is nothing \
+                 here that could be a creation"
+            }
+            FirstObservedKind::NoHistoryIngested => {
+                "not permitted — no history has been read here, so no claim about this path can be \
+                 made either way"
+            }
+        }
+    }
 }
 
 impl fmt::Display for FirstObservedKind {
@@ -1308,6 +1388,38 @@ impl HistoryFreshness {
             HistoryFreshness::Stale => "stale",
             HistoryFreshness::Unverifiable => "unverifiable",
             HistoryFreshness::NoHistoryIngested => "no_history_ingested",
+        }
+    }
+
+    /// What each verdict means, in words.
+    ///
+    /// [`HistoryFreshness::Unverifiable`] gets the longest sentence because it is the one a reader is
+    /// most likely to file under [`HistoryFreshness::Current`], and that filing is how a truncated
+    /// sweep becomes a clean bill of health.
+    ///
+    /// Hoisted out of the CLI binary in Slice 12c-iii-a, beside the vocabulary it renders, so the
+    /// HTTP, MCP and UI surfaces say the same four sentences rather than four paraphrases each.
+    pub fn note(self) -> &'static str {
+        match self {
+            HistoryFreshness::Current => {
+                "the ingest's HEAD is the commit the newest indexed state records, so the recorded \
+                 history describes what is indexed now"
+            }
+            HistoryFreshness::Stale => {
+                "the ingest's HEAD is not the commit the newest indexed state records: every \
+                 historical fact here is true of the older HEAD, which is a qualification rather \
+                 than an error"
+            }
+            HistoryFreshness::Unverifiable => {
+                "the newest indexed state records no commit, so the comparison could not be made. \
+                 This is not \"current\": a history whose freshness cannot be established has not \
+                 been shown to be fresh, and reporting unknown as current is how a truncated sweep \
+                 becomes a clean bill of health"
+            }
+            HistoryFreshness::NoHistoryIngested => {
+                "history has never been read here, so there is nothing whose freshness could be \
+                 judged — an absence, and not a failure"
+            }
         }
     }
 }

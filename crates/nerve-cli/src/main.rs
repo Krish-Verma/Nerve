@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::json;
 
-use nerve_core::{FirstObservedKind, HistoryFreshness, Relation};
+use nerve_core::Relation;
 use nerve_index::config;
 use nerve_index::error::IndexError;
 // The one history *judgment* — whether an earlier change may exist and not be recorded — is derived
@@ -2295,77 +2295,6 @@ fn open_query_only(path: &Path) -> Result<OpenIndex, String> {
 // re-words `shallow_boundary` slightly is a surface that has restated the invariant Slice 12b exists
 // to protect.
 
-/// Why a history argument cannot be read as a repository path.
-///
-/// A closed enum with one value rather than a boolean, on the same terms as
-/// [`nerve_store::SelectorRefusal`]: the refusal names itself in `--json`, and a second reason
-/// arriving later cannot arrive as a second boolean.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HistoryPathRefusal {
-    /// The argument is shaped like a **symbol** selector — `<path>#<name>`, or a `function:`,
-    /// `method:`, `class:`, `interface:` or `symbol:` qualifier.
-    SymbolSelector,
-}
-
-impl HistoryPathRefusal {
-    /// Canonical name, carried in `--json`.
-    fn as_str(self) -> &'static str {
-        match self {
-            HistoryPathRefusal::SymbolSelector => "symbol_selector_refused",
-        }
-    }
-
-    /// What the refusal means, in one sentence a caller can be shown.
-    fn statement(self) -> &'static str {
-        match self {
-            HistoryPathRefusal::SymbolSelector => {
-                "history is keyed on a path and records nothing finer: git_change has one row per \
-                 path per commit, and every symbol kind answers PathRole::None, so the only dates \
-                 Nerve could return for a symbol are the dates of the file that contains it — a \
-                 different claim wearing the same words"
-            }
-        }
-    }
-}
-
-/// Is this history argument a symbol selector rather than a path?
-///
-/// **The path the caller probably meant is deliberately not extracted here, and that is the whole
-/// point.** Answering `src/app/main.rs#parse` with `src/app/main.rs`'s dates is the failure this
-/// refusal exists to prevent, so the function returns *why* and never *what instead*.
-///
-/// Two shapes, both taken from the selector grammar `nerve_store::select` documents rather than
-/// invented here: a `#`, which is the grammar's symbol separator; and a qualifier in qualifier
-/// position — the first `:` before the first `/` — naming a kind for which
-/// `EntityKind::is_symbol` holds, or the `symbol` alias over exactly those kinds.
-///
-/// **A residual, stated rather than hidden.** Git allows `#` and `:` in a tree path, so a path
-/// genuinely spelled that way is refused too. That is the right direction to err: a refusal is
-/// reported as a refusal with its reason, which is a thing the caller can read and act on, while
-/// the alternative is an empty answer that reads as "this path has no history". It is the argument
-/// `selector_shape`'s traversal refusal already makes for the same overlap.
-fn history_path_refusal(argument: &str) -> Option<HistoryPathRefusal> {
-    if argument.contains('#') {
-        return Some(HistoryPathRefusal::SymbolSelector);
-    }
-    let colon = argument.find(':')?;
-    if colon == 0 {
-        return None;
-    }
-    // A colon below the root — `docs/a:b.md` — is part of a path, not a qualifier. The rule is
-    // `select.rs`'s, restated nowhere: the first `:` must precede the first `/`.
-    if argument.find('/').is_some_and(|slash| slash < colon) {
-        return None;
-    }
-    match nerve_store::Qualifier::parse(&argument[..colon])? {
-        nerve_store::Qualifier::Symbol => Some(HistoryPathRefusal::SymbolSelector),
-        nerve_store::Qualifier::Kind(kind) if kind.is_symbol() => {
-            Some(HistoryPathRefusal::SymbolSelector)
-        }
-        _ => None,
-    }
-}
-
 /// Report a refused history argument as a refusal, with nothing answered.
 ///
 /// The exit code is the one a refused selector already uses. No history question is asked, no
@@ -2375,7 +2304,7 @@ fn refuse_history_path(
     output: &Output,
     command: &'static str,
     argument: &str,
-    refusal: HistoryPathRefusal,
+    refusal: nerve_store::HistoryPathRefusal,
 ) -> i32 {
     output.failure_detail(
         command,
@@ -2525,113 +2454,13 @@ fn rename_json(rename: &nerve_store::RenameRow) -> serde_json::Value {
 // is the only copy of that rule in the workspace; `nerve_store::first_last_observed` carries its
 // answer on the response for exactly this reason.
 //
-// `FirstObservedKind` and `HistoryFreshness` have no `note()` in `nerve-core`, unlike the four
-// vocabularies Slice 12c-i hoisted, so their prose is written here. That is a duplication waiting
-// to happen when 12c-iii and 12c-iv add three more surfaces; it is recorded rather than papered
-// over, and the fix is the same hoist those four already had.
-
-/// One sentence per first-observed answer, with the creation permission as the gate.
-///
-/// **The permission is read, never re-derived.** `may_claim_created` on the response is
-/// `FirstObservedKind::may_claim_created`, whose only copy is in `nerve-core`; branching on it here
-/// rather than on the kind is what makes "created" impossible to say about the other five answers
-/// without deleting the branch.
-fn first_observed_note(observed: &nerve_store::FirstLastObserved) -> &'static str {
-    if observed.may_claim_created {
-        return "the path was created at this change: the earliest recorded change is an \
-                addition, nothing above it is hidden, and exactly one addition is recorded, so \
-                the claim rests on no clock";
-    }
-    match observed.kind {
-        FirstObservedKind::CreatedInVisibleHistory => {
-            unreachable!("creation is the permitted case above")
-        }
-        FirstObservedKind::EarliestVisibleChange => {
-            "the earliest change Nerve can see, which is not established as the first one; the \
-             reason history above it is out of reach is named below"
-        }
-        FirstObservedKind::PresentBeforeVisibleHistory => {
-            "present before visible history: the path is in the current tree and no recorded \
-             commit touched it, so it predates everything Nerve read"
-        }
-        FirstObservedKind::AbsentFromVisibleHistory => {
-            "absent from visible history: no recorded commit touched it, and the current tree was \
-             consulted and does not hold it"
-        }
-        FirstObservedKind::CurrentTreeUnknown => {
-            "no recorded commit touched it, and with no index the current tree could not be \
-             consulted at all, so whether it exists now is unknown rather than no"
-        }
-        FirstObservedKind::NoHistoryIngested => {
-            "history has never been read here, which is not the same fact as a path with no \
-             history"
-        }
-    }
-}
-
-/// Whether the word *created* may be used of this answer, in words.
-///
-/// The gate is [`nerve_store::FirstLastObserved::may_claim_created`] and the refusals below say
-/// *why* rather than repeating one sentence: a path with changes is refused for an ordering reason,
-/// a path without any is refused because there is nothing that could be a creation, and a
-/// repository with no ingest is refused because nothing was read at all. One sentence for all three
-/// would have said something false about two of them.
-fn created_claim_note(observed: &nerve_store::FirstLastObserved) -> &'static str {
-    if observed.may_claim_created {
-        return "permitted — this is the one answer of six that licenses it";
-    }
-    match observed.kind {
-        FirstObservedKind::CreatedInVisibleHistory => {
-            unreachable!("creation is the permitted case above")
-        }
-        FirstObservedKind::EarliestVisibleChange => {
-            "not permitted — the earliest recorded change is not established as the first one, so \
-             this answer may only be rendered as the earliest change Nerve can see"
-        }
-        FirstObservedKind::PresentBeforeVisibleHistory
-        | FirstObservedKind::AbsentFromVisibleHistory
-        | FirstObservedKind::CurrentTreeUnknown => {
-            "not permitted — no change to this path is recorded at all, so there is nothing here \
-             that could be a creation"
-        }
-        FirstObservedKind::NoHistoryIngested => {
-            "not permitted — no history has been read here, so no claim about this path can be \
-             made either way"
-        }
-    }
-}
-
-/// Why visible history stops above a path's earliest recorded change.
-///
-/// Prose for [`nerve_store::EarlierHistoryUnavailable`], which composes two `nerve-core`
-/// vocabularies rather than being a third, and so has no `note()` of its own to call.
-fn earlier_unavailable_note(reason: nerve_store::EarlierHistoryUnavailable) -> &'static str {
-    match reason {
-        nerve_store::EarlierHistoryUnavailable::ShallowBoundary => {
-            "a declared shallow boundary sits above what Nerve read of this path, so an earlier \
-             change to it may exist and not be recorded; expected, and not a fault"
-        }
-        nerve_store::EarlierHistoryUnavailable::ParentsMissing => {
-            "a parent object is absent and was not declared absent — a fault in this repository, \
-             never called shallow"
-        }
-        nerve_store::EarlierHistoryUnavailable::ParentsUnverifiable => {
-            "a parent object is absent and Nerve could not establish whether the absence was \
-             declared, so neither answer may be asserted"
-        }
-        nerve_store::EarlierHistoryUnavailable::CommitBudget => {
-            "Nerve's own commit budget stopped the read; the history did not stop, the read did"
-        }
-        // Deliberately not a restatement of `WalkTermination::Refused::note`, which
-        // `crates/nerve-cli/tests/history_wording.rs` catches by name — a first draft of this arm
-        // reproduced that sentence verbatim and the guard failed it, which is the whole reason the
-        // guard exists.
-        nerve_store::EarlierHistoryUnavailable::WalkRefused => {
-            "Nerve declined an object the walk required and stopped there — Nerve's own doing, \
-             never a property of the repository"
-        }
-    }
-}
+// Slice 12c-i left the prose for `FirstObservedKind`, `HistoryFreshness` and
+// `EarlierHistoryUnavailable` in this file, because it was forbidden from editing `nerve-core`, and
+// recorded it as a duplication waiting to happen. Slice 12c-iii-a performed that hoist before the
+// HTTP surface could become the second copy: `FirstObservedKind::note`,
+// `FirstObservedKind::created_claim_note` and `HistoryFreshness::note` are in `nerve-core`, and
+// `EarlierHistoryUnavailable::note` is in `nerve-store` beside its enum. What is left here is
+// formatting.
 
 /// One end of the visible range, as one line.
 fn path_change_line(change: &nerve_store::PathChange) -> String {
@@ -2655,11 +2484,11 @@ fn first_last_observed_json(observed: &nerve_store::FirstLastObserved) -> serde_
     json!({
         "path": inert_text(&observed.path),
         "kind": observed.kind.as_str(),
-        "kind_note": first_observed_note(observed),
+        "kind_note": observed.kind.note(),
         // Carried, never re-derived. `FirstObservedKind::may_claim_created` is the only copy of
         // this permission, exactly as `may_claim_history_begins_here` is for a commit.
         "may_claim_created": observed.may_claim_created,
-        "may_claim_created_note": created_claim_note(observed),
+        "may_claim_created_note": observed.kind.created_claim_note(),
         "first": observed.first.as_ref().map(path_change_json),
         "last": observed.last.as_ref().map(path_change_json),
         "changes_in_visible_history": observed.changes_in_visible_history,
@@ -2668,7 +2497,7 @@ fn first_last_observed_json(observed: &nerve_store::FirstLastObserved) -> serde_
         "earlier_history_unavailable":
             observed.earlier_history_unavailable.map(|reason| reason.as_str()),
         "earlier_history_unavailable_note":
-            observed.earlier_history_unavailable.map(earlier_unavailable_note),
+            observed.earlier_history_unavailable.map(|reason| reason.note()),
         // The repository-level question, beside the path-level one above. They are different
         // scopes and a consumer that collapsed them would deny a creation the object graph proves.
         "earlier_changes_may_exist": observed.earlier_changes_may_exist,
@@ -2695,12 +2524,12 @@ fn print_first_observed(output: &Output, observed: &nerve_store::FirstLastObserv
         "  {:<14} {} — {}",
         "first_seen",
         observed.kind.as_str(),
-        first_observed_note(observed)
+        observed.kind.note()
     ));
     output.line(format!(
         "  {:<14} {}",
         "created_claim",
-        created_claim_note(observed)
+        observed.kind.created_claim_note()
     ));
     output.line(format!(
         "  {:<14} {}",
@@ -2734,7 +2563,7 @@ fn print_first_observed(output: &Output, observed: &nerve_store::FirstLastObserv
             "  {:<14} {} — {}",
             "above_this",
             reason.as_str(),
-            earlier_unavailable_note(reason)
+            reason.note()
         ),
         None => format!(
             "  {:<14} nothing above what Nerve read of this path is hidden, and that is measured \
@@ -3259,7 +3088,7 @@ fn run_history_file(output: &Output, path: &Path, tree_path: &str, limit: usize)
     if limit == 0 {
         return output.failure("history file", exit::USAGE, "--limit must be at least 1");
     }
-    if let Some(refusal) = history_path_refusal(tree_path) {
+    if let Some(refusal) = nerve_store::history_path_refusal(tree_path) {
         return refuse_history_path(output, "history file", tree_path, refusal);
     }
     let read = match open_history(output, "history file", path) {
@@ -3809,7 +3638,7 @@ fn run_history_cochange(output: &Output, path: &Path, tree_path: &str, limit: us
             "--limit must be at least 1",
         );
     }
-    if let Some(refusal) = history_path_refusal(tree_path) {
+    if let Some(refusal) = nerve_store::history_path_refusal(tree_path) {
         return refuse_history_path(output, "history cochange", tree_path, refusal);
     }
     let read = match open_history(output, "history cochange", path) {
@@ -3883,35 +3712,6 @@ fn run_history_cochange(output: &Output, path: &Path, tree_path: &str, limit: us
     exit::SUCCESS
 }
 
-/// What the four freshness verdicts mean, in words.
-///
-/// `HistoryFreshness` has no `note()` in `nerve-core`, so this prose lives here; see the section
-/// header above. `Unverifiable` gets the longest sentence because it is the one a reader is most
-/// likely to file under `Current`.
-fn history_freshness_note(verdict: HistoryFreshness) -> &'static str {
-    match verdict {
-        HistoryFreshness::Current => {
-            "the ingest's HEAD is the commit the newest indexed state records, so the recorded \
-             history describes what is indexed now"
-        }
-        HistoryFreshness::Stale => {
-            "the ingest's HEAD is not the commit the newest indexed state records: every \
-             historical fact here is true of the older HEAD, which is a qualification rather than \
-             an error"
-        }
-        HistoryFreshness::Unverifiable => {
-            "the newest indexed state records no commit, so the comparison could not be made. This \
-             is not \"current\": a history whose freshness cannot be established has not been shown \
-             to be fresh, and reporting unknown as current is how a truncated sweep becomes a clean \
-             bill of health"
-        }
-        HistoryFreshness::NoHistoryIngested => {
-            "history has never been read here, so there is nothing whose freshness could be \
-             judged — an absence, and not a failure"
-        }
-    }
-}
-
 /// What visible history is unavailable, and whether what was recorded is still current.
 fn run_history_availability(output: &Output, path: &Path) -> i32 {
     let read = match open_history(output, "history availability", path) {
@@ -3932,7 +3732,7 @@ fn run_history_availability(output: &Output, path: &Path) -> i32 {
         "  {:<14} {} — {}",
         "freshness",
         freshness.verdict.as_str(),
-        history_freshness_note(freshness.verdict)
+        freshness.verdict.note()
     ));
     output.line(format!(
         "  {:<14} {}",
@@ -3965,7 +3765,7 @@ fn run_history_availability(output: &Output, path: &Path) -> i32 {
         &read,
         json!({
             "freshness": freshness.verdict.as_str(),
-            "freshness_note": history_freshness_note(freshness.verdict),
+            "freshness_note": freshness.verdict.note(),
             "ingest_head_oid": freshness.ingest_head_oid,
             "current_git_commit": freshness.current_git_commit,
             "current_state_id": freshness.current_state_id,

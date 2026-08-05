@@ -340,6 +340,81 @@ impl SelectorRefusal {
     }
 }
 
+/// Why a history argument cannot be read as a repository path.
+///
+/// A closed enum with one value rather than a boolean, on the same terms as [`SelectorRefusal`]:
+/// the refusal names itself in a response, and a second reason arriving later cannot arrive as a
+/// second boolean.
+///
+/// Hoisted out of `nerve-cli` in Slice 12c-iii-a. It began life inside the CLI binary in 12c-i-b,
+/// which is unreachable from `nerve-server`; the HTTP surface has the same hard gate
+/// (`docs/plans/slice-12c-historical-questions.md` §2.1) and copying the rule would have been the
+/// second copy this row exists to prevent. It lives beside [`selector_shape`] because the shapes it
+/// recognises come from the selector grammar in this module, not from history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryPathRefusal {
+    /// The argument is shaped like a **symbol** selector — `<path>#<name>`, or a `function:`,
+    /// `method:`, `class:`, `interface:` or `symbol:` qualifier.
+    SymbolSelector,
+}
+
+impl HistoryPathRefusal {
+    /// Canonical name, carried in a response.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HistoryPathRefusal::SymbolSelector => "symbol_selector_refused",
+        }
+    }
+
+    /// What the refusal means, in one sentence a caller can be shown.
+    pub fn statement(self) -> &'static str {
+        match self {
+            HistoryPathRefusal::SymbolSelector => {
+                "history is keyed on a path and records nothing finer: git_change has one row per \
+                 path per commit, and every symbol kind answers PathRole::None, so the only dates \
+                 Nerve could return for a symbol are the dates of the file that contains it — a \
+                 different claim wearing the same words"
+            }
+        }
+    }
+}
+
+/// Is this history argument a symbol selector rather than a path?
+///
+/// **The path the caller probably meant is deliberately not extracted here, and that is the whole
+/// point.** Answering `src/app/main.rs#parse` with `src/app/main.rs`'s dates is the failure this
+/// refusal exists to prevent, so the function returns *why* and never *what instead*.
+///
+/// Two shapes, both taken from the selector grammar this module documents rather than invented: a
+/// `#`, which is the grammar's symbol separator; and a qualifier in qualifier position — the first
+/// `:` before the first `/` — naming a kind for which [`EntityKind::is_symbol`] holds, or the
+/// `symbol` alias over exactly those kinds.
+///
+/// **A residual, stated rather than hidden.** Git allows `#` and `:` in a tree path, so a path
+/// genuinely spelled that way is refused too. That is the right direction to err: a refusal is
+/// reported as a refusal with its reason, which is a thing the caller can read and act on, while
+/// the alternative is an empty answer that reads as "this path has no history". It is the argument
+/// [`selector_shape`]'s traversal refusal already makes for the same overlap.
+pub fn history_path_refusal(argument: &str) -> Option<HistoryPathRefusal> {
+    if argument.contains('#') {
+        return Some(HistoryPathRefusal::SymbolSelector);
+    }
+    let colon = argument.find(':')?;
+    if colon == 0 {
+        return None;
+    }
+    // A colon below the root — `docs/a:b.md` — is part of a path, not a qualifier. The rule is
+    // `split_qualifier`'s: the first `:` must precede the first `/`.
+    if argument.find('/').is_some_and(|slash| slash < colon) {
+        return None;
+    }
+    match Qualifier::parse(&argument[..colon])? {
+        Qualifier::Symbol => Some(HistoryPathRefusal::SymbolSelector),
+        Qualifier::Kind(kind) if kind.is_symbol() => Some(HistoryPathRefusal::SymbolSelector),
+        _ => None,
+    }
+}
+
 /// What a selector is, before anything is looked up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectorShape<'a> {

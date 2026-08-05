@@ -1,12 +1,25 @@
-//! The history notes exist in **exactly one crate**, enforced rather than asserted in a comment.
+//! The history notes exist in **exactly one place each**, enforced rather than asserted in a
+//! comment.
 //!
 //! Slice 12b left four wording functions and one interpretation predicate inside the CLI binary
 //! (`main.rs:2151`, `:2180`, `:2210`, `:2230`, `:2255`). Slice 12c-i moved the four notes to
 //! `nerve-core`, beside the vocabularies they render, and the judgment to `nerve-store`, beside
-//! `IngestRow`. This file is what stops a copy coming back: three further surfaces — HTTP, MCP and
-//! the reference UI — are due to render the same values, and a surface that re-words
-//! `shallow_boundary` slightly is a surface that has restated the invariant the historical model
-//! exists to protect.
+//! `IngestRow`. Slice 12c-iii-a moved the four it could not — `FirstObservedKind::note`,
+//! `FirstObservedKind::created_claim_note`, `HistoryFreshness::note` and
+//! `EarlierHistoryUnavailable::note` — immediately before the HTTP surface became their second copy.
+//! This file is what stops a copy coming back: two further surfaces — MCP and the reference UI — are
+//! still due to render the same values, and a surface that re-words `shallow_boundary` slightly is a
+//! surface that has restated the invariant the historical model exists to protect.
+//!
+//! # One crate is no longer the answer, so the guard records an owner per note
+//!
+//! Seven of the eight vocabularies live in `nerve-core`. [`EarlierHistoryUnavailable`] does not: it
+//! composes [`ParentCompleteness`] and [`WalkTermination`] rather than being a third axis, so it
+//! lives in `nerve-store` and its note lives beside it. A single global "only `nerve-core` may hold
+//! a note" rule would therefore have had to exempt that note from every crate, which is not a rule
+//! at all. [`notes`] pairs each sentinel with **the one file allowed to hold it**, and the scan
+//! covers all four crates rather than only the two surfaces — so a note copied *into* `nerve-store`
+//! from `nerve-core`, or the reverse, fails as loudly as one copied into a surface.
 //!
 //! # The scan, and why it is shaped this way
 //!
@@ -18,10 +31,10 @@
 //!
 //! Three differences from `layering.rs`, each deliberate:
 //!
-//! 1. **The sentinels are generated from the vocabulary**, not retyped. `notes()` calls `note()` on
-//!    every value of all four vocabularies, so the thing searched for is the prose that actually
-//!    ships. Retyping it would let the guard and the product drift apart, which is the exact class
-//!    of defect the hoist exists to close.
+//! 1. **The sentinels are generated from the vocabulary**, not retyped. [`notes`] calls the note
+//!    methods on every value of all eight vocabularies, so the thing searched for is the prose that
+//!    actually ships. Retyping it would let the guard and the product drift apart, which is the
+//!    exact class of defect the hoist exists to close.
 //! 2. **The bytes are un-wrapped before searching.** Rust's `\<newline>` escape means a note's
 //!    runtime text is almost never contiguous in its source, so a naive scan would find nothing for
 //!    most of them — and "found nothing" is indistinguishable from "scanned nothing". Applying the
@@ -29,31 +42,66 @@
 //!    could not do.
 //! 3. **Test code is not stripped.** `layering.rs` strips it because a test proving `0.0.0.0` is
 //!    refused must contain `0.0.0.0`. Nothing here needs to contain a note: a test that wants one
-//!    asks `nerve_core` for it, which is the property being enforced.
+//!    asks the vocabulary for it, which is the property being enforced.
 
 use std::path::{Path, PathBuf};
 
-use nerve_core::vocab::{ChangesEnumerated, ParentCompleteness, RenameAmbiguity, WalkTermination};
+use nerve_core::vocab::{
+    ChangesEnumerated, FirstObservedKind, HistoryFreshness, ParentCompleteness, RenameAmbiguity,
+    WalkTermination,
+};
+use nerve_store::EarlierHistoryUnavailable;
 
-/// The prose the four hoisted notes render, taken from the vocabulary rather than retyped.
+/// The one file allowed to hold a note, relative to `crates/`.
 ///
-/// Generated over `ALL`, so a value added to any of the four vocabularies is searched for without
-/// this file being edited.
-fn notes() -> Vec<&'static str> {
+/// A path rather than a crate name, because "exactly one crate" stopped being expressible once a
+/// note moved to `nerve-store`: the owner is the module the vocabulary is declared in, and every
+/// other file in every scanned crate — including the owner's own crate — must be free of it.
+const CORE_VOCAB: &str = "nerve-core/src/vocab.rs";
+/// The one file allowed to hold [`EarlierHistoryUnavailable`]'s note.
+const STORE_HISTORY: &str = "nerve-store/src/history.rs";
+
+/// The prose the eight hoisted notes render, each paired with the file that owns it.
+///
+/// Generated over `ALL`, so a value added to any of the eight vocabularies is searched for without
+/// this file being edited. [`FirstObservedKind`] contributes **two** notes per value, because the
+/// answer and the permission to call it a creation are separate sentences and both ship.
+fn notes() -> Vec<(&'static str, &'static str)> {
     let mut out = Vec::new();
     for value in WalkTermination::ALL {
-        out.push(value.note());
+        out.push((CORE_VOCAB, value.note()));
     }
     for value in ParentCompleteness::ALL {
-        out.push(value.note());
+        out.push((CORE_VOCAB, value.note()));
     }
     for value in ChangesEnumerated::ALL {
-        out.push(value.note());
+        out.push((CORE_VOCAB, value.note()));
     }
     for value in RenameAmbiguity::ALL {
-        out.push(value.note());
+        out.push((CORE_VOCAB, value.note()));
+    }
+    for value in FirstObservedKind::ALL {
+        out.push((CORE_VOCAB, value.note()));
+        out.push((CORE_VOCAB, value.created_claim_note()));
+    }
+    for value in HistoryFreshness::ALL {
+        out.push((CORE_VOCAB, value.note()));
+    }
+    for value in EarlierHistoryUnavailable::ALL {
+        out.push((STORE_HISTORY, value.note()));
     }
     out
+}
+
+/// How many sentinels [`notes`] must produce, computed from the vocabularies rather than typed.
+fn expected_note_count() -> usize {
+    WalkTermination::ALL.len()
+        + ParentCompleteness::ALL.len()
+        + ChangesEnumerated::ALL.len()
+        + RenameAmbiguity::ALL.len()
+        + FirstObservedKind::ALL.len() * 2
+        + HistoryFreshness::ALL.len()
+        + EarlierHistoryUnavailable::ALL.len()
 }
 
 /// Undo the two source-level escapes that stand between a note's bytes on disk and its bytes at run
@@ -158,70 +206,89 @@ fn crate_dir(name: &str) -> PathBuf {
         .join("src")
 }
 
-fn vocab_source() -> Vec<u8> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../nerve-core/src/vocab.rs");
+/// One owner file's bytes, un-wrapped, keyed by the `crates/`-relative path [`notes`] records.
+fn owner_source(owner: &str) -> Vec<u8> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(owner);
     let bytes = std::fs::read(&path)
         .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()));
     joined(&bytes)
 }
 
-/// No crate outside `nerve-core` may contain a history note as a literal.
-///
-/// The two anti-vacuity halves come first, because a source scan that finds nothing is otherwise
-/// indistinguishable from one that scanned nothing.
-#[test]
-fn the_history_notes_exist_in_exactly_one_crate() {
-    let notes = notes();
-    assert_eq!(
-        notes.len(),
-        WalkTermination::ALL.len()
-            + ParentCompleteness::ALL.len()
-            + ChangesEnumerated::ALL.len()
-            + RenameAmbiguity::ALL.len(),
-        "a vocabulary lost a value between `ALL` and its note"
-    );
-    assert!(notes.len() >= 18, "found only {} notes", notes.len());
-
-    // Anti-vacuity 1: every sentinel must exist in the crate that is allowed to hold it. Renaming a
-    // note without moving it would otherwise make every negative below pass for free.
-    let vocab = vocab_source();
-    for note in &notes {
-        assert!(
-            contains(&vocab, note.as_bytes()),
-            "nerve-core/src/vocab.rs does not contain {note:?}, so searching other crates for it \
-             proves nothing"
-        );
-    }
-
-    // Anti-vacuity 2: the walk really walked. A floor rather than an equality so the crates may
-    // grow; 20 is the measured count across the two `src/` trees.
+/// Every `.rs` file of every scanned crate, keyed by its `crates/`-relative path.
+fn scanned_workspace() -> Vec<(String, Vec<u8>)> {
     let mut scanned: Vec<(String, Vec<u8>)> = Vec::new();
-    for crate_name in ["nerve-cli", "nerve-server"] {
+    for crate_name in ["nerve-cli", "nerve-server", "nerve-core", "nerve-store"] {
         for (name, bytes) in sources(&crate_dir(crate_name)) {
             scanned.push((format!("{crate_name}/src/{name}"), bytes));
         }
     }
+    scanned
+}
+
+/// No file but the one that owns a note may contain it as a literal.
+///
+/// The two anti-vacuity halves come first, because a source scan that finds nothing is otherwise
+/// indistinguishable from one that scanned nothing.
+#[test]
+fn every_history_note_exists_in_exactly_one_file() {
+    let notes = notes();
+    assert_eq!(
+        notes.len(),
+        expected_note_count(),
+        "a vocabulary lost a value between `ALL` and its note"
+    );
+    assert!(notes.len() >= 35, "found only {} notes", notes.len());
+    // Both owners are actually used. A refactor that moved every note into one file would otherwise
+    // make the per-owner machinery below vacuous while every assertion still passed.
+    for owner in [CORE_VOCAB, STORE_HISTORY] {
+        assert!(
+            notes.iter().any(|(holder, _)| *holder == owner),
+            "no note is owned by {owner}, so the per-file rule is not being exercised"
+        );
+    }
+
+    // Anti-vacuity 1: every sentinel must exist in the file that is allowed to hold it. Renaming a
+    // note without moving it would otherwise make every negative below pass for free.
+    for (owner, note) in &notes {
+        assert!(
+            contains(&owner_source(owner), note.as_bytes()),
+            "{owner} does not contain {note:?}, so searching every other file for it proves nothing"
+        );
+    }
+
+    // Anti-vacuity 2: the walk really walked. A floor rather than an equality so the crates may
+    // grow; 43 is the measured count across the four `src/` trees.
+    let scanned = scanned_workspace();
     assert!(
-        scanned.len() >= 19,
-        "expected to scan both surface crates, found {} files: {:?}",
+        scanned.len() >= 40,
+        "expected to scan four crates, found {} files: {:?}",
         scanned.len(),
         scanned.iter().map(|(name, _)| name).collect::<Vec<_>>()
     );
-    // And the scan reached the file the notes were hoisted out of, by name.
-    assert!(
-        scanned
-            .iter()
-            .any(|(name, _)| name == "nerve-cli/src/main.rs"),
-        "the file the four functions used to live in was not scanned"
-    );
+    // And the scan reached the file the notes were hoisted out of, the file the HTTP surface renders
+    // them from, and both owners — by name, so a renamed module cannot quietly leave the scan.
+    for required in [
+        "nerve-cli/src/main.rs",
+        "nerve-server/src/api/history.rs",
+        CORE_VOCAB,
+        STORE_HISTORY,
+    ] {
+        assert!(
+            scanned.iter().any(|(name, _)| name == required),
+            "{required} was not scanned"
+        );
+    }
 
     for (name, bytes) in &scanned {
-        for note in &notes {
+        for (owner, note) in &notes {
+            if name == owner {
+                continue;
+            }
             assert!(
                 !contains(bytes, note.as_bytes()),
-                "{name} contains a history note as a literal: {note:?}. The notes live on the \
-                 vocabulary in nerve-core — call `value.note()`. A second copy is free to drift \
-                 from the rule it renders."
+                "{name} contains a history note as a literal: {note:?}. That note lives in \
+                 {owner} — call the vocabulary's own method. A second copy is free to drift from \
+                 the rule it renders."
             );
         }
     }

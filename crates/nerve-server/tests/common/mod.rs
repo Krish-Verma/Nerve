@@ -103,6 +103,71 @@ pub fn served() -> (tempfile::TempDir, PathBuf, Session) {
     (dir, root, session)
 }
 
+// ---- history fixtures ------------------------------------------------------------------------
+
+/// A history fixture, copied and turned back into a repository.
+///
+/// The fixtures ship their git directory as `gitdir/` so that `cargo package`, `git add` and every
+/// tool that special-cases `.git` leave it alone. Renaming it on the copy is what makes it a
+/// repository again; the fixture itself is never touched.
+pub fn history_fixture(name: &str) -> (tempfile::TempDir, PathBuf) {
+    let (dir, root) = fixture_copy(name);
+    std::fs::rename(root.join("gitdir"), root.join(".git"))
+        .expect("the fixture must carry a gitdir/");
+    (dir, root)
+}
+
+/// The fixture's own `inventory.json`, whose every value is **Git's** answer rather than Nerve's.
+///
+/// Assertions are written against this rather than against numbers typed into a test, so a
+/// disagreement is a Nerve defect rather than a stale expectation.
+pub fn history_inventory(name: &str) -> serde_json::Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures")
+        .join(name)
+        .join("inventory.json");
+    serde_json::from_str(&std::fs::read_to_string(&path).expect("the inventory must be readable"))
+        .expect("the inventory must parse")
+}
+
+/// Every distinct path Git's own inventory says this fixture's commits changed.
+pub fn inventory_changed_paths(name: &str) -> Vec<String> {
+    let inventory = history_inventory(name);
+    let mut paths = std::collections::BTreeSet::new();
+    for commit in inventory["commits"].as_array().unwrap() {
+        for change in commit["changes"].as_array().unwrap_or(&Vec::new()) {
+            paths.insert(change["path"].as_str().unwrap().to_string());
+        }
+    }
+    paths.into_iter().collect()
+}
+
+/// A history fixture, indexed, with its history ingested, and served.
+///
+/// The index is required because `nerve serve` refuses a directory that has none. The ingest is a
+/// separate step for the reason `nerve history sync` is a separate command: history resolves
+/// nothing against the graph, so the two are independent facts and the endpoints must be tested
+/// against a repository that has one, both or neither.
+pub fn served_history(name: &str) -> (tempfile::TempDir, PathBuf, Session) {
+    let (dir, root) = history_fixture(name);
+    index(&root);
+    nerve_index::ingest_history(&root, &nerve_index::HistoryOptions::default())
+        .expect("the fixture's history must ingest");
+    let session = Session::start(&root);
+    (dir, root, session)
+}
+
+/// A history fixture, indexed and served, with **no** history ingested.
+///
+/// "History has never been read here" is one of the four states the historical model requires to
+/// stay distinct from "read, and nothing found", so it needs a repository of its own.
+pub fn served_without_history(name: &str) -> (tempfile::TempDir, PathBuf, Session) {
+    let (dir, root) = history_fixture(name);
+    index(&root);
+    let session = Session::start(&root);
+    (dir, root, session)
+}
+
 // ---- server session ------------------------------------------------------------------------
 
 /// A running server plus the token needed to talk to it.

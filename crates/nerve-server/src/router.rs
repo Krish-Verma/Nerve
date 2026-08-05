@@ -159,6 +159,16 @@ fn route(target: &Target, ctx: &Context<'_>) -> Outcome {
         "/api/impact" => api::impact(ctx, target),
         "/api/unresolved" => api::unresolved(ctx, target),
         "/api/partial-parses" => api::partial_parses(ctx),
+        // Slice 12c-iii. Every one of these runs *after* the guard above, so `Host`, `Origin` and
+        // the session token gate them exactly as they gate every other `/api/*` route — the
+        // relaxation for embedded assets cannot reach a path that is not in the asset table.
+        "/api/history" => api::history::availability(ctx),
+        "/api/history/commits" => api::history::commits(ctx, target),
+        "/api/history/commit" => api::history::commit_changes(ctx, target),
+        "/api/history/path" => api::history::path(ctx, target),
+        "/api/history/diff" => api::history::diff(ctx, target),
+        "/api/history/frequency" => api::history::frequency(ctx, target),
+        "/api/history/cochange" => api::history::cochange(ctx, target),
         other => {
             return match assets::lookup(other) {
                 Some(asset) => Outcome::Asset(asset),
@@ -195,7 +205,19 @@ fn wrap(value: serde_json::Value) -> serde_json::Value {
 }
 
 /// The routes this build serves, in the order a client would meet them.
-pub const ROUTES: [&str; 11] = [
+///
+/// **This table and the match in [`route`] are two statements of one fact, and they are kept in
+/// step by a test rather than by care.**
+/// `every_advertised_route_is_served_and_every_served_route_is_advertised`, in
+/// `crates/nerve-server/tests/api.rs`, compares this table against the match arms as sets and then
+/// drives every entry through a running server, refusing a `no_such_route`. A route added to one and
+/// forgotten in the other fails there: an unlisted route is undiscoverable, and a listed route that
+/// 404s is a lie in the very error body a client is meant to recover from.
+///
+/// Nothing checked this before Slice 12c-iii-a. `no_api_route_answers_without_a_token` iterates this
+/// table, but the guard runs *before* dispatch, so an entry naming no arm still answered `401` and
+/// passed.
+pub const ROUTES: [&str; 18] = [
     "/api/overview",
     "/api/search",
     "/api/entity",
@@ -207,6 +229,13 @@ pub const ROUTES: [&str; 11] = [
     "/api/impact",
     "/api/unresolved",
     "/api/partial-parses",
+    "/api/history",
+    "/api/history/commits",
+    "/api/history/commit",
+    "/api/history/path",
+    "/api/history/diff",
+    "/api/history/frequency",
+    "/api/history/cochange",
 ];
 
 #[cfg(test)]

@@ -374,6 +374,86 @@ fn a_clean_repository_reports_no_partial_parses() {
     assert_eq!(value["results"], serde_json::json!([]));
 }
 
+/// The route table and the dispatch match are two statements of one fact, kept in step here.
+///
+/// **This test is the answer to a hole found by probing Slice 12c-iii-a.** Adding a route to
+/// `router::route`'s match and forgetting `router::ROUTES` — or the reverse — failed nothing.
+/// `no_api_route_answers_without_a_token` iterates `ROUTES`, but the guard runs *before* dispatch,
+/// so an entry naming no arm still answers `401` and passes; and nothing at all looked in the other
+/// direction. Both mistakes are real: an unlisted route is undiscoverable through the `404` body
+/// that exists to list them, and a listed route that `404`s is a lie in the very payload a client
+/// is meant to recover from.
+///
+/// Both directions are checked, and neither half is a substitute for the other:
+///
+/// 1. **Source.** Every `"/api/…" =>` arm of the match is compared against `ROUTES` as a set. This
+///    is what catches a served route that was never advertised, which no request can discover.
+/// 2. **Behaviour.** Every `ROUTES` entry is driven through a running server and must not answer
+///    `no_such_route`. A missing argument answering `400` is a pass — the route dispatched, which
+///    is what is being established.
+#[test]
+fn every_advertised_route_is_served_and_every_served_route_is_advertised() {
+    const ROUTER: &str = include_str!("../src/router.rs");
+
+    // The arms of the dispatch match, read out of the source. Every one is written as a string
+    // literal immediately followed by `=>`, which is the shape the match requires.
+    let mut served: Vec<String> = Vec::new();
+    for (index, _) in ROUTER.match_indices("\"/api/") {
+        let rest = &ROUTER[index + 1..];
+        let Some(end) = rest.find('"') else { continue };
+        let route = &rest[..end];
+        if rest[end + 1..].trim_start().starts_with("=>") {
+            served.push(route.to_string());
+        }
+    }
+    served.sort();
+    served.dedup();
+
+    // Anti-vacuity: the scrape found arms rather than nothing, and it reached the history family it
+    // was written for. A pattern that matched nothing would make the set comparison below pass on
+    // two empty sets. The floor is deliberately well under the real count so that **removing** an
+    // arm is caught by the set comparison — the assertion that names both sides — rather than by
+    // this one, which would only say "fewer than expected".
+    assert!(
+        served.len() >= 11,
+        "the dispatch scrape found only {} arms: {served:?}",
+        served.len()
+    );
+    assert!(
+        served.iter().any(|route| route == "/api/history"),
+        "{served:?}"
+    );
+
+    let mut advertised: Vec<String> = nerve_server::router::ROUTES
+        .iter()
+        .map(|route| route.to_string())
+        .collect();
+    advertised.sort();
+    assert_eq!(
+        served, advertised,
+        "the dispatch match and router::ROUTES disagree; every route must be in both"
+    );
+
+    // And every advertised route really dispatches. A missing argument is a `400`, which is a pass:
+    // what must not happen is the `404` that says the route does not exist.
+    let (_dir, _root, session) = common::served();
+    for route in nerve_server::router::ROUTES {
+        let response = session.get(route);
+        assert_ne!(
+            response.status, 404,
+            "{route} is advertised but not served: {}",
+            response.body
+        );
+        if response.status != 200 {
+            assert_ne!(
+                response.parse_json()["error"]["code"],
+                "no_such_route",
+                "{route}"
+            );
+        }
+    }
+}
+
 #[test]
 fn an_unknown_route_lists_the_ones_that_exist() {
     let (_dir, _root, session) = common::served();
