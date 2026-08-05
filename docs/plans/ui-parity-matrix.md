@@ -137,6 +137,38 @@ and `endpoint`; `crates/nerve-server/tests/ui_vocabulary.rs::the_embedded_bundle
 is the guard that now catches it. Any UI slice must run `npm run build` and commit the regenerated
 bundle, then let that guard confirm the two agree — **source tests alone are not sufficient evidence**.
 
+## 4b. Browser QA of the history views — performed 2026-08-05, and what it could not cover
+
+Done in a real Chrome against the shipped release binary serving `fixtures/history-shallow`
+(`nerve init` + `index` + `history sync`, then `nerve serve`). This closes the gap 12c-iv committed
+with (`397ea3e`), for desktop width only.
+
+**Passed, observed rather than inferred:**
+
+| check | what was seen |
+|---|---|
+| Availability view | `shallow checkout` and `stopped: shallow_boundary` badges; *"the walk reached a declared shallow boundary; history before it is unavailable to this repository"*; the boundary oid; **"Earlier commits may exist above what was read. The counts on this screen are a floor, never a total."** |
+| **The wording invariant, live** | On `notes.txt`: kind `earliest_visible_change`, and **`THE WORD CREATED: not permitted — the earliest recorded change is not established as the first one, so this answer may only be rendered as the earliest change Nerve can see`** |
+| The two scopes kept apart | *"EARLIER, THIS PATH: a declared shallow boundary sits above what Nerve read of this path…"* beside *"EARLIER, THIS REPOSITORY: The ingest may not have read everything… This is about the repository, not about this path."* — the path-level/repository-level distinction §4.2.1 exists for, rendered as two separate lines |
+| Merge honesty | *"A merge enumerates no changes, so every change count here is short by whatever those merges did."* |
+| Co-change | Empty state carries *"That count is an observation about commits and nothing else — it is not a dependency, and this screen will not let it be read as one."* |
+| Empty states | "Name a path" on both path-taking tabs, each explaining what the answer will and will not mean |
+| Console | **Zero messages** after a full reload — no errors, no CSP violations |
+| Refresh / deep link | `#/history/path?path=notes.txt` survives `cmd+r` and re-renders the same answer |
+| Read-only | Database byte size unchanged across the whole browser session |
+
+**Not covered, and not claimed:**
+
+- **Narrow width (380px) was not verified.** `resize_window` reported success and the rendered
+  viewport stayed at 1456px. This is the **same environmental limitation row 7a-ii already
+  recorded** — *"narrow-viewport QA still outstanding (window ignores resize)"* — so it is a
+  pre-existing tooling gap rather than a new one. It remains outstanding for the history views **and**
+  for the 7a-ii views. A future session with a working resize, or a headless browser with a fixed
+  viewport, should cover both together.
+- Error and corrupt-history states were not driven, because reaching them needs a deliberately
+  damaged object store; they are covered by server tests, not by eye.
+- Keyboard access was not systematically exercised.
+
 ## 5. Order of work
 
 1. **12c-iv** — history views, eight glosses, guard extended, `history_wording.rs` scan widened to
