@@ -12,7 +12,8 @@
 | **Branch** | `main` · **Working tree** clean |
 | **Remote** | **None configured.** Nothing pushed. All work local. Deliberate — see "Decisions already made". |
 | **Last completed slice** | **Slice 12b** — Git history ingestion. **Rows 1–11, 12a and 12b are complete.** Report: `docs/reports/slice-12b-report.md`. |
-| **Next action (2026-08-04, later session)** | **Slice 12c-i-b — the CLI family.** 12c now has a committed plan (`352c824`, corrected `2b558af` and again by the implementation, see the 12c section below) that splits it into **four** sub-slices, and **12c-i-a is done**. Next is 12c-i-b: extend `nerve history file` with the first/last block, add `history diff` / `frequency` / `cochange` / `availability`, and make probes 11 and 12 testable (a symbol selector refused *as a refusal*; `canonical_child` never on a historical path). Then 12c-ii similarity renames, 12c-iii API + MCP, 12c-iv UI + six glosses. Rows 13 and 14 have committed plans too (`307b029`, `eb68830`) — read them before planning, they settle several questions. |
+| **Next action (2026-08-05)** | **Slice 12c-ii — similarity rename hypotheses.** 12c-i-a and **12c-i-b are complete**; the whole derived-history CLI exists. 12c-ii adds a **second** `RenameEvidence` value with its own precision table, never blended with `exact_content` and never a score (plan §6). Then 12c-iii (API + MCP) and 12c-iv (UI + **eight** glosses — see `docs/plans/ui-parity-matrix.md` §3). **Fold two hoists into 12c-iii before three more surfaces copy the prose**: `FirstObservedKind` and `HistoryFreshness` have no `note()`, and neither does `nerve_store::EarlierHistoryUnavailable`, so 12c-i-b had to write their prose in the CLI — recorded at `main.rs:2520-2529`. |
+| **Superseded next action (2026-08-04, later session)** | **Slice 12c-i-b — the CLI family.** 12c now has a committed plan (`352c824`, corrected `2b558af` and again by the implementation, see the 12c section below) that splits it into **four** sub-slices, and **12c-i-a is done**. Next is 12c-i-b: extend `nerve history file` with the first/last block, add `history diff` / `frequency` / `cochange` / `availability`, and make probes 11 and 12 testable (a symbol selector refused *as a refusal*; `canonical_child` never on a historical path). Then 12c-ii similarity renames, 12c-iii API + MCP, 12c-iv UI + six glosses. Rows 13 and 14 have committed plans too (`307b029`, `eb68830`) — read them before planning, they settle several questions. |
 | **Superseded next action, kept for the record** | **Slice 12c** — the derived historical questions and every remaining surface. Needs its own plan. Scope is already fixed by 12b's plan §1.1: first/last observed **for path-bearing kinds only** (`File`/`Directory`/`Module`/`Document` — a symbol has `PathRole::None` and `git_change` is path-keyed, so the symbol form is refused), similarity renames as a **second** `RenameEvidence` value never blended with `exact_content`, change frequency, labelled co-change, state-to-state diff, `/api/history*`, MCP tools, the UI view, and **glosses for all six new vocabularies**. Two things to do first, both cheap: extend `scripts/final_acceptance.sh` (its `history` block now prints `PASS … update this script`), and note that `crates/nerve-server/tests/layering.rs` now scans `src/` dynamically so a new `mcp/history.rs` cannot evade the no-SQL, no-graph-walker, loopback-only and no-CORS scans. Then 13, 14, the UI completion pass, real-world validation, acceptance expansion, the clean-checkout audit. |
 | **Roadmap status** | **INCOMPLETE.** Rows 1–11, 12a and 12b are done. **12c, 13, 14, the UI completion pass, the real-world validation run, the acceptance expansion and the final audit are not.** The acceptance script gates what is built and is **not** a claim of completeness. |
 
@@ -700,6 +701,23 @@ recorded in `docs/plans/slice-15-real-world-validation.md`.
   requires the path to *exist*. It cannot validate a historical or otherwise absent path. Not a
   defect in the function; a trap for any slice that reaches for it. Rows 13 and 14 can make the
   same mistake.
+- **OPEN, found by the 12c-i-b implementer, reported rather than fixed** —
+  `delete_commits_with_unavailable_parents` (`crates/nerve-index/src/history.rs:490`) deletes **every**
+  commit whose `parent_completeness` is not `root`/`parents_available` at the start of *each* sync, on
+  the stated assumption that the new walk re-reaches it (`history.rs:335-338`). **If HEAD has moved, it
+  does not** — the walk starts from the current tips, so a commit that is no longer reachable is
+  deleted and never re-recorded. Verified by reading, not only reported: the delete is unconditional
+  and the re-walk is reachability-bounded.
+  **The defect is the asymmetry, not the deletion.** A commit with *available* parents that becomes
+  unreachable stays recorded; one with *unavailable* parents in the same position is dropped. Two
+  commits in the identical situation, two different outcomes, decided by a field that describes their
+  parents rather than their reachability.
+  The repair itself is right and must be kept — `git fetch --unshallow` can turn "unavailable" into
+  "available", and 12b's plan §8.5 records that stale availability is the one thing this surface must
+  not keep. What is wrong is repairing by *delete-then-rewalk* when the rewalk's reach can shrink.
+  Out of scope for 12c-i-b, which is a read surface. **Fix in a corrective slice**, and the test must
+  move HEAD backward between two syncs — no shipped fixture reaches it in one sync, because
+  `history-missing` records two commits along one chain.
 - **OPEN** — four slice reports do not exist: `slice-10b-report.md`, `slice-11a-report.md`,
   `slice-11b-report.md`, `slice-12a-report.md`. CLAUDE.md §7 requires one per slice. The ROADMAP
   rows for those slices are unusually detailed and carry the substance. Address in the
