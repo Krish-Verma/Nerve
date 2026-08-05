@@ -11,7 +11,7 @@
 //!
 //! What *is* here is the part that is specific to talking to an agent, and only the part specific
 //! to *this* tool — the trust envelope, the byte ceiling and the argument checks are
-//! [`crate::mcp::tool`]'s, stated once for all five tools:
+//! [`crate::mcp::tool`]'s, stated once for every tool:
 //!
 //! - **Argument validation (T8).** This tool's arguments, its vocabularies and its bounds.
 //! - **Response bounds (T8).** `why` answers with every assertion a subject has, which grows

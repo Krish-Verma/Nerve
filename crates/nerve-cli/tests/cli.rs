@@ -2944,7 +2944,12 @@ fn mcp_answers_a_real_client_transcript_on_stdio() {
         ]
     );
     assert_eq!(responses[0]["result"]["serverInfo"]["name"], "nerve");
-    assert_eq!(responses[1]["result"]["tools"].as_array().unwrap().len(), 5);
+    // Taken from the table rather than retyped, so a tool added later is driven by the transcript
+    // test below without this number having to be found and changed.
+    assert_eq!(
+        responses[1]["result"]["tools"].as_array().unwrap().len(),
+        nerve_server::mcp::TOOL_NAMES.len()
+    );
     let answer = &responses[2]["result"];
     assert_eq!(answer["isError"], false);
     assert_eq!(
@@ -2985,12 +2990,17 @@ fn mcp_answers_every_tool_on_stdio_and_keeps_the_two_absences_apart() {
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"nerve_impact","arguments":{"selector":"src/math.ts#add"}}}"#,
             r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"nerve_gaps","arguments":{}}}"#,
             r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"nerve_gaps","arguments":{"under":"../../etc"}}}"#,
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"nerve_history","arguments":{"question":"availability"}}}"#,
+            r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"nerve_history","arguments":{"question":"path","path":"src/shapes.ts#Circle.area"}}}"#,
         ],
     );
 
     assert_eq!(code(&output), 0);
-    assert_eq!(responses.len(), 7, "{responses:#?}");
-    assert_eq!(responses[1]["result"]["tools"].as_array().unwrap().len(), 5);
+    assert_eq!(responses.len(), 9, "{responses:#?}");
+    assert_eq!(
+        responses[1]["result"]["tools"].as_array().unwrap().len(),
+        nerve_server::mcp::TOOL_NAMES.len()
+    );
 
     // An FTS5 operator-laden query is answered, not a syntax error and not a crash.
     let search = &responses[2]["result"];
@@ -3032,6 +3042,30 @@ fn mcp_answers_every_tool_on_stdio_and_keeps_the_two_absences_apart() {
     // A traversal-shaped path prefix is refused as a refusal, on the tool that takes no selector.
     assert_eq!(responses[6]["error"]["data"]["reason"], "path_refused");
     assert_eq!(responses[6]["error"]["data"]["argument"], "under");
+
+    // No git history was ever read here, and that is an answer rather than a failure: the tally is
+    // null rather than zero, which is the same distinction `nerve_gaps` draws one row above.
+    let history = &responses[7]["result"]["structuredContent"];
+    assert_eq!(responses[7]["result"]["isError"], false, "{history}");
+    assert_eq!(history["tool"], "nerve_history");
+    assert_eq!(history["evidence"]["state"], "history_never_ingested");
+    assert_eq!(history["evidence"]["history_ingested"], false);
+    assert!(history["evidence"]["commits_recorded"].is_null());
+    assert_eq!(
+        history["repository_content"]["history"]["result_kind"],
+        "no_history_ingested"
+    );
+
+    // And the hard gate of the historical model, on the shipped binary: a symbol selector is
+    // refused with its reason, and the file that contains the symbol is never answered instead.
+    assert_eq!(
+        responses[8]["error"]["data"]["reason"],
+        "symbol_selector_refused"
+    );
+    assert_eq!(responses[8]["error"]["data"]["path_guessed"], false);
+    assert!(!serde_json::to_string(&responses[8])
+        .unwrap()
+        .contains("first_observed"));
 
     assert!(
         String::from_utf8(output.stderr).unwrap().is_empty(),

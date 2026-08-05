@@ -157,6 +157,28 @@ pub fn served_history(name: &str) -> (tempfile::TempDir, PathBuf, Session) {
     (dir, root, session)
 }
 
+/// A history fixture, indexed, with its history ingested, and **not** served.
+///
+/// The MCP surface speaks stdio and binds nothing, so it takes the repository directly. Starting a
+/// server for it would test the HTTP guard a second time and the tool surface not at all.
+pub fn history_repository(name: &str) -> (tempfile::TempDir, PathBuf) {
+    let (dir, root) = history_fixture(name);
+    index(&root);
+    nerve_index::ingest_history(&root, &nerve_index::HistoryOptions::default())
+        .expect("the fixture's history must ingest");
+    (dir, root)
+}
+
+/// A history fixture, indexed, with **no** history ingested and no server.
+///
+/// "History has never been read here" is one of the four states the historical model requires to
+/// stay distinct from "read, and nothing found", and the MCP surface has to keep them apart too.
+pub fn history_repository_without_history(name: &str) -> (tempfile::TempDir, PathBuf) {
+    let (dir, root) = history_fixture(name);
+    index(&root);
+    (dir, root)
+}
+
 /// A history fixture, indexed and served, with **no** history ingested.
 ///
 /// "History has never been read here" is one of the four states the historical model requires to

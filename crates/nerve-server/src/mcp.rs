@@ -63,6 +63,7 @@ use crate::api;
 use crate::error::{Result, ServerError};
 
 pub mod gaps;
+pub mod history;
 pub mod impact;
 pub mod investigate;
 pub mod path;
@@ -77,18 +78,26 @@ pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Every tool this server advertises, in the order `tools/list` returns them.
 ///
-/// Five, and each earns its place by having a **materially different input/output contract**
+/// Six, and each earns its place by having a **materially different input/output contract**
 /// (`docs/plans/slice-08-mcp.md`): a selector and its evidence; a free-text query and ranked
 /// hits; two selectors and an ordered chain; one selector and a reverse closure with an
-/// unresolved account; and no selector at all, with a four-valued coverage verdict and a `totals`
-/// that is null rather than zero when nothing was measured. Anything that is `nerve_investigate`
-/// with a flag is not a tool.
-pub const TOOL_NAMES: [&str; 5] = [
+/// unresolved account; no selector at all, with a four-valued coverage verdict and a `totals`
+/// that is null rather than zero when nothing was measured; and one repository's recorded
+/// history, whose every answer carries the same availability block and none of whose answers is
+/// about the current graph at all. Anything that is `nerve_investigate` with a flag is not a
+/// tool.
+///
+/// The sixth is one tool rather than seven for the same reason the fifth is one rather than none:
+/// the rule is about contracts, and `nerve_history`'s seven questions share one — the block
+/// `docs/plans/slice-12c-historical-questions.md` §9 requires to be assembled in exactly one
+/// place. See `mcp/history.rs` for the trade that was accepted with it.
+pub const TOOL_NAMES: [&str; 6] = [
     investigate::TOOL_NAME,
     search::TOOL_NAME,
     path::TOOL_NAME,
     impact::TOOL_NAME,
     gaps::TOOL_NAME,
+    history::TOOL_NAME,
 ];
 
 /// The `tools/list` payload.
@@ -99,6 +108,7 @@ pub fn descriptors() -> Vec<Value> {
         path::descriptor(),
         impact::descriptor(),
         gaps::descriptor(),
+        history::descriptor(),
     ]
 }
 
@@ -551,7 +561,7 @@ fn initialize_result(params: &Map<String, Value>) -> Value {
 
 /// `tools/call`: validate the envelope, run the named tool, shape the result.
 ///
-/// Dispatch is a match on a closed table of five names. A name that is not one of them is
+/// Dispatch is a match on a closed table of six names. A name that is not one of them is
 /// refused with the list, rather than falling through to a default tool — a client that
 /// mistypes `nerve_impact` must not silently receive an investigation.
 fn tools_call(session: &McpSession, id: Value, params: &Map<String, Value>) -> Value {
@@ -585,8 +595,9 @@ fn tools_call(session: &McpSession, id: Value, params: &Map<String, Value>) -> V
         path::TOOL_NAME => path::call(&ctx, repository, &arguments),
         impact::TOOL_NAME => impact::call(&ctx, repository, &arguments),
         gaps::TOOL_NAME => gaps::call(&ctx, repository, &arguments),
+        history::TOOL_NAME => history::call(&ctx, repository, &arguments),
         // `investigate` last: the guard above means only a name from `TOOL_NAMES` reaches here,
-        // and `tests/mcp.rs::every_advertised_tool_answers_over_the_wire` drives all five so a
+        // and `tests/mcp.rs::every_advertised_tool_answers_over_the_wire` drives all six so a
         // name that was advertised but never wired up cannot pass unnoticed.
         _ => investigate::call(&ctx, repository, &arguments),
     };
@@ -724,11 +735,12 @@ mod tests {
             (path::TOOL_NAME, path::ACCEPTED_ARGUMENTS.into()),
             (impact::TOOL_NAME, impact::ACCEPTED_ARGUMENTS.into()),
             (gaps::TOOL_NAME, gaps::ACCEPTED_ARGUMENTS.into()),
+            (history::TOOL_NAME, history::ACCEPTED_ARGUMENTS.into()),
         ]
     }
 
     #[test]
-    fn tools_list_advertises_exactly_the_five_named_tools() {
+    fn tools_list_advertises_exactly_the_six_named_tools() {
         let descriptors = descriptors();
         assert_eq!(descriptors.len(), TOOL_NAMES.len());
         let names: Vec<&str> = descriptors
