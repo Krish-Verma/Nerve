@@ -33,6 +33,36 @@ and the seam has been taken five times already — 2a/2b, 5a/5b/5c, 6a/6b, 11a/1
 
 Row 12 is complete at 12c-iv, not at 12c-i.
 
+### 1.2 Execution order changed after 12c-i: iii and iv run before ii
+
+**Decided 2026-08-05, after 12c-i-b landed.** The numbering above is kept — renumbering committed
+work would break every reference to it — but the **execution order is iii → iv → ii**, and the reason
+is evidence rather than preference.
+
+1. **The brief requires the surfaces and merely permits the feature.** *"Do not stop before all
+   accepted human-facing features are operable in the current reference UI or explicitly documented as
+   intentionally non-UI operations."* Everything 12c-i built is currently reachable only from a
+   terminal: the measured UI matrix (`docs/plans/ui-parity-matrix.md`) records **zero** history UI and
+   **zero** history endpoints. Similarity renames are this plan's own choice; the surfaces are the
+   instruction.
+2. **12c-ii's output would have nowhere to go.** It adds a second `RenameEvidence` value. With no
+   `/api/history*` and no UI, shipping it means adding evidence that no surface can display — and then
+   iii and iv would carry *both* the backlog and the new value. Running iii and iv first means the
+   second value arrives into surfaces that already render the first.
+3. **The duplication clock is running.** 12c-i-b was forbidden from editing `nerve-core`, so prose for
+   `FirstObservedKind`, `HistoryFreshness` and `EarlierHistoryUnavailable` sits **inside the CLI
+   binary** (`main.rs:2520-2529` records it). Every slice that adds a surface before that hoist is a
+   slice that copies it. §9.2 exists because this exact thing already happened once with four
+   functions; letting it happen twice in the same row would be choosing the defect knowingly. The
+   hoist therefore moves into **12c-iii-a**, ahead of any new surface.
+4. **12c-ii is the only part of row 12 that is a heuristic**, and it is the part most likely to need
+   its own corrective pass. Exact-content renames — the honest, evidence-backed form — already ship.
+   Deferring the heuristic behind the surfaces means the surfaces are complete either way, and a
+   precision gate that fails does not block the row's usability.
+
+**12c-iii is split**, on the recorded rule that a slice bundling two surfaces has cost this project
+five agents: **12c-iii-a** is the three hoists plus the HTTP endpoints, **12c-iii-b** is MCP.
+
 ---
 
 ## 2. The questions, and what is refused
