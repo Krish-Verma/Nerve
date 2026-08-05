@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::json;
 
-use nerve_core::Relation;
+use nerve_core::{FirstObservedKind, HistoryFreshness, Relation};
 use nerve_index::config;
 use nerve_index::error::IndexError;
 // The one history *judgment* — whether an earlier change may exist and not be recorded — is derived
@@ -435,6 +435,109 @@ enum HistoryCommand {
         #[arg(long, default_value = ".")]
         path: PathBuf,
     },
+    /// What changed between two recorded states, by **ancestry** and never by a time range.
+    ///
+    /// `history log` orders by `committer_time`, which is exactly what makes the wrong
+    /// implementation the convenient one. A time range is not an ancestry range: a merge brings in
+    /// commits whose committer time precedes it, and a rebase or a fabricated clock reorders them
+    /// freely, so "the commits between two timestamps" answers a different question and fails
+    /// silently. The walk here follows `parent_oids` from `--to` toward `--from`, pruned at
+    /// `--from`'s own ancestors, which is what `from..to` means.
+    ///
+    /// **Four of the five outcomes are not diffs, and none of them prints as an empty one.** An
+    /// endpoint Nerve never recorded, a `--from` that is not an ancestor of `--to`, an ancestry
+    /// that could not be followed, and Nerve's own walk bound each name themselves and say which
+    /// commit is at fault. An empty diff means one thing only: `--from` and `--to` have nothing
+    /// between them.
+    ///
+    /// Every outcome exits `0`. None is a failure: a commit Nerve never read is a finding in the
+    /// manner `nerve path` established for a route that does not exist, and a walk stopped by
+    /// Nerve's own bound is a success carrying a qualification rather than an error.
+    Diff {
+        /// The older state, **excluded** from the range. Must be a recorded commit oid.
+        #[arg(long, value_name = "OID")]
+        from: String,
+        /// The newer state, **included** in the range. Must be a recorded commit oid.
+        #[arg(long, value_name = "OID")]
+        to: String,
+        /// Commits the range may carry. Truncation is reported as a fact, never inferred.
+        #[arg(long, default_value_t = nerve_store::StateDiffLimits::DEFAULT.commits)]
+        limit: usize,
+        /// Commits the ancestry walk may visit.
+        ///
+        /// Three bounds rather than one, because they bound three different things and one number
+        /// would leave two of them unbounded. This one is **Nerve's** boundary: a walk that stops
+        /// here reports `walk_budget_exhausted` rather than an answer, since a prune set that is a
+        /// floor would produce a range that is wrong rather than merely narrow.
+        #[arg(long, value_name = "N", default_value_t = nerve_store::StateDiffLimits::DEFAULT.commits_walked)]
+        max_walk: usize,
+        /// Change rows the diff may carry.
+        #[arg(long, value_name = "N", default_value_t = nerve_store::StateDiffLimits::DEFAULT.changes)]
+        max_changes: usize,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Which paths changed most often **in visible history**.
+    ///
+    /// It refuses to call the number a lifetime count, and both halves of that refusal are printed
+    /// rather than documented. A shallow or bounded ingest makes every count a floor, so the
+    /// availability block sits beside the list; and a merge enumerates no changes at all by the
+    /// historical model's decision, so a merge-heavy repository undercounts against its own log and
+    /// the merge count is stated for that reason.
+    ///
+    /// The order is count descending then path ascending. A count tie is the normal case — most
+    /// paths change once — so the second key is part of the answer rather than decoration.
+    Frequency {
+        /// Paths listed. The total is counted separately, so truncation stays a fact.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Which paths were changed in the same commits as one path — an **observation**, not a
+    /// dependency.
+    ///
+    /// This command refuses the inference its own numbers invite. Two paths changing together is
+    /// equally consistent with coupling, with a formatting sweep, with a release-version bump, and
+    /// with one commit that did two unrelated things, so the count is a raw shared-commit count
+    /// rather than a normalised affinity — a normalised number would invite exactly the comparison
+    /// the label forbids — and the sentence naming what it is not is carried on every answer rather
+    /// than left to a footnote a consumer can drop.
+    ///
+    /// No relation is emitted and no assertion is written. Co-change exists only in this response.
+    ///
+    /// The argument is a repository-relative path exactly as a commit's tree recorded it, on the
+    /// same terms as `history file`.
+    Cochange {
+        /// Repository-relative path as recorded in a tree, for example `src/app/main.rs`.
+        #[arg(value_name = "PATH_IN_REPO")]
+        tree_path: String,
+        /// Pairs listed. The total is counted under the same restriction, so truncation stays a
+        /// fact.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// What visible history is unavailable, and whether what was recorded is still current.
+    ///
+    /// Four freshness verdicts, and `unverifiable` is not a cosmetic fourth: a repository state
+    /// that records no commit cannot be compared against the ingest's HEAD, and reporting *unknown*
+    /// as *current* is how a truncated sweep becomes a clean bill of health. `nerve check` draws the
+    /// same distinction between stale and unverified.
+    ///
+    /// Staleness is reported, never refused: `nerve check` is the only command that may exit on it,
+    /// and every other command carries freshness beside its answer instead. A history that has never
+    /// been synced is `no_history_ingested`, which is an absence rather than a failure, and it too
+    /// exits `0`.
+    Availability {
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
 }
 
 /// `--direction` values.
@@ -562,6 +665,35 @@ fn main() {
             limit,
             path,
         }) => run_history_file(&output, &path, &tree_path, limit),
+        Command::History(HistoryCommand::Diff {
+            from,
+            to,
+            limit,
+            max_walk,
+            max_changes,
+            path,
+        }) => run_history_diff(
+            &output,
+            &path,
+            &from,
+            &to,
+            nerve_store::StateDiffLimits {
+                commits: limit,
+                commits_walked: max_walk,
+                changes: max_changes,
+            },
+        ),
+        Command::History(HistoryCommand::Frequency { limit, path }) => {
+            run_history_frequency(&output, &path, limit)
+        }
+        Command::History(HistoryCommand::Cochange {
+            tree_path,
+            limit,
+            path,
+        }) => run_history_cochange(&output, &path, &tree_path, limit),
+        Command::History(HistoryCommand::Availability { path }) => {
+            run_history_availability(&output, &path)
+        }
         Command::Status { path, path_flag } => run_status(
             &output,
             &path.or(path_flag).unwrap_or_else(|| PathBuf::from(".")),
@@ -2163,6 +2295,111 @@ fn open_query_only(path: &Path) -> Result<OpenIndex, String> {
 // re-words `shallow_boundary` slightly is a surface that has restated the invariant Slice 12b exists
 // to protect.
 
+/// Why a history argument cannot be read as a repository path.
+///
+/// A closed enum with one value rather than a boolean, on the same terms as
+/// [`nerve_store::SelectorRefusal`]: the refusal names itself in `--json`, and a second reason
+/// arriving later cannot arrive as a second boolean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HistoryPathRefusal {
+    /// The argument is shaped like a **symbol** selector — `<path>#<name>`, or a `function:`,
+    /// `method:`, `class:`, `interface:` or `symbol:` qualifier.
+    SymbolSelector,
+}
+
+impl HistoryPathRefusal {
+    /// Canonical name, carried in `--json`.
+    fn as_str(self) -> &'static str {
+        match self {
+            HistoryPathRefusal::SymbolSelector => "symbol_selector_refused",
+        }
+    }
+
+    /// What the refusal means, in one sentence a caller can be shown.
+    fn statement(self) -> &'static str {
+        match self {
+            HistoryPathRefusal::SymbolSelector => {
+                "history is keyed on a path and records nothing finer: git_change has one row per \
+                 path per commit, and every symbol kind answers PathRole::None, so the only dates \
+                 Nerve could return for a symbol are the dates of the file that contains it — a \
+                 different claim wearing the same words"
+            }
+        }
+    }
+}
+
+/// Is this history argument a symbol selector rather than a path?
+///
+/// **The path the caller probably meant is deliberately not extracted here, and that is the whole
+/// point.** Answering `src/app/main.rs#parse` with `src/app/main.rs`'s dates is the failure this
+/// refusal exists to prevent, so the function returns *why* and never *what instead*.
+///
+/// Two shapes, both taken from the selector grammar `nerve_store::select` documents rather than
+/// invented here: a `#`, which is the grammar's symbol separator; and a qualifier in qualifier
+/// position — the first `:` before the first `/` — naming a kind for which
+/// `EntityKind::is_symbol` holds, or the `symbol` alias over exactly those kinds.
+///
+/// **A residual, stated rather than hidden.** Git allows `#` and `:` in a tree path, so a path
+/// genuinely spelled that way is refused too. That is the right direction to err: a refusal is
+/// reported as a refusal with its reason, which is a thing the caller can read and act on, while
+/// the alternative is an empty answer that reads as "this path has no history". It is the argument
+/// `selector_shape`'s traversal refusal already makes for the same overlap.
+fn history_path_refusal(argument: &str) -> Option<HistoryPathRefusal> {
+    if argument.contains('#') {
+        return Some(HistoryPathRefusal::SymbolSelector);
+    }
+    let colon = argument.find(':')?;
+    if colon == 0 {
+        return None;
+    }
+    // A colon below the root — `docs/a:b.md` — is part of a path, not a qualifier. The rule is
+    // `select.rs`'s, restated nowhere: the first `:` must precede the first `/`.
+    if argument.find('/').is_some_and(|slash| slash < colon) {
+        return None;
+    }
+    match nerve_store::Qualifier::parse(&argument[..colon])? {
+        nerve_store::Qualifier::Symbol => Some(HistoryPathRefusal::SymbolSelector),
+        nerve_store::Qualifier::Kind(kind) if kind.is_symbol() => {
+            Some(HistoryPathRefusal::SymbolSelector)
+        }
+        _ => None,
+    }
+}
+
+/// Report a refused history argument as a refusal, with nothing answered.
+///
+/// The exit code is the one a refused selector already uses. No history question is asked, no
+/// availability block is assembled and no path is suggested: every field a successful answer would
+/// carry is absent, so a consumer cannot mistake this for a path with no history.
+fn refuse_history_path(
+    output: &Output,
+    command: &'static str,
+    argument: &str,
+    refusal: HistoryPathRefusal,
+) -> i32 {
+    output.failure_detail(
+        command,
+        exit::USAGE,
+        &format!(
+            "{:?} is a symbol selector; {command} takes a path — {}",
+            inert_text(argument),
+            refusal.statement()
+        ),
+        &[
+            "  nothing was looked up; this is a refusal, not an absence".to_string(),
+            "  the path this selector names is not guessed at, because answering with it would be \
+             the wrong claim rather than a narrower one"
+                .to_string(),
+        ],
+        json!({
+            "argument": inert_text(argument),
+            "reason": refusal.as_str(),
+            "reason_statement": refusal.statement(),
+            "path_guessed": false,
+        }),
+    )
+}
+
 /// The refusal map, printed by form with its counts. Never summarised into one number alone.
 fn print_refusals(output: &Output, refusals: &std::collections::BTreeMap<String, usize>) {
     output.line(format!(
@@ -2278,6 +2515,253 @@ fn rename_json(rename: &nerve_store::RenameRow) -> serde_json::Value {
         // this is a proposal drawn from identical content, and there is no score to sort it by.
         "is_hypothesis": true,
     })
+}
+
+// ---- the derived questions (Slice 12c-i) -----------------------------------------------------
+//
+// Five store queries reach the terminal here, and the rendering below carries one obligation the
+// counts do not: **only `may_claim_created` licenses the word "created"**, and the licence is read
+// off the response rather than re-derived. `FirstObservedKind::may_claim_created` in `nerve-core`
+// is the only copy of that rule in the workspace; `nerve_store::first_last_observed` carries its
+// answer on the response for exactly this reason.
+//
+// `FirstObservedKind` and `HistoryFreshness` have no `note()` in `nerve-core`, unlike the four
+// vocabularies Slice 12c-i hoisted, so their prose is written here. That is a duplication waiting
+// to happen when 12c-iii and 12c-iv add three more surfaces; it is recorded rather than papered
+// over, and the fix is the same hoist those four already had.
+
+/// One sentence per first-observed answer, with the creation permission as the gate.
+///
+/// **The permission is read, never re-derived.** `may_claim_created` on the response is
+/// `FirstObservedKind::may_claim_created`, whose only copy is in `nerve-core`; branching on it here
+/// rather than on the kind is what makes "created" impossible to say about the other five answers
+/// without deleting the branch.
+fn first_observed_note(observed: &nerve_store::FirstLastObserved) -> &'static str {
+    if observed.may_claim_created {
+        return "the path was created at this change: the earliest recorded change is an \
+                addition, nothing above it is hidden, and exactly one addition is recorded, so \
+                the claim rests on no clock";
+    }
+    match observed.kind {
+        FirstObservedKind::CreatedInVisibleHistory => {
+            unreachable!("creation is the permitted case above")
+        }
+        FirstObservedKind::EarliestVisibleChange => {
+            "the earliest change Nerve can see, which is not established as the first one; the \
+             reason history above it is out of reach is named below"
+        }
+        FirstObservedKind::PresentBeforeVisibleHistory => {
+            "present before visible history: the path is in the current tree and no recorded \
+             commit touched it, so it predates everything Nerve read"
+        }
+        FirstObservedKind::AbsentFromVisibleHistory => {
+            "absent from visible history: no recorded commit touched it, and the current tree was \
+             consulted and does not hold it"
+        }
+        FirstObservedKind::CurrentTreeUnknown => {
+            "no recorded commit touched it, and with no index the current tree could not be \
+             consulted at all, so whether it exists now is unknown rather than no"
+        }
+        FirstObservedKind::NoHistoryIngested => {
+            "history has never been read here, which is not the same fact as a path with no \
+             history"
+        }
+    }
+}
+
+/// Whether the word *created* may be used of this answer, in words.
+///
+/// The gate is [`nerve_store::FirstLastObserved::may_claim_created`] and the refusals below say
+/// *why* rather than repeating one sentence: a path with changes is refused for an ordering reason,
+/// a path without any is refused because there is nothing that could be a creation, and a
+/// repository with no ingest is refused because nothing was read at all. One sentence for all three
+/// would have said something false about two of them.
+fn created_claim_note(observed: &nerve_store::FirstLastObserved) -> &'static str {
+    if observed.may_claim_created {
+        return "permitted — this is the one answer of six that licenses it";
+    }
+    match observed.kind {
+        FirstObservedKind::CreatedInVisibleHistory => {
+            unreachable!("creation is the permitted case above")
+        }
+        FirstObservedKind::EarliestVisibleChange => {
+            "not permitted — the earliest recorded change is not established as the first one, so \
+             this answer may only be rendered as the earliest change Nerve can see"
+        }
+        FirstObservedKind::PresentBeforeVisibleHistory
+        | FirstObservedKind::AbsentFromVisibleHistory
+        | FirstObservedKind::CurrentTreeUnknown => {
+            "not permitted — no change to this path is recorded at all, so there is nothing here \
+             that could be a creation"
+        }
+        FirstObservedKind::NoHistoryIngested => {
+            "not permitted — no history has been read here, so no claim about this path can be \
+             made either way"
+        }
+    }
+}
+
+/// Why visible history stops above a path's earliest recorded change.
+///
+/// Prose for [`nerve_store::EarlierHistoryUnavailable`], which composes two `nerve-core`
+/// vocabularies rather than being a third, and so has no `note()` of its own to call.
+fn earlier_unavailable_note(reason: nerve_store::EarlierHistoryUnavailable) -> &'static str {
+    match reason {
+        nerve_store::EarlierHistoryUnavailable::ShallowBoundary => {
+            "a declared shallow boundary sits above what Nerve read of this path, so an earlier \
+             change to it may exist and not be recorded; expected, and not a fault"
+        }
+        nerve_store::EarlierHistoryUnavailable::ParentsMissing => {
+            "a parent object is absent and was not declared absent — a fault in this repository, \
+             never called shallow"
+        }
+        nerve_store::EarlierHistoryUnavailable::ParentsUnverifiable => {
+            "a parent object is absent and Nerve could not establish whether the absence was \
+             declared, so neither answer may be asserted"
+        }
+        nerve_store::EarlierHistoryUnavailable::CommitBudget => {
+            "Nerve's own commit budget stopped the read; the history did not stop, the read did"
+        }
+        // Deliberately not a restatement of `WalkTermination::Refused::note`, which
+        // `crates/nerve-cli/tests/history_wording.rs` catches by name — a first draft of this arm
+        // reproduced that sentence verbatim and the guard failed it, which is the whole reason the
+        // guard exists.
+        nerve_store::EarlierHistoryUnavailable::WalkRefused => {
+            "Nerve declined an object the walk required and stopped there — Nerve's own doing, \
+             never a property of the repository"
+        }
+    }
+}
+
+/// One end of the visible range, as one line.
+fn path_change_line(change: &nerve_store::PathChange) -> String {
+    format!(
+        "{} · {} · committed {} {}",
+        change.commit.commit_oid,
+        change.change.change_kind.as_str(),
+        change.commit.committer_time,
+        change.commit.committer_tz
+    )
+}
+
+fn path_change_json(change: &nerve_store::PathChange) -> serde_json::Value {
+    json!({
+        "commit": commit_json(&change.commit, None),
+        "change": change_json(&change.change),
+    })
+}
+
+fn first_last_observed_json(observed: &nerve_store::FirstLastObserved) -> serde_json::Value {
+    json!({
+        "path": inert_text(&observed.path),
+        "kind": observed.kind.as_str(),
+        "kind_note": first_observed_note(observed),
+        // Carried, never re-derived. `FirstObservedKind::may_claim_created` is the only copy of
+        // this permission, exactly as `may_claim_history_begins_here` is for a commit.
+        "may_claim_created": observed.may_claim_created,
+        "may_claim_created_note": created_claim_note(observed),
+        "first": observed.first.as_ref().map(path_change_json),
+        "last": observed.last.as_ref().map(path_change_json),
+        "changes_in_visible_history": observed.changes_in_visible_history,
+        "additions_recorded": observed.additions_recorded,
+        "merges_in_repository": observed.merges_in_repository,
+        "earlier_history_unavailable":
+            observed.earlier_history_unavailable.map(|reason| reason.as_str()),
+        "earlier_history_unavailable_note":
+            observed.earlier_history_unavailable.map(earlier_unavailable_note),
+        // The repository-level question, beside the path-level one above. They are different
+        // scopes and a consumer that collapsed them would deny a creation the object graph proves.
+        "earlier_changes_may_exist": observed.earlier_changes_may_exist,
+        "walk_terminated_by": observed.walk_terminated_by.map(|value| value.as_str()),
+        "walk_terminated_note": observed.walk_terminated_by.map(|value| value.note()),
+        "shallow": observed.shallow,
+        "current_tree": {
+            "basis": observed.current_tree.basis,
+            "index_exists": observed.current_tree.index_exists,
+            "entities_at_path": observed.current_tree.entities_at_path,
+        },
+    })
+}
+
+/// Print the first/last-observed block.
+///
+/// Printed only where the header said the repository is answerable: with no ingest the header's
+/// four lines are the whole answer, and a second block restating them in different words is the
+/// drift this slice exists to remove. `--json` carries the block either way, with
+/// `kind: "no_history_ingested"`.
+fn print_first_observed(output: &Output, observed: &nerve_store::FirstLastObserved) {
+    output.line(String::new());
+    output.line(format!(
+        "  {:<14} {} — {}",
+        "first_seen",
+        observed.kind.as_str(),
+        first_observed_note(observed)
+    ));
+    output.line(format!(
+        "  {:<14} {}",
+        "created_claim",
+        created_claim_note(observed)
+    ));
+    output.line(format!(
+        "  {:<14} {}",
+        "first_change",
+        observed
+            .first
+            .as_ref()
+            .map(path_change_line)
+            .unwrap_or_else(|| "(no change to this path is recorded)".to_string())
+    ));
+    output.line(format!(
+        "  {:<14} {}",
+        "last_change",
+        observed
+            .last
+            .as_ref()
+            .map(path_change_line)
+            .unwrap_or_else(|| "(no change to this path is recorded)".to_string())
+    ));
+    output.line(format!(
+        "  {:<14} {} commit(s) in visible history · {} addition(s) recorded",
+        "observed_in", observed.changes_in_visible_history, observed.additions_recorded
+    ));
+    output.line(format!(
+        "  {:<14} {} recorded in this repository — a merge enumerates no changes, so a creation \
+         and a deletion inside merges are both unrecorded",
+        "merges", observed.merges_in_repository
+    ));
+    output.line(match observed.earlier_history_unavailable {
+        Some(reason) => format!(
+            "  {:<14} {} — {}",
+            "above_this",
+            reason.as_str(),
+            earlier_unavailable_note(reason)
+        ),
+        None => format!(
+            "  {:<14} nothing above what Nerve read of this path is hidden, and that is measured \
+             rather than assumed",
+            "above_this"
+        ),
+    });
+    output.line(format!(
+        "  {:<14} {} — this is the repository's ingest, a different scope from the line above",
+        "earlier_repo", observed.earlier_changes_may_exist
+    ));
+    if let Some(terminated) = observed.walk_terminated_by {
+        output.line(format!(
+            "  {:<14} {} — {}",
+            "walk_ended",
+            terminated.as_str(),
+            terminated.note()
+        ));
+    }
+    output.line(format!("  {:<14} {}", "shallow_repo", observed.shallow));
+    output.line(format!(
+        "  {:<14} {} · index_exists {} · {} entity row(s) at this path",
+        "current_tree",
+        observed.current_tree.basis,
+        observed.current_tree.index_exists,
+        observed.current_tree.entities_at_path
+    ));
 }
 
 /// Print one commit as a labelled block, with every state that qualifies it.
@@ -2775,6 +3259,9 @@ fn run_history_file(output: &Output, path: &Path, tree_path: &str, limit: usize)
     if limit == 0 {
         return output.failure("history file", exit::USAGE, "--limit must be at least 1");
     }
+    if let Some(refusal) = history_path_refusal(tree_path) {
+        return refuse_history_path(output, "history file", tree_path, refusal);
+    }
     let read = match open_history(output, "history file", path) {
         Ok(read) => read,
         Err(code) => return code,
@@ -2807,6 +3294,14 @@ fn run_history_file(output: &Output, path: &Path, tree_path: &str, limit: usize)
     let renames_truncated = renames.len() > limit;
     commits.truncate(limit);
     renames.truncate(limit);
+
+    // Asked unconditionally, unlike the two lists above: with no ingest this answers
+    // `no_history_ingested`, which is one of the four states §11 requires to stay distinct, and
+    // short-circuiting it would collapse "never read" into "read, and nothing was found".
+    let observed = match nerve_store::first_last_observed(&read.conn, &read.repo_id, tree_path) {
+        Ok(observed) => observed,
+        Err(err) => return output.failure("history file", exit::INTERNAL, &err.to_string()),
+    };
 
     let answerable = print_history_header(output, &read);
     if answerable {
@@ -2843,6 +3338,7 @@ fn run_history_file(output: &Output, path: &Path, tree_path: &str, limit: usize)
                 output.line("  change to this path may exist in a commit it never saw.");
             }
         }
+        print_first_observed(output, &observed);
     }
 
     for (commit, change) in &commits {
@@ -2890,6 +3386,7 @@ fn run_history_file(output: &Output, path: &Path, tree_path: &str, limit: usize)
         json!({
             "path": inert_text(tree_path),
             "path_is_as_recorded_in_a_tree": true,
+            "first_observed": first_last_observed_json(&observed),
             "limit": limit,
             "count": commits.len(),
             "truncated": commits_truncated,
@@ -2903,6 +3400,575 @@ fn run_history_file(output: &Output, path: &Path, tree_path: &str, limit: usize)
             "renames_count": renames.len(),
             "renames_truncated": renames_truncated,
             "renames": renames.iter().map(rename_json).collect::<Vec<_>>(),
+        }),
+    );
+    exit::SUCCESS
+}
+
+/// What changed between two recorded states, by ancestry.
+///
+/// **Every outcome exits `0`, and four of the five are not diffs.** In `--json` the diff-shaped
+/// fields are `null` rather than empty for those four, which is the property that stops a refusal
+/// being read as "nothing changed": `commits: null` says no range was computed, and `commits: []`
+/// says a range was computed and holds nothing.
+fn run_history_diff(
+    output: &Output,
+    path: &Path,
+    from: &str,
+    to: &str,
+    limits: nerve_store::StateDiffLimits,
+) -> i32 {
+    let limit = limits.commits;
+    for (flag, bound) in [
+        ("--limit", limits.commits),
+        ("--max-walk", limits.commits_walked),
+        ("--max-changes", limits.changes),
+    ] {
+        if bound == 0 {
+            return output.failure(
+                "history diff",
+                exit::USAGE,
+                &format!("{flag} must be at least 1"),
+            );
+        }
+    }
+    for (flag, oid) in [("--from", from), ("--to", to)] {
+        if oid.trim().is_empty() {
+            return output.failure(
+                "history diff",
+                exit::USAGE,
+                &format!("{flag} needs a commit oid"),
+            );
+        }
+    }
+    let read = match open_history(output, "history diff", path) {
+        Ok(read) => read,
+        Err(code) => return code,
+    };
+
+    let diff = match nerve_store::state_diff(&read.conn, &read.repo_id, from, to, limits) {
+        Ok(diff) => diff,
+        Err(err) => return output.failure("history diff", exit::INTERNAL, &err.to_string()),
+    };
+
+    let answerable = print_history_header(output, &read);
+    if answerable {
+        output.line(format!("  {:<14} {from}", "from"));
+        output.line(format!("  {:<14} {to}", "to"));
+    }
+
+    let detail = match &diff {
+        nerve_store::StateDiff::StateNotRecorded {
+            from,
+            to,
+            from_recorded,
+            to_recorded,
+        } => {
+            if answerable {
+                output.line(format!("  {:<14} state_not_recorded", "result"));
+                for (label, oid, recorded) in
+                    [("from", from, from_recorded), ("to", to, to_recorded)]
+                {
+                    output.line(format!(
+                        "  {:<14} {oid} — {}",
+                        format!("{label}_state"),
+                        if *recorded {
+                            "recorded"
+                        } else {
+                            "never recorded here, so nothing between the two states can be stated"
+                        }
+                    ));
+                }
+                output.line(String::new());
+                output.line("  This is not an empty diff. Nerve never read the commit marked");
+                output.line("  \"never recorded\", so it has no basis to say what lies between");
+                output.line("  the two states — which is a different fact from nothing lying");
+                output.line("  between them. `nerve history sync` may not have reached it.");
+            }
+            json!({
+                "result": "state_not_recorded",
+                "from_recorded": from_recorded,
+                "to_recorded": to_recorded,
+            })
+        }
+        nerve_store::StateDiff::NotAnAncestor {
+            from,
+            to,
+            commits_walked,
+        } => {
+            if answerable {
+                output.line(format!("  {:<14} not_an_ancestor", "result"));
+                output.line(format!(
+                    "  {:<14} {commits_walked} commit(s) before the ancestry ran out",
+                    "walked"
+                ));
+                output.line(String::new());
+                output.line(format!(
+                    "  {from} is not an ancestor of {to}: the walk read every commit"
+                ));
+                output.line("  reachable from the newer state and never reached the older one,");
+                output.line("  and nothing stopped it early. This is not an empty diff — there");
+                output.line("  is no range between these two states to be empty.");
+            }
+            json!({ "result": "not_an_ancestor", "commits_walked": commits_walked })
+        }
+        nerve_store::StateDiff::AncestryIncomplete {
+            from,
+            to,
+            stopped_at,
+            parent_completeness,
+            commits_walked,
+        } => {
+            if answerable {
+                output.line(format!("  {:<14} ancestry_incomplete", "result"));
+                output.line(format!(
+                    "  {:<14} {stopped_at} — {} — {}",
+                    "stopped_at",
+                    parent_completeness.as_str(),
+                    parent_completeness.note()
+                ));
+                output.line(format!(
+                    "  {:<14} {commits_walked} commit(s) before stopping",
+                    "walked"
+                ));
+                output.line(String::new());
+                output.line(format!(
+                    "  Whether {from} is an ancestor of {to} could not be"
+                ));
+                output.line("  decided: the walk reached a commit whose parents it could not");
+                output.line("  follow. This is not an empty diff and it is not a \"no\" — the");
+                output.line("  question was left undecided, and saying either would be a claim.");
+            }
+            json!({
+                "result": "ancestry_incomplete",
+                "stopped_at": stopped_at,
+                "stopped_at_parent_completeness": parent_completeness.as_str(),
+                "stopped_at_parent_completeness_note": parent_completeness.note(),
+                "commits_walked": commits_walked,
+            })
+        }
+        nerve_store::StateDiff::WalkBudgetExhausted {
+            from,
+            to,
+            commits_walked,
+            limit,
+        } => {
+            if answerable {
+                output.line(format!("  {:<14} walk_budget_exhausted", "result"));
+                output.line(format!(
+                    "  {:<14} {commits_walked} commit(s) against a bound of {limit}",
+                    "walked"
+                ));
+                output.line(String::new());
+                output.line(format!(
+                    "  Nerve's own walk bound stopped before {from} was reached from"
+                ));
+                output.line(format!(
+                    "  {to}. That is Nerve's boundary and not the repository's,"
+                ));
+                output.line("  it is not an empty diff, and it is not \"not an ancestor\" —");
+                output.line("  reporting either would state something never established.");
+            }
+            json!({
+                "result": "walk_budget_exhausted",
+                "commits_walked": commits_walked,
+                "walk_limit": limit,
+            })
+        }
+        nerve_store::StateDiff::Diff(report) => {
+            if answerable {
+                output.line(format!("  {:<14} diff", "result"));
+                output.line(format!(
+                    "  {:<14} {} listed of {} in range{}, limit {limit} · {} walked",
+                    "commits",
+                    report.commits.len(),
+                    report.commits_in_range,
+                    if report.commits_truncated {
+                        " and more beyond the limit"
+                    } else {
+                        ""
+                    },
+                    report.commits_walked
+                ));
+                output.line(format!(
+                    "  {:<14} {} row(s){}",
+                    "changes",
+                    report.changes.len(),
+                    if report.changes_truncated {
+                        " — not all the changes in this range"
+                    } else {
+                        ""
+                    }
+                ));
+                output.line(format!(
+                    "  {:<14} {} in range — a merge has several parents and its changes are not \
+                     enumerated,",
+                    "merges", report.merges_in_range
+                ));
+                output.line(
+                    "                 so a merge-heavy range carrying few change rows is expected \
+                     rather than quiet",
+                );
+                output.line(format!(
+                    "  {:<14} {}",
+                    "enumeration",
+                    report
+                        .changes_enumerated
+                        .iter()
+                        .map(|(value, count)| format!("{} {count}", value.as_str()))
+                        .collect::<Vec<_>>()
+                        .join(" · ")
+                ));
+                if let Some((oid, completeness)) = &report.ancestry_incomplete_at {
+                    output.line(format!(
+                        "  {:<14} {oid} — {} — {}",
+                        "incomplete_at",
+                        completeness.as_str(),
+                        completeness.note()
+                    ));
+                    output.line(
+                        "                 the older state was reached down one branch while \
+                         another was cut off,",
+                    );
+                    output.line(
+                        "                 so this range is a floor rather than the whole of it",
+                    );
+                }
+            }
+            for commit in &report.commits {
+                // `None` rather than a count: the change list is bounded across the whole range,
+                // so a count taken from it would state a property of one commit that the bound,
+                // not the commit, decided.
+                print_commit(output, commit, None);
+                for change in report
+                    .changes
+                    .iter()
+                    .filter(|change| change.commit_oid == commit.commit_oid)
+                {
+                    output.line(format!(
+                        "  {:<14} {} · {}",
+                        "change",
+                        change.change_kind.as_str(),
+                        inert_text(&change.path)
+                    ));
+                }
+            }
+            json!({
+                "result": "diff",
+                "commits": report.commits.iter()
+                    .map(|commit| commit_json(commit, None)).collect::<Vec<_>>(),
+                "commits_in_range": report.commits_in_range,
+                "commits_truncated": report.commits_truncated,
+                "commits_walked": report.commits_walked,
+                "changes": report.changes.iter().map(|change| {
+                    let mut object = change_json(change);
+                    if let Some(fields) = object.as_object_mut() {
+                        fields.insert("commit_oid".into(), json!(change.commit_oid));
+                    }
+                    object
+                }).collect::<Vec<_>>(),
+                "changes_truncated": report.changes_truncated,
+                "merges_in_range": report.merges_in_range,
+                "changes_enumerated": report.changes_enumerated.iter()
+                    .map(|(value, count)| (value.as_str().to_string(), *count))
+                    .collect::<std::collections::BTreeMap<String, usize>>(),
+                "ancestry_incomplete_at": report.ancestry_incomplete_at.as_ref()
+                    .map(|(oid, completeness)| json!({
+                        "commit_oid": oid,
+                        "parent_completeness": completeness.as_str(),
+                        "parent_completeness_note": completeness.note(),
+                    })),
+            })
+        }
+    };
+
+    // Every diff-shaped key exists on every outcome, and is `null` where no range was computed.
+    // Without this a consumer reading `commits` would find the key absent on a refusal and an
+    // empty array on an empty range, which are the two answers this command exists to keep apart.
+    let mut fields = serde_json::Map::new();
+    fields.insert("from".into(), json!(from));
+    fields.insert("to".into(), json!(to));
+    fields.insert("limit".into(), json!(limit));
+    fields.insert("max_walk".into(), json!(limits.commits_walked));
+    fields.insert("max_changes".into(), json!(limits.changes));
+    fields.insert("ancestry_not_a_time_range".into(), json!(true));
+    for key in [
+        "from_recorded",
+        "to_recorded",
+        "commits_walked",
+        "walk_limit",
+        "stopped_at",
+        "stopped_at_parent_completeness",
+        "stopped_at_parent_completeness_note",
+        "commits",
+        "commits_in_range",
+        "commits_truncated",
+        "changes",
+        "changes_truncated",
+        "merges_in_range",
+        "changes_enumerated",
+        "ancestry_incomplete_at",
+    ] {
+        fields.insert(key.into(), serde_json::Value::Null);
+    }
+    if let serde_json::Value::Object(present) = detail {
+        for (key, value) in present {
+            fields.insert(key, value);
+        }
+    }
+    history_object(
+        output,
+        "history diff",
+        &read,
+        serde_json::Value::Object(fields),
+    );
+    exit::SUCCESS
+}
+
+/// Which paths changed most often in visible history.
+fn run_history_frequency(output: &Output, path: &Path, limit: usize) -> i32 {
+    if limit == 0 {
+        return output.failure(
+            "history frequency",
+            exit::USAGE,
+            "--limit must be at least 1",
+        );
+    }
+    let read = match open_history(output, "history frequency", path) {
+        Ok(read) => read,
+        Err(code) => return code,
+    };
+    let frequency = match nerve_store::change_frequency(&read.conn, &read.repo_id, limit) {
+        Ok(frequency) => frequency,
+        Err(err) => return output.failure("history frequency", exit::INTERNAL, &err.to_string()),
+    };
+
+    let answerable = print_history_header(output, &read);
+    if answerable {
+        output.line(format!(
+            "  {:<14} {} listed of {} path(s) with a change row, limit {limit}",
+            "frequency",
+            frequency.rows.len(),
+            frequency.paths_total
+        ));
+        output.line(format!(
+            "  {:<14} {} — a fact against the counted total, never inferred from the page length",
+            "truncated", frequency.truncated
+        ));
+        output.line(format!(
+            "  {:<14} {} recorded — a merge enumerates no changes, so a repository with merges",
+            "merges", frequency.merges
+        ));
+        output.line("                 counts fewer here than its own log would show");
+        output.line(
+            "  scope          changes within visible history, not lifetime changes; on a shallow \
+             or",
+        );
+        output.line("                 bounded ingest every count below is a floor");
+        if frequency.rows.is_empty() {
+            output.line(String::new());
+            output.line("  No recorded commit changed any path. That is an answer, not a");
+            output.line("  failure — see the availability block above for what was read.");
+        }
+    }
+    for row in &frequency.rows {
+        output.line(format!("  {:>8}  {}", row.commits, inert_text(&row.path)));
+    }
+
+    history_object(
+        output,
+        "history frequency",
+        &read,
+        json!({
+            "limit": limit,
+            "count": frequency.rows.len(),
+            "paths_total": frequency.paths_total,
+            "truncated": frequency.truncated,
+            "merges": frequency.merges,
+            "counts_are_visible_history_only": true,
+            "rows": frequency.rows.iter().map(|row| json!({
+                "path": inert_text(&row.path),
+                "commits": row.commits,
+            })).collect::<Vec<_>>(),
+        }),
+    );
+    exit::SUCCESS
+}
+
+/// Which paths were changed in the same commits as one path.
+///
+/// The disclaimer printed and carried below is [`nerve_store::COCHANGE_IS_NOT_A_DEPENDENCY`],
+/// **taken from the store rather than written here**. A surface that paraphrased it would be a
+/// second copy of the one sentence that stops a shared-commit count reading as a dependency, and
+/// the paraphrase is where it would soften.
+fn run_history_cochange(output: &Output, path: &Path, tree_path: &str, limit: usize) -> i32 {
+    if limit == 0 {
+        return output.failure(
+            "history cochange",
+            exit::USAGE,
+            "--limit must be at least 1",
+        );
+    }
+    if let Some(refusal) = history_path_refusal(tree_path) {
+        return refuse_history_path(output, "history cochange", tree_path, refusal);
+    }
+    let read = match open_history(output, "history cochange", path) {
+        Ok(read) => read,
+        Err(code) => return code,
+    };
+    let cochange = match nerve_store::cochange(&read.conn, &read.repo_id, Some(tree_path), limit) {
+        Ok(cochange) => cochange,
+        Err(err) => return output.failure("history cochange", exit::INTERNAL, &err.to_string()),
+    };
+
+    let answerable = print_history_header(output, &read);
+    if answerable {
+        output.line(format!(
+            "  {:<14} {} (matched as a tree recorded it, not resolved on disk)",
+            "path",
+            inert_text(tree_path)
+        ));
+        output.line(format!(
+            "  {:<14} {} listed of {} pair(s) naming this path, limit {limit}",
+            "cochange",
+            cochange.rows.len(),
+            cochange.pairs_total
+        ));
+        output.line(format!(
+            "  {:<14} {} — a fact against the counted total, never inferred from the page length",
+            "truncated", cochange.truncated
+        ));
+        output.line(format!(
+            "  {:<14} {} recorded — a merge enumerates no changes, so it contributes no pair at all",
+            "merges", cochange.merges
+        ));
+        output.line(format!("  {:<14} {}", "observation", cochange.disclaimer));
+        if cochange.rows.is_empty() {
+            output.line(String::new());
+            output.line("  No recorded commit changed this path together with another. That is");
+            output.line("  an answer, not a failure.");
+        }
+    }
+    for row in &cochange.rows {
+        output.line(format!(
+            "  {:>8}  {}  +  {}",
+            row.cochange_observations,
+            inert_text(&row.path_a),
+            inert_text(&row.path_b)
+        ));
+    }
+
+    history_object(
+        output,
+        "history cochange",
+        &read,
+        json!({
+            "path": inert_text(tree_path),
+            "path_is_as_recorded_in_a_tree": true,
+            "limit": limit,
+            "count": cochange.rows.len(),
+            "pairs_total": cochange.pairs_total,
+            "truncated": cochange.truncated,
+            "merges": cochange.merges,
+            // The store's sentence, not this surface's. A paraphrase here would be the second copy.
+            "disclaimer": cochange.disclaimer,
+            "rows": cochange.rows.iter().map(|row| json!({
+                "path_a": inert_text(&row.path_a),
+                "path_b": inert_text(&row.path_b),
+                // Named for what was observed, never for what it might imply.
+                "cochange_observations": row.cochange_observations,
+            })).collect::<Vec<_>>(),
+        }),
+    );
+    exit::SUCCESS
+}
+
+/// What the four freshness verdicts mean, in words.
+///
+/// `HistoryFreshness` has no `note()` in `nerve-core`, so this prose lives here; see the section
+/// header above. `Unverifiable` gets the longest sentence because it is the one a reader is most
+/// likely to file under `Current`.
+fn history_freshness_note(verdict: HistoryFreshness) -> &'static str {
+    match verdict {
+        HistoryFreshness::Current => {
+            "the ingest's HEAD is the commit the newest indexed state records, so the recorded \
+             history describes what is indexed now"
+        }
+        HistoryFreshness::Stale => {
+            "the ingest's HEAD is not the commit the newest indexed state records: every \
+             historical fact here is true of the older HEAD, which is a qualification rather than \
+             an error"
+        }
+        HistoryFreshness::Unverifiable => {
+            "the newest indexed state records no commit, so the comparison could not be made. This \
+             is not \"current\": a history whose freshness cannot be established has not been shown \
+             to be fresh, and reporting unknown as current is how a truncated sweep becomes a clean \
+             bill of health"
+        }
+        HistoryFreshness::NoHistoryIngested => {
+            "history has never been read here, so there is nothing whose freshness could be \
+             judged — an absence, and not a failure"
+        }
+    }
+}
+
+/// What visible history is unavailable, and whether what was recorded is still current.
+fn run_history_availability(output: &Output, path: &Path) -> i32 {
+    let read = match open_history(output, "history availability", path) {
+        Ok(read) => read,
+        Err(code) => return code,
+    };
+    let freshness = match nerve_store::history_freshness(&read.conn, &read.repo_id) {
+        Ok(freshness) => freshness,
+        Err(err) => {
+            return output.failure("history availability", exit::INTERNAL, &err.to_string())
+        }
+    };
+
+    // Printed whether or not there is an ingest: `no_history_ingested` is one of the four verdicts
+    // and exits `0`, so this command answers even where `log` and `file` have nothing to list.
+    print_history_header(output, &read);
+    output.line(format!(
+        "  {:<14} {} — {}",
+        "freshness",
+        freshness.verdict.as_str(),
+        history_freshness_note(freshness.verdict)
+    ));
+    output.line(format!(
+        "  {:<14} {}",
+        "ingest_head",
+        freshness
+            .ingest_head_oid
+            .as_deref()
+            .unwrap_or("(none — no ingest, or an unborn branch at sync time)")
+    ));
+    output.line(format!(
+        "  {:<14} {}",
+        "indexed_at",
+        freshness
+            .current_git_commit
+            .as_deref()
+            .unwrap_or("(none recorded — the indexed state names no commit)")
+    ));
+    output.line(format!(
+        "  {:<14} {}",
+        "indexed_state",
+        freshness
+            .current_state_id
+            .as_deref()
+            .unwrap_or("(none — no index has run here)")
+    ));
+
+    history_object(
+        output,
+        "history availability",
+        &read,
+        json!({
+            "freshness": freshness.verdict.as_str(),
+            "freshness_note": history_freshness_note(freshness.verdict),
+            "ingest_head_oid": freshness.ingest_head_oid,
+            "current_git_commit": freshness.current_git_commit,
+            "current_state_id": freshness.current_state_id,
         }),
     );
     exit::SUCCESS
