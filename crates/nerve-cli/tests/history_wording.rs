@@ -294,6 +294,118 @@ fn every_history_note_exists_in_exactly_one_file() {
     }
 }
 
+/// Every interface source file, read as **bytes**, keyed by its `apps/nerve-web/src/`-relative path.
+///
+/// The same byte read as [`sources`], for the same reason: `docs/CONTINUATION.md:324` records a
+/// literal NUL in `views/Graph.tsx` making `grep` treat it as binary and report no matches at all,
+/// which produced a false "dead code" finding that stood for a whole slice.
+fn interface_sources() -> Vec<(String, Vec<u8>)> {
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/nerve-web/src");
+    let mut found = Vec::new();
+    let mut stack = vec![base.clone()];
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir)
+            .unwrap_or_else(|error| panic!("{} must be readable: {error}", dir.display()));
+        for entry in entries {
+            let path = entry.expect("a readable directory entry").path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let is_source = path
+                .extension()
+                .is_some_and(|ext| ["ts", "tsx", "mjs", "js", "jsx"].iter().any(|k| ext == *k));
+            if !is_source {
+                continue;
+            }
+            let bytes = std::fs::read(&path)
+                .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()));
+            let name = path
+                .strip_prefix(&base)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .into_owned();
+            found.push((name, bytes));
+        }
+    }
+    found.sort();
+    found
+}
+
+/// The reference UI renders the notes the backend sends. It may not hold a copy of one.
+///
+/// Slice 12c-iv is the surface `every_history_note_exists_in_exactly_one_file`'s doc comment
+/// predicted: the fourth renderer of these values, and the first one written in a different
+/// language, where the guard scanning `crates/` could not see it. A gloss and a note are different
+/// things — `apps/nerve-web/src/vocab.ts` carries a short reading of each *value*, which is the
+/// interface's own voice and is required by `crates/nerve-server/tests/ui_vocabulary.rs` — but the
+/// sentences are the vocabulary's, they arrive on the response as `kind_note`,
+/// `changes_enumerated_note`, `walk_terminated_note` and the rest, and a copy pasted into
+/// TypeScript would be free to drift from the rule it renders while every Rust test stayed green.
+///
+/// No `joined` here: Rust's line-continuation escape has no equivalent in a TypeScript string, so
+/// the bytes on disk are the bytes. A copy re-wrapped across a template literal or a `+` would
+/// escape this scan, which is why the positive half below matters — the interface must be shown to
+/// be *rendering* the notes, or "no copy found" would be satisfied by a screen that shows none.
+#[test]
+fn no_interface_source_holds_a_copy_of_a_history_note() {
+    let notes = notes();
+    assert!(notes.len() >= 35, "found only {} notes", notes.len());
+
+    let sources = interface_sources();
+    assert!(
+        sources.len() >= 20,
+        "expected to scan the interface source, found {} files",
+        sources.len()
+    );
+    // By name, so a renamed or deleted view cannot quietly leave the scan while it passes.
+    for required in [
+        "vocab.ts",
+        "history.ts",
+        "views/HistoryParts.tsx",
+        "views/HistoryPath.tsx",
+    ] {
+        assert!(
+            sources.iter().any(|(name, _)| name == required),
+            "{required} was not scanned"
+        );
+    }
+
+    for (name, bytes) in &sources {
+        for (owner, note) in &notes {
+            assert!(
+                !contains(bytes, note.as_bytes()),
+                "apps/nerve-web/src/{name} contains a history note as a literal: {note:?}. That \
+                 note lives in {owner} and the API sends it on the response — render what was \
+                 sent. A second copy is free to drift from the rule it renders."
+            );
+        }
+    }
+
+    // The positive half. The interface has to be rendering the sentences it is forbidden to copy,
+    // or this test is satisfied by an interface that says nothing at all.
+    let mut rendered = 0;
+    for field in [
+        "may_claim_created_note",
+        "kind_note",
+        "changes_enumerated_note",
+        "walk_terminated_note",
+        "parent_completeness_note",
+        "ambiguity_note",
+        "freshness_note",
+        "earlier_history_unavailable_note",
+    ] {
+        assert!(
+            sources
+                .iter()
+                .any(|(_, bytes)| contains(bytes, field.as_bytes())),
+            "no interface source reads `{field}`, so the note it carries reaches nobody"
+        );
+        rendered += 1;
+    }
+    assert_eq!(rendered, 8);
+}
+
 /// The judgment moved too, and it is the one that matters most.
 ///
 /// `earlier_changes_may_exist` is not wording: it is the single question every history surface must

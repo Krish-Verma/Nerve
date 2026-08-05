@@ -21,6 +21,7 @@ import { href, useRoute, type Route } from './routing';
 import { Omnibox } from './ui/Omnibox';
 import { Coverage } from './views/Coverage';
 import { Entity } from './views/Entity';
+import { History } from './views/History';
 import { Overview } from './views/Overview';
 import { Search } from './views/Search';
 import { Unresolved } from './views/Unresolved';
@@ -165,6 +166,22 @@ export function App() {
           />
         </div>
 
+        {/*
+          Its own group, because it answers a different kind of question from either of the two
+          above. Those are about the index as it stands; this one is about what the repository has
+          been doing, over whatever slice of its history somebody told Nerve to read. There is no
+          count beside it on purpose — the number of commits read is meaningless without the
+          statement of where the reading stopped, and that statement is on the screen itself.
+        */}
+        <div className="rail__group">
+          <div className="rail__label micro">what changed</div>
+          <RailLink
+            to={{ view: 'history', tab: 'commits', options: {} }}
+            current={route.view === 'history'}
+            label="History"
+          />
+        </div>
+
         {data ? (
           <div className="rail__focus">
             <div className="micro">index state</div>
@@ -188,6 +205,8 @@ export function App() {
           <Entity id={route.id} tab={route.tab} options={route.options} />
         ) : route.view === 'coverage' ? (
           <Coverage />
+        ) : route.view === 'history' ? (
+          <History tab={route.tab} options={route.options} />
         ) : (
           <Unresolved />
         )}

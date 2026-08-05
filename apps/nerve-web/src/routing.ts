@@ -9,6 +9,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
+import { historyFragment, isHistoryTab, type HistoryTab } from './history';
+
 export type EntityTab = 'relations' | 'evidence' | 'graph' | 'source';
 
 export const ENTITY_TABS: readonly EntityTab[] = ['relations', 'evidence', 'graph', 'source'];
@@ -20,13 +22,18 @@ export const ENTITY_TABS: readonly EntityTab[] = ['relations', 'evidence', 'grap
  * different questions with different evidence behind them — what Nerve could not work out, and
  * what the tests are not known to touch — and a single word covering both is how a reader ends up
  * reading one answer as the other. There is no `#/gaps` any more, in either sense.
+ *
+ * `history` carries a tab and free options for the same reason `entity` does: three of its five
+ * questions are about a subject the user types — a path, or two commit oids — and an answer that
+ * cannot be linked to is an answer that cannot be quoted in a review.
  */
 export type Route =
   | { view: 'overview' }
   | { view: 'search'; q: string; kind: string | null }
   | { view: 'entity'; id: string; tab: EntityTab; options: Record<string, string> }
   | { view: 'unresolved' }
-  | { view: 'coverage' };
+  | { view: 'coverage' }
+  | { view: 'history'; tab: HistoryTab; options: Record<string, string> };
 
 function parse(hash: string): Route {
   const raw = hash.startsWith('#') ? hash.slice(1) : hash;
@@ -52,6 +59,14 @@ function parse(hash: string): Route {
       return { view: 'unresolved' };
     case 'coverage':
       return { view: 'coverage' };
+    case 'history': {
+      const tab = isHistoryTab(segments[1]) ? segments[1] : 'commits';
+      const options: Record<string, string> = {};
+      search.forEach((value, key) => {
+        options[key] = value;
+      });
+      return { view: 'history', tab, options };
+    }
     default:
       return { view: 'overview' };
   }
@@ -79,6 +94,10 @@ export function href(route: Route): string {
       return '#/unresolved';
     case 'coverage':
       return '#/coverage';
+    // Built in `history.ts` rather than here, because the encoding is the part that matters: a
+    // path may hold a `#`, and a raw one would be dropped by the browser before the request left.
+    case 'history':
+      return historyFragment(route.tab, route.options);
   }
 }
 

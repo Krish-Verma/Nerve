@@ -322,6 +322,273 @@ export interface GapReport {
   include_partial: boolean;
 }
 
+// ---- history ---------------------------------------------------------------------------------
+//
+// Transcribed from `crates/nerve-server/src/api/history.rs`. Three shapes here are load-bearing
+// and are annotated where they are declared rather than in a comment nobody reads twice:
+//
+//   * every optional field of `HistoryBlock` is `null` when history has never been read, and that
+//     is not the same fact as zero;
+//   * `HistoryCommit.changes` is `null` where the answer counted rows for a path rather than for
+//     the commit, which is not an empty commit;
+//   * every diff-shaped field of `HistoryDiffReport` is `null` on the four outcomes that computed
+//     no range, which is not an empty range.
+
+/** A bounded list's truncation, as the server measured it — never `len() === limit`. */
+export interface HistoryTruncation {
+  returned: number;
+  /** `null` where no total exists to compare against, as for one path's own history. */
+  total: number | null;
+  truncated: boolean;
+  limit: number;
+}
+
+/** An offset the query honours, or the statement that there is none to offer. */
+export interface HistoryContinuation {
+  supported: boolean;
+  offset: number | null;
+  next_offset: number | null;
+  /** Present exactly when `supported` is false, saying why. */
+  statement: string | null;
+}
+
+/** Whole-repository tallies over visible history. `null` where nothing was read. */
+export interface HistoryTotals {
+  commits: number;
+  changes: number;
+  renames: number;
+  merges: number;
+  /** Keyed by `ChangeKind`, with a zero for every kind that has none. */
+  changes_by_kind: Record<string, number>;
+}
+
+export interface HistoryLimitations {
+  /** From `nerve_store::earlier_changes_may_exist`. Never re-derived in this app. */
+  earlier_changes_may_exist: boolean | null;
+  merges_in_repository: number | null;
+  /** Always true: a merge enumerates no changes, so every change count is a floor. */
+  merges_enumerate_no_changes: boolean;
+  counts_are_visible_history_only: boolean;
+}
+
+/**
+ * The availability block, carried by every history answer.
+ *
+ * It is not decoration. Without it a history answer is a set of dates with no statement of what
+ * they are dates *of* — how much was read, where the reading stopped, whether the reading still
+ * describes what is indexed now.
+ */
+export interface HistoryBlock {
+  repository_id: string;
+  current_repository_state: { state_id: string | null; git_commit: string | null };
+  requested_subject: Json;
+  /** `false` is "history has never been read here", which is not "this project has no history". */
+  history_ingested: boolean;
+  shallow: boolean | null;
+  shallow_boundary: string[] | null;
+  promisor: boolean | null;
+  /** A `WalkTermination` member. */
+  walk_terminated_by: string | null;
+  walk_terminated_note: string | null;
+  commits_recorded: number | null;
+  commit_budget: number | null;
+  refusals: Record<string, number> | null;
+  refusals_total: number | null;
+  reader_version: string | null;
+  totals: HistoryTotals | null;
+  /** Which answer this is, including `no_history_ingested`. */
+  result_kind: string;
+  /** A `HistoryFreshness` member. */
+  freshness: string;
+  freshness_note: string;
+  ingest_head_oid: string | null;
+  truncation: HistoryTruncation | null;
+  continuation: HistoryContinuation;
+  limitations: HistoryLimitations;
+}
+
+/** One change to one path. A rename is not here: Git records none, so one is a hypothesis. */
+export interface HistoryChange {
+  path: string;
+  /** A `ChangeKind` member. */
+  change_kind: string;
+  blob_oid: string | null;
+  prev_blob_oid: string | null;
+  mode: number | null;
+  prev_mode: number | null;
+  /** Present on a state diff, where changes span several commits. */
+  commit_oid?: string;
+}
+
+export interface HistoryCommit {
+  commit_oid: string;
+  tree_oid: string;
+  parent_oids: string[];
+  is_merge: boolean;
+  /** A `ParentCompleteness` member. */
+  parent_completeness: string;
+  parent_completeness_note: string;
+  /**
+   * Carried off `ParentCompleteness::may_claim_history_begins_here`, true for a root commit and
+   * nothing else. **Never re-derive this from `parent_completeness`** — that would be a second
+   * copy of the one rule the historical model exists to protect.
+   */
+  may_claim_history_begins_here: boolean;
+  /** A `ChangesEnumerated` member: which of four silences a commit with no changes is. */
+  changes_enumerated: string;
+  changes_enumerated_note: string;
+  /** `null` where the rows were counted for a path rather than for the commit. Not `0`. */
+  changes: number | null;
+  author_time: number;
+  author_tz: string;
+  committer_time: number;
+  committer_tz: string;
+  author_ident: string | null;
+  committer_ident: string | null;
+  /** Repository prose, and the first free-form repository text Nerve stores. Text, never markup. */
+  summary: string;
+  /** Present on a path's history, where each commit carries what it did to that path. */
+  change?: HistoryChange;
+}
+
+/** A proposal that one path became another. There is no score and none may be invented. */
+export interface HistoryRename {
+  commit_oid: string;
+  from_path: string;
+  to_path: string;
+  /** A `RenameEvidence` member. */
+  evidence: string;
+  blob_oid: string;
+  /** A `RenameAmbiguity` member. Not decoration: `many_to` is not `unique`. */
+  ambiguity: string;
+  ambiguity_note: string;
+  /** Always true. Carried per row rather than in a footnote a client can drop. */
+  is_hypothesis: boolean;
+}
+
+export interface HistoryPathChange {
+  commit: HistoryCommit;
+  change: HistoryChange;
+}
+
+/** What the current tree said about a path, and whether it was in a position to say anything. */
+export interface HistoryCurrentTree {
+  basis: string;
+  index_exists: boolean;
+  entities_at_path: number;
+}
+
+/**
+ * When a path was first and last *observed* changing, and which of six answers that is.
+ *
+ * `may_claim_created` is the only permission to use the word "created", it comes from
+ * `FirstObservedKind::may_claim_created`, and `may_claim_created_note` is the sentence the
+ * backend wrote for the case. Render the note; do not compose one from `kind`.
+ */
+export interface HistoryFirstObserved {
+  path: string;
+  /** A `FirstObservedKind` member. */
+  kind: string;
+  kind_note: string;
+  may_claim_created: boolean;
+  may_claim_created_note: string;
+  first: HistoryPathChange | null;
+  last: HistoryPathChange | null;
+  changes_in_visible_history: number;
+  additions_recorded: number;
+  merges_in_repository: number;
+  /**
+   * An `EarlierHistoryUnavailable` member, about **this path**. `null` means nothing is hidden
+   * above it. Not the same question as `earlier_changes_may_exist`, which is about the ingest.
+   */
+  earlier_history_unavailable: string | null;
+  earlier_history_unavailable_note: string | null;
+  earlier_changes_may_exist: boolean;
+  walk_terminated_by: string | null;
+  walk_terminated_note: string | null;
+  shallow: boolean;
+  current_tree: HistoryCurrentTree;
+}
+
+export interface HistoryCommitLog extends HistoryBlock {
+  commits: HistoryCommit[];
+}
+
+export interface HistoryCommitDetail extends HistoryBlock {
+  commit: HistoryCommit;
+  changes: HistoryChange[];
+}
+
+export interface HistoryPathReport extends HistoryBlock {
+  path: string;
+  first_observed: HistoryFirstObserved;
+  /** Each carries the `change` it made to this path. */
+  commits: HistoryCommit[];
+  renames: HistoryRename[];
+  renames_count: number;
+  renames_truncated: boolean;
+}
+
+/**
+ * What lies between two recorded states, by ancestry and never by a time range.
+ *
+ * Five outcomes, four of which are refusals. **Every field below that describes a range is `null`
+ * on those four**, so an absent list is a refusal and an empty list is an answer.
+ */
+export interface HistoryDiffReport extends HistoryBlock {
+  from: string;
+  to: string;
+  max_walk: number;
+  max_changes: number;
+  ancestry_not_a_time_range: boolean;
+  from_recorded: boolean | null;
+  to_recorded: boolean | null;
+  commits_walked: number | null;
+  walk_limit: number | null;
+  stopped_at: string | null;
+  stopped_at_parent_completeness: string | null;
+  stopped_at_parent_completeness_note: string | null;
+  commits: HistoryCommit[] | null;
+  commits_in_range: number | null;
+  commits_truncated: boolean | null;
+  changes: HistoryChange[] | null;
+  changes_truncated: boolean | null;
+  merges_in_range: number | null;
+  /** Keyed by `ChangesEnumerated`, counting commits in the range in each state. */
+  changes_enumerated: Record<string, number> | null;
+  ancestry_incomplete_at: {
+    commit_oid: string;
+    parent_completeness: string;
+    parent_completeness_note: string;
+  } | null;
+  this_is_not_an_empty_diff: boolean | null;
+}
+
+export interface HistoryFrequencyRow {
+  path: string;
+  commits: number;
+}
+
+export interface HistoryFrequencyReport extends HistoryBlock {
+  paths_total: number;
+  rows: HistoryFrequencyRow[];
+}
+
+/** A raw shared-commit count. Never a normalised affinity, and never labelled as coupling. */
+export interface HistoryCochangeRow {
+  path_a: string;
+  path_b: string;
+  cochange_observations: number;
+}
+
+export interface HistoryCochangeReport extends HistoryBlock {
+  path: string;
+  pairs_total: number;
+  /** `nerve_store::COCHANGE_IS_NOT_A_DEPENDENCY`, verbatim. Print it. */
+  disclaimer: string;
+  rows: HistoryCochangeRow[];
+}
+
 export interface SourceSnippet {
   path: string;
   start_line: number;

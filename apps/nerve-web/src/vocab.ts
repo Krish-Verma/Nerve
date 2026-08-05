@@ -174,6 +174,195 @@ export function adrStatusGloss(value: string): string {
   return ADR_STATUS[value] ?? 'This build has no description for that ADR status.';
 }
 
+/*
+ * ---- the history vocabularies -----------------------------------------------------------------
+ *
+ * Eight closed vocabularies arrived with Slices 12b and 12c-i-a and none of them was mirrored
+ * here, so `crates/nerve-server/tests/ui_vocabulary.rs` could not fail for them — it did not know
+ * they existed. The tables below are that mirror, and the guard gained an `every_*_is_glossed`
+ * test for each in the same commit. Slice 5d-iii is what happens otherwise: an entire corrective
+ * slice, and 120 sites rendering "this build has no description".
+ *
+ * **A gloss is not a note.** Each of these vocabularies also has a `note()` in Rust, and the API
+ * sends that prose on the response — `walk_terminated_note`, `changes_enumerated_note`,
+ * `kind_note`, `may_claim_created_note`. Those sentences are the backend's, they are owned in one
+ * place, and `crates/nerve-cli/tests/history_wording.rs` fails a second copy of one by name. What
+ * is written here is the other thing: a short reading of what a *value* means to somebody who has
+ * not read the schema, in this interface's own voice. Where a view can show both, it shows both.
+ */
+
+/**
+ * What one commit did to one path.
+ *
+ * There is deliberately no `renamed` member and this table must not grow one. Git records no
+ * rename; a rename is proposed from identical content and carries its own evidence and ambiguity,
+ * which is why it is a hypothesis with its own two vocabularies below rather than a fifth change
+ * kind. `mode_changed` is kept apart from `modified` for the opposite reason: the bytes did not
+ * move, and calling it a modification would claim content changed when only permission did.
+ */
+const CHANGE_KIND: Record<string, string> = {
+  added: 'The path is in this commit and was not in the tree it was compared against.',
+  modified: 'The path is in both trees and its content differs between them.',
+  deleted: 'The path was in the compared tree and is not in this one.',
+  mode_changed:
+    'The file mode changed and the bytes did not. A real change to a tracked file, and not a content move.',
+};
+
+export function changeKindGloss(value: string): string {
+  return CHANGE_KIND[value] ?? 'This build has no description for that change kind.';
+}
+
+/**
+ * Why a commit has the parents it has — and, when none are visible, which reason that is.
+ *
+ * Two of these mean "cannot see further" and they are the reason the vocabulary exists. A
+ * declared boundary is expected; an absent parent nobody declared is a fault; and the case where
+ * Nerve could not tell which of those it was is a third answer rather than a rounding of either.
+ * Only `root` licenses the sentence that history begins somewhere, and that permission is carried
+ * on every commit as `may_claim_history_begins_here` rather than worked out again here.
+ */
+const PARENT_COMPLETENESS: Record<string, string> = {
+  root: 'The commit names no parent and no boundary was declared, so nothing precedes it.',
+  shallow_boundary:
+    'The checkout declares that its copy of history stops at this commit. What lies above is out of reach here, which is not the same as absent.',
+  parents_available: 'Every parent this commit names was found in the object store.',
+  parents_missing:
+    'A parent oid this commit lists was not found, and nothing declared it missing. That is a fault in the object store rather than a shallow checkout.',
+  parents_unverifiable:
+    'A listed parent was not found and the shallow declaration could not be read, so whether the absence was declared is undecided.',
+};
+
+export function parentCompletenessGloss(value: string): string {
+  return (
+    PARENT_COMPLETENESS[value] ?? 'This build has no description for that parent-completeness value.'
+  );
+}
+
+/**
+ * Which of four silences a commit with no change rows is.
+ *
+ * Reading a count of zero without this is the defect the column exists to prevent: two of the
+ * four mean opposite things, one being "nothing happened" and the other "we cannot see what
+ * happened".
+ */
+const CHANGES_ENUMERATED: Record<string, string> = {
+  enumerated:
+    'The diff against the single parent ran to the end, so a count of zero here means the commit really touched nothing.',
+  merge_not_enumerated:
+    'A merge. A change is only defined against one parent and a merge has several, so none were listed — by decision, not by failure.',
+  parent_unavailable:
+    'The parent tree could not be read, so there was nothing to compare against and no change was listed.',
+  refused:
+    'A bound stopped this commit being diffed, so no change was listed. The refusal is counted on the ingest that produced it.',
+};
+
+export function changesEnumeratedGloss(value: string): string {
+  return CHANGES_ENUMERATED[value] ?? 'This build has no description for that enumeration state.';
+}
+
+/**
+ * Why the walk that read this history stopped.
+ *
+ * `commit_budget` is the one that is Nerve's own doing. It says how far this read went and
+ * nothing whatever about how far the repository goes back, and drawing it as a property of the
+ * repository is the mistake the value exists to make visible.
+ */
+const WALK_TERMINATION: Record<string, string> = {
+  exhausted:
+    'The walk ran out of unvisited parents, so it saw everything reachable from where it started.',
+  commit_budget:
+    'Nerve stopped at its own ceiling. This is a fact about the read, and says nothing about how far the repository goes back.',
+  shallow_boundary:
+    'The walk reached a boundary this checkout declares. What lies above it is out of reach for this copy of the repository.',
+  missing_object:
+    'An object the walk needed was not in the store. A fault, and not a declared boundary.',
+  refused: 'A bound refused an object the walk needed, so the walk stopped there rather than going past it.',
+};
+
+export function walkTerminationGloss(value: string): string {
+  return WALK_TERMINATION[value] ?? 'This build has no description for that walk termination.';
+}
+
+/** What a rename hypothesis rests on. There is no score here and none may be invented. */
+const RENAME_EVIDENCE: Record<string, string> = {
+  exact_content:
+    'A path was deleted and another added in the same commit naming the same blob, so the content is byte-identical. No similarity was computed and no threshold was applied.',
+};
+
+export function renameEvidenceGloss(value: string): string {
+  return RENAME_EVIDENCE[value] ?? 'This build has no description for that rename evidence.';
+}
+
+/**
+ * How many ways a rename hypothesis could have been drawn.
+ *
+ * Identical content is ordinary — an empty file, a copied licence header, a barrel re-export — so
+ * when one blob matches several paths every pairing is kept and none is ranked. A `many_to`
+ * pairing drawn the way a `unique` one is drawn would show a guess as a record.
+ */
+const RENAME_AMBIGUITY: Record<string, string> = {
+  unique:
+    'One deleted path, one added path, one blob. The clearest shape available, and still a proposal rather than something Git recorded.',
+  many_from:
+    'Several deleted paths carry this blob, so more than one of them could be the origin. Every pairing is kept and none is ranked.',
+  many_to:
+    'Several added paths carry this blob, so more than one of them could be the destination. Every pairing is kept and none is ranked.',
+  many_both:
+    'Several paths on each side carry this blob. Every pairing is kept and none is ranked.',
+};
+
+export function renameAmbiguityGloss(value: string): string {
+  return RENAME_AMBIGUITY[value] ?? 'This build has no description for that rename ambiguity.';
+}
+
+/**
+ * What "when was this path first observed" actually answered.
+ *
+ * Six values, and exactly one of them is a creation. The permission to say so is
+ * `may_claim_created` on the response and is never re-derived from the value — including here,
+ * which is why the phrasing a view puts on screen comes from `firstObservedHeadline` in
+ * `history.ts` and not from this table.
+ */
+const FIRST_OBSERVED_KIND: Record<string, string> = {
+  created_in_visible_history:
+    'An addition, with nothing out of reach above it and exactly one addition on record. This is the one answer of six that licenses the word created, and it rests on no clock.',
+  earliest_visible_change:
+    'The earliest change Nerve can see. Whether anything came before it is a separate question, and it is answered beside this one rather than assumed.',
+  present_before_visible_history:
+    'The path is in the current tree and no recorded commit touched it, so it is older than everything read. On a shallow checkout this is the ordinary answer, not an empty one.',
+  absent_from_visible_history:
+    'No recorded commit touched the path, and the current tree was consulted and does not hold it.',
+  current_tree_unknown:
+    'No recorded commit touched the path, and with no index the current tree could not be consulted, so whether it is there now is unknown rather than no.',
+  no_history_ingested:
+    'Nothing has been read here to answer from. That is a statement about this index, not about the path.',
+};
+
+export function firstObservedGloss(value: string): string {
+  return FIRST_OBSERVED_KIND[value] ?? 'This build has no description for that first-observed answer.';
+}
+
+/**
+ * Whether the recorded history still describes what is indexed now.
+ *
+ * `unverifiable` is not a cosmetic fourth value. Filing it under `current` is how an unfinished
+ * comparison becomes a clean bill of health, which is the same distinction `nerve check` draws
+ * between stale and unverified.
+ */
+const HISTORY_FRESHNESS: Record<string, string> = {
+  current: 'The commit the ingest read as HEAD is the commit the newest indexed state records.',
+  stale:
+    'The ingest read a different HEAD from the one the newest indexed state records, so every fact here is true of that older commit. A qualification, not an error.',
+  unverifiable:
+    'The newest indexed state records no commit, so there was nothing to compare against. Unknown is a different answer from current.',
+  no_history_ingested:
+    'Nothing has been read here whose freshness could be judged. An absence rather than a verdict.',
+};
+
+export function historyFreshnessGloss(value: string): string {
+  return HISTORY_FRESHNESS[value] ?? 'This build has no description for that history freshness.';
+}
+
 /**
  * A reading for a key/value pair inside an extractor's `details` blob, where one exists.
  *

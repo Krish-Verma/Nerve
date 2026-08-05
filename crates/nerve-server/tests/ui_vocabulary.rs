@@ -26,7 +26,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use nerve_core::vocab::{
-    AssertionStatus, Directness, EntityKind, EvidenceSourceType, Relation, UnresolvedCategory,
+    AssertionStatus, ChangeKind, ChangesEnumerated, Directness, EntityKind, EvidenceSourceType,
+    FirstObservedKind, HistoryFreshness, ParentCompleteness, Relation, RenameAmbiguity,
+    RenameEvidence, UnresolvedCategory, WalkTermination,
 };
 use nerve_index::docref;
 use nerve_index::docs::{AdrStatus, STATUS_UNPARSED};
@@ -64,7 +66,7 @@ fn types_ts() -> String {
 ///
 /// One list, used by both the source-side vocabulary tests' companion below and the
 /// bundle-staleness check, so a new gloss table cannot be added to one and forgotten by the other.
-const GLOSS_TABLES: [(&str, &str); 11] = [
+const GLOSS_TABLES: [(&str, &str); 19] = [
     ("format.ts", "FRESHNESS"),
     ("format.ts", "SOURCE_TYPES"),
     ("format.ts", "DIRECTNESS"),
@@ -76,6 +78,17 @@ const GLOSS_TABLES: [(&str, &str); 11] = [
     ("vocab.ts", "COVERAGE_STATE"),
     ("vocab.ts", "UNRESOLVED_CATEGORY"),
     ("vocab.ts", "ADR_STATUS"),
+    // Slice 12c-iv. The eight history vocabularies, added here in the same change as the glosses
+    // themselves — a gloss whose table is not in this list is one `npm run build` away from being
+    // in the source and absent from the shipped binary, which is the defect `82a6ff3` records.
+    ("vocab.ts", "CHANGE_KIND"),
+    ("vocab.ts", "PARENT_COMPLETENESS"),
+    ("vocab.ts", "CHANGES_ENUMERATED"),
+    ("vocab.ts", "WALK_TERMINATION"),
+    ("vocab.ts", "RENAME_EVIDENCE"),
+    ("vocab.ts", "RENAME_AMBIGUITY"),
+    ("vocab.ts", "FIRST_OBSERVED_KIND"),
+    ("vocab.ts", "HISTORY_FRESHNESS"),
 ];
 
 /// The interface compiled into the binary must be built from the interface source.
@@ -669,6 +682,138 @@ fn every_adr_status_is_glossed() {
     );
 }
 
+// ---- the history vocabularies ----------------------------------------------------------------
+//
+// Eight of them, added by Slices 12b and 12c-i-a and unmirrored until 12c-iv. Until these tests
+// existed the guard could not fail for them: nothing in the TypeScript referenced the names, so
+// there was no table for `covers` to read and no drift for it to find. That is precisely how
+// Slice 5d-iii's 120 fallback sentences accumulated, and adding the gloss without adding the test
+// would set the same trap for the ninth vocabulary.
+//
+// Each of these vocabularies also has a `note()` in Rust whose prose the API sends on the
+// response. The interface renders those notes and must not hold a copy — that separate rule is
+// enforced by `crates/nerve-cli/tests/history_wording.rs`, which scans this app's source for note
+// prose. A gloss is the other thing: what the *value* means, in the interface's own voice.
+
+#[test]
+fn every_change_kind_is_glossed() {
+    let expected: Vec<String> = ChangeKind::ALL
+        .iter()
+        .map(|kind| kind.as_str().to_string())
+        .collect();
+    covers(
+        "ChangeKind::ALL",
+        "CHANGE_KIND (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "CHANGE_KIND"),
+    );
+}
+
+#[test]
+fn every_parent_completeness_is_glossed() {
+    let expected: Vec<String> = ParentCompleteness::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    covers(
+        "ParentCompleteness::ALL",
+        "PARENT_COMPLETENESS (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "PARENT_COMPLETENESS"),
+    );
+}
+
+#[test]
+fn every_changes_enumerated_value_is_glossed() {
+    let expected: Vec<String> = ChangesEnumerated::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    covers(
+        "ChangesEnumerated::ALL",
+        "CHANGES_ENUMERATED (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "CHANGES_ENUMERATED"),
+    );
+}
+
+#[test]
+fn every_walk_termination_is_glossed() {
+    let expected: Vec<String> = WalkTermination::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    covers(
+        "WalkTermination::ALL",
+        "WALK_TERMINATION (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "WALK_TERMINATION"),
+    );
+}
+
+#[test]
+fn every_rename_evidence_is_glossed() {
+    let expected: Vec<String> = RenameEvidence::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    covers(
+        "RenameEvidence::ALL",
+        "RENAME_EVIDENCE (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "RENAME_EVIDENCE"),
+    );
+}
+
+#[test]
+fn every_rename_ambiguity_is_glossed() {
+    let expected: Vec<String> = RenameAmbiguity::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    covers(
+        "RenameAmbiguity::ALL",
+        "RENAME_AMBIGUITY (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "RENAME_AMBIGUITY"),
+    );
+}
+
+/// The six answers to "when was this first observed", of which exactly one is a creation.
+///
+/// A missing gloss here is worse than a missing gloss elsewhere. The three values a happy-path
+/// draft omits — `present_before_visible_history`, `current_tree_unknown`, `no_history_ingested` —
+/// are the shallow-clone reality, and an interface that fell back to "this build has no
+/// description" for them would be silent in exactly the cases where saying nothing reads as "this
+/// file has no history".
+#[test]
+fn every_first_observed_kind_is_glossed() {
+    let expected: Vec<String> = FirstObservedKind::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    covers(
+        "FirstObservedKind::ALL",
+        "FIRST_OBSERVED_KIND (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "FIRST_OBSERVED_KIND"),
+    );
+}
+
+#[test]
+fn every_history_freshness_verdict_is_glossed() {
+    let expected: Vec<String> = HistoryFreshness::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    covers(
+        "HistoryFreshness::ALL",
+        "HISTORY_FRESHNESS (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "HISTORY_FRESHNESS"),
+    );
+}
+
 /// The two vocabularies the interface mirrors as data, not as prose.
 ///
 /// `ENTITY_KINDS` drives the search filter and `RELATIONS` the graph filter, so a missing member
@@ -709,6 +854,14 @@ fn no_gloss_is_empty_or_the_fallback_sentence() {
         (vocab_ts(), "UNRESOLVED_CATEGORY"),
         (vocab_ts(), "UNMODELLED_FORM"),
         (vocab_ts(), "ADR_STATUS"),
+        (vocab_ts(), "CHANGE_KIND"),
+        (vocab_ts(), "PARENT_COMPLETENESS"),
+        (vocab_ts(), "CHANGES_ENUMERATED"),
+        (vocab_ts(), "WALK_TERMINATION"),
+        (vocab_ts(), "RENAME_EVIDENCE"),
+        (vocab_ts(), "RENAME_AMBIGUITY"),
+        (vocab_ts(), "FIRST_OBSERVED_KIND"),
+        (vocab_ts(), "HISTORY_FRESHNESS"),
         (format_ts(), "SOURCE_TYPES"),
         (format_ts(), "DIRECTNESS"),
         (format_ts(), "STATUS_GLOSS"),
