@@ -119,6 +119,24 @@ exists to protect and `scripts/final_acceptance.sh` already greps for on the CLI
 
 ---
 
+## 4a. The frontend toolchain, verified 2026-08-05
+
+Checked rather than assumed, because "the UI cannot be built offline" would change the plan:
+
+| | |
+|---|---|
+| `apps/nerve-web/node_modules` | **present** — so `npm run build` and `npm run check` work with **no network** |
+| Node | v24.15.0 at `~/.nvm/versions/node/v24.15.0/bin` (not on the default `PATH` — prefix it) |
+| `npm run check` | **passes**: `typecheck` + `lint` + **15 tests**, 0 failures |
+| `npm run build` | `vite build && node tools/embed.mjs` — **the embed step is the one that matters**, because it regenerates the bundle compiled into the binary |
+| runtime dependencies | `react` + `react-dom` **only**, lint-enforced |
+
+**The embed step is not optional and its omission is a known past defect.** `82a6ff3` records the
+committed bundle going stale and silently omitting vocabulary for `SERVED_BY`, `TEST_OBSERVED_CALL`
+and `endpoint`; `crates/nerve-server/tests/ui_vocabulary.rs::the_embedded_bundle_carries_every_gloss_the_source_declares`
+is the guard that now catches it. Any UI slice must run `npm run build` and commit the regenerated
+bundle, then let that guard confirm the two agree — **source tests alone are not sufficient evidence**.
+
 ## 5. Order of work
 
 1. **12c-iv** — history views, eight glosses, guard extended, `history_wording.rs` scan widened to
