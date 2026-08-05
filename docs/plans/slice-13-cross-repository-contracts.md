@@ -3,7 +3,12 @@
 **Status:** planned, not started
 **Depends on:** row 12 complete (registry freshness reuses `repository_state`; contract staleness
 reuses the shape 12c-i's `history_freshness` establishes)
-**Schema:** v6 → **v7**. Additive: a registry table and a contract-link table. See §4.
+**Schema:** v7 → **v8**. Additive: a registry table and a contract-link table. See §4.
+
+> **Renumbered 2026-08-05.** This plan was written when v7 was unclaimed. Slice 12c-ii took v7
+> (`slice-12c-historical-questions.md` §6.1/§6.9): `git_rename_hypothesis` rebuilt with two blob
+> columns and a measurement, `git_rename_analysis` added, `git_commit.summary_truncation` added.
+> Row 13 is therefore **v8** and Row 14 is **v9**. Every "v7" below means v8.
 **Roadmap row:** 13
 
 ---

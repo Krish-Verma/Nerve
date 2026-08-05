@@ -1,7 +1,10 @@
 # Row 14 — human-confirmed project memory
 
 **Status:** planned, not started
-**Depends on:** row 13 (schema ordering only — v7 → **v8**)
+**Depends on:** row 13 (schema ordering only — v8 → **v9**)
+
+> **Renumbered 2026-08-05.** Slice 12c-ii took v7, so Row 13 is v8 and Row 14 is **v9**. Every
+> "v8" below means v9.
 **Roadmap row:** 14
 
 ---

@@ -129,6 +129,31 @@ One thing 12b already anticipated: `git_rename_hypothesis.evidence` carries the 
 *"exact_content (12b); similar_content added in 12c"* (`schema.rs:376`), so 12c-ii needs no column
 either — the closed vocabulary in `nerve-core` gains a value and the text column stores it.
 
+> **Corrected 2026-08-05, before 12c-ii was implemented. The paragraph above is false, and one
+> column proves it.**
+>
+> `git_rename_hypothesis` carries `blob_oid TEXT NOT NULL` (`schema.rs:376`) — **one** blob column,
+> because an exact-content hypothesis is *defined* by both paths naming the same blob oid. A
+> similar-content hypothesis is defined by the opposite: the from-blob and the to-blob are
+> **different objects**. There is no value that column can honestly take for a similarity row.
+> Writing the to-blob there makes one column mean two things depending on a sibling column;
+> writing a sentinel makes it mean nothing. Either is the failure `CLAUDE.md` §3 names —
+> a measurement hidden inside a label.
+>
+> The claim was also **too narrow about what similarity evidence is**. `evidence` and `ambiguity`
+> can record *that* a hypothesis is similarity-based and *how ambiguous* the pairing is. They cannot
+> record the matching method, its version, the measured value, the threshold it was compared
+> against, or whether the candidate set was complete. A hypothesis a reader cannot reproduce is not
+> inspectable evidence, and this project's whole claim is inspectable evidence.
+>
+> The correction is **schema v7** (§6.1). It is additive in effect and lossless: every v6 row
+> survives with `from_blob_oid = to_blob_oid = blob_oid`, which is exactly what an exact-content row
+> already meant. §6 is rewritten below to specify it.
+>
+> 12b's own plan anticipated the second half of this: *"A per-commit flag needs v7; 12c decides
+> whether the surface needs it."* (`slice-12b-historical-model.md:835`, on summary truncation).
+> 12c-ii is that decision, and the answer is yes — §6.7.
+
 ---
 
 ## 4. First and last observed — the section the slice exists for
@@ -291,6 +316,255 @@ Three constraints, and the first is the one that could go wrong quietly:
 
 Precision is measured on its own, against fixtures with ground truth written first, and reported in
 its own table. It does not join the exact-content number.
+
+The rest of §6 was written on 2026-08-05, before implementation, because the three constraints
+above are a policy and not a specification: they do not say what is stored, what the method is, what
+the numbers mean, or what makes the result reproducible.
+
+### 6.1 Schema v7 — what the evidence has to survive as
+
+Storage first, matcher second. A matcher whose output cannot be recorded honestly is not worth
+writing.
+
+**`git_rename_hypothesis` is rebuilt.** `blob_oid TEXT NOT NULL` is replaced by `from_blob_oid` and
+`to_blob_oid`, because a similarity pair has two. The rebuild is SQLite's documented
+recreate-and-copy, inside the migration's transaction, and it is lossless: every v6 row copies with
+`from_blob_oid = to_blob_oid = blob_oid`.
+
+```sql
+CREATE TABLE git_rename_hypothesis (
+    repo_id           TEXT    NOT NULL REFERENCES repository(repo_id),
+    commit_oid        TEXT    NOT NULL,
+    from_path         TEXT    NOT NULL,
+    to_path           TEXT    NOT NULL,
+    evidence          TEXT    NOT NULL,   -- closed vocabulary: RenameEvidence
+    from_blob_oid     TEXT    NOT NULL,
+    to_blob_oid       TEXT    NOT NULL,
+    matcher_id        TEXT    NOT NULL,   -- which method produced this row
+    matcher_version   TEXT    NOT NULL,
+    match_numerator   INTEGER,            -- NULL iff evidence = exact_content
+    match_denominator INTEGER,            -- NULL iff evidence = exact_content
+    ambiguity         TEXT    NOT NULL,   -- closed vocabulary: RenameAmbiguity
+    PRIMARY KEY (repo_id, commit_oid, from_path, to_path),
+    FOREIGN KEY (repo_id, commit_oid) REFERENCES git_commit(repo_id, commit_oid),
+    CHECK (...)
+);
+```
+
+**The measurement is two integers, not a float.** `match_numerator / match_denominator` is an exact
+rational. A float would reintroduce the thing §3 of `CLAUDE.md` forbids by the back door: it is
+comparable against anything, it rounds, and it does not say what was counted. Two integers say
+*"1,320 of 1,500 lines"*, which is a measurement a reader can check by hand.
+
+**The `CHECK` constraint is where "never blended" stops being a convention.** Written out:
+
+```sql
+CHECK (
+    (evidence = 'exact_content'
+        AND from_blob_oid = to_blob_oid
+        AND match_numerator IS NULL AND match_denominator IS NULL)
+ OR (evidence = 'similar_content'
+        AND from_blob_oid <> to_blob_oid
+        AND match_numerator IS NOT NULL AND match_denominator IS NOT NULL
+        AND match_denominator > 0
+        AND match_numerator >= 0
+        AND match_numerator <= match_denominator)
+)
+```
+
+An exact-content row *cannot* carry a measurement and a similar-content row *cannot* omit one. A
+future writer that tried to give an exact match a score, or to record a similarity hypothesis
+without saying what was measured, gets a constraint violation rather than a code review. The
+primary key needs no widening: for one `(commit, from_path, to_path)` the two blob oids are fixed,
+so a pair is exact or similar and never both.
+
+**Candidate-set completeness is per commit, not per row, and it needs its own table.** The decisive
+case is the one the policy above already requires: when the candidate set exceeds a bound, the
+commit records **no** similarity hypothesis. A per-row flag cannot state that, because there is no
+row to carry it. An absence would once again have to be interpreted, which is the failure 12b's
+`changes_enumerated` exists to prevent.
+
+```sql
+CREATE TABLE git_rename_analysis (
+    repo_id               TEXT    NOT NULL REFERENCES repository(repo_id),
+    commit_oid            TEXT    NOT NULL,
+    matcher_id            TEXT    NOT NULL,
+    matcher_version       TEXT    NOT NULL,
+    threshold_numerator   INTEGER NOT NULL,
+    threshold_denominator INTEGER NOT NULL,
+    deletions_considered  INTEGER NOT NULL,
+    additions_considered  INTEGER NOT NULL,
+    pairs_considered      INTEGER NOT NULL,
+    pairs_measured        INTEGER NOT NULL,
+    completeness          TEXT    NOT NULL,   -- closed vocabulary: RenameAnalysisCompleteness
+    unmeasured            TEXT    NOT NULL,   -- JSON object, reason -> count
+    PRIMARY KEY (repo_id, commit_oid, matcher_id),
+    FOREIGN KEY (repo_id, commit_oid) REFERENCES git_commit(repo_id, commit_oid),
+    CHECK (threshold_denominator > 0 AND pairs_measured <= pairs_considered)
+);
+```
+
+`matcher_id` is in the primary key so a second matcher can analyse the same commit later without a
+migration, and it is on the hypothesis row so a row names its own producer rather than being
+attributed by a join a caller might forget.
+
+**Exact-content renames get no analysis row, and that is a claim rather than an omission.** The
+exact matcher reads no blob content: the oids are already in the tree diff. It is therefore complete
+exactly when the diff was enumerated, which `git_commit.changes_enumerated` already records. Giving
+it an analysis row with a meaningless threshold would be inventing a measurement to fill a column.
+This is the same separation §6's first constraint demands, made structural.
+
+### 6.2 The method
+
+`matcher_id = "nerve-line-multiset"`, `matcher_version = "1"`. Named in full so that changing it is
+a version bump rather than a silent redefinition.
+
+Given two blobs:
+
+1. Inflate each through the 12a `ObjectStore`, refusing above the matcher's own byte bound (§6.4),
+   which is far tighter than 12a's 64 MiB.
+2. Refuse a blob containing a `NUL` byte. Binary content has no lines and a ratio over it means
+   nothing.
+3. Split on `b'\n'`. A single trailing empty segment is dropped, so `"a\nb\n"` and `"a\nb"` are the
+   same two lines. No trimming, no case folding, no normalisation — the bytes are compared as Git
+   stored them.
+4. Build a multiset of lines per blob (`BTreeMap<&[u8], usize>`). Lines are compared by bytes, not
+   by hash, so there is no collision question to reason about.
+5. `numerator = Σ over distinct lines of min(count_from, count_to)` — the multiset intersection.
+   `denominator = max(lines_from, lines_to)`.
+6. Admit when `numerator × threshold_denominator >= threshold_numerator × denominator`. Integer
+   arithmetic throughout; no float is computed anywhere on this path.
+
+**Two properties of the method, stated because a reader will otherwise assume the opposite.** It
+cannot see line *order*, so a file whose lines were reordered measures 1/1; that is a real property
+of a multiset and it is documented rather than patched. And it cannot tell *shared content* from
+*shared boilerplate* — a licence header is lines like any other. §6.5 is how that is handled, and
+the answer is the threshold, not a heuristic.
+
+### 6.3 Which pairs are even considered
+
+A candidate is a path **deleted** in a commit paired with a path **added** in the same commit — the
+same candidate shape 12b's exact matcher uses. Two consequences fall out for free:
+
+- **A copy is never called a move.** A copy leaves the source in the tree, so the source is not a
+  deletion, so the pair is never a candidate. The requirement that a move be evidenced by a
+  deletion *and* an addition is satisfied structurally, not by a check that could be removed.
+- **Similarity never re-derives an exact match.** A pair whose blobs are equal is skipped: it is the
+  exact matcher's row, and emitting it twice under two evidence values would be the blend §6's first
+  constraint forbids.
+
+### 6.4 Bounds
+
+Every one of these is a named constant with a test that exercises it. A bound that cannot be
+exercised cannot be tested — the correction 12c-i-b already had to make for `WalkBudgetExhausted`.
+
+| Bound | What it protects |
+|---|---|
+| `MAX_SIMILARITY_BLOB_BYTES` | bytes inflated for one blob, beneath 12a's own object bound |
+| `MAX_SIMILARITY_LINES` | lines held in memory for one blob |
+| `MAX_SIMILARITY_DELETIONS` | deletions in one commit considered |
+| `MAX_SIMILARITY_ADDITIONS` | additions in one commit considered |
+| `MAX_SIMILARITY_PAIRS` | `deletions × additions`, the quadratic term |
+| `MAX_SIMILARITY_ROWS_PER_COMMIT` | output rows one commit may record |
+| `MIN_SIMILARITY_LINES` | floor beneath which a ratio is not a measurement |
+
+Delta reconstruction beneath the matcher is bounded by 12a's `MAX_OBJECT_BYTES`, its delta-depth
+limit and its declared-size checks; the matcher adds its own tighter ceiling on top rather than
+trusting the one below.
+
+**When a bound refuses**, `completeness` records which, **no similarity row is written for that
+commit**, and the exact-content rows are untouched. `RenameAnalysisCompleteness`:
+
+| value | meaning |
+|---|---|
+| `complete` | every candidate pair was measured |
+| `partial` | some pairs could not be measured; the rows present are **not** the full set |
+| `refused_bound` | the candidate set exceeded a bound; **no** similarity row for this commit |
+| `not_attempted` | the diff was not enumerated, so there is no candidate set |
+
+`partial` is not a violation of "no partial set presented as exhaustive" — the prohibition is on
+presenting it as exhaustive, and this names it. `unmeasured` carries the reasons as a JSON
+`reason -> count` object over a closed vocabulary: `blob-absent`, `blob-unreadable`,
+`blob-too-large`, `blob-binary`, `blob-too-small`.
+
+### 6.5 Precision, and the threshold is an output of measurement
+
+Ground truth is written **before** the matcher, as a committed fixture inventory, and every pair is
+labelled rename or not-rename by construction rather than by running Nerve. The cases:
+
+true rename with modification · delete and unrelated add · two similar boilerplate files ·
+empty files · licence/header-heavy files · one-to-many · many-to-one · generated files · binary
+files · files over the bounds · same content with lines reordered · minor edits · major edits ·
+copy rather than move.
+
+**The gate is false positives = 0, and the threshold is chosen to meet it.** The boilerplate and
+licence-header cases are the ones that decide the number: a pair that is mostly a shared header
+measures high, and the only honest lever is to require more. Recall is whatever that costs and is
+**reported, not optimised** — a major-edit rename falling below the threshold is a false negative
+and is published as one. Buying recall by lowering the threshold until a boilerplate pair passes
+would be trading the gate for the number, which is the trade this project does not make.
+
+Exact-content and similar-content precision are two tables. They are never summed and never
+averaged.
+
+### 6.6 What every surface must show
+
+A similarity hypothesis rendered without its method is a percentage from nowhere. CLI, JSON, HTTP,
+MCP and the UI each carry: that it is a **hypothesis, not a confirmed rename**; the evidence kind;
+`matcher_id`; `matcher_version`; the measurement as **numerator of denominator**; the threshold;
+the ambiguity; the candidate-set completeness; both paths; both blob oids; the commit; and the
+limitations. Paths, summaries and evidence text remain untrusted repository content and stay inside
+the MCP `repository_content` envelope.
+
+### 6.7 Per-record summary truncation
+
+`git_commit.summary` is bounded at `MAX_SUMMARY_BYTES = 512` and truncation is counted **per
+repository** — `git_history_ingest.refusals["history-summary-truncated"]` and the ingest outcome's
+`summaries_truncated`. From a single summary a reader cannot tell a short one from a cut one, which
+is `slice-12b-historical-model.md:835`'s recorded limitation and its explicit hand-off to v7.
+
+v7 adds `git_commit.summary_truncation`, and it is a **three-value closed vocabulary rather than a
+boolean**, because a boolean would have to lie about the past:
+
+| value | meaning |
+|---|---|
+| `complete` | the summary is the whole first line |
+| `truncated` | the first line was longer than the bound and was cut |
+| `unknown` | written before Nerve recorded this, and it cannot be recovered |
+
+A v6 row cannot be backfilled. Length is not the answer: a summary of exactly 512 bytes is
+**not** truncated, so `length(summary) = 512 ⟹ truncated` would manufacture false positives on
+precisely the boundary case §6.8 tests. `DEFAULT 'unknown'` is the honest migration, and `unknown`
+is reachable and tested through the v6→v7 upgrade path.
+
+`insert_commit` is `INSERT OR IGNORE`, so a commit already recorded keeps its stored value — the
+same documented limitation `history.rs:341-346` already states for `parent_completeness` and
+`changes_enumerated`. It is stable in practice because the bound is a compile-time constant.
+
+**No surface renders a summary without its flag.**
+
+### 6.8 Tests that must exist
+
+Truncation: below the limit · exactly at the limit · one byte above · multibyte UTF-8 cut at a
+character boundary · invalid UTF-8 (lossy conversion happens *before* the bound, so a replacement
+character cannot push a summary past it) · CLI · JSON · HTTP · MCP trust envelope · UI.
+
+Migration: clean database at v7 · v6 upgrade preserving every rename row and every commit · a
+representative older version upgraded end to end · rollback leaving the database at its prior
+version on failure · re-migration is a no-op · existing API and UI queries still answer.
+
+Mutation probes, each applied, each required to fail a **named** test for the **intended** reason,
+each reverted and the file confirmed byte-identical: promote a similarity hypothesis to a confirmed
+rename · remove `matcher_id` · remove `matcher_version` · remove the measurement · ignore the
+threshold · report an incomplete candidate set as complete · blend exact and similarity evidence ·
+admit a known false-positive boilerplate pair · remove a candidate bound · omit per-summary
+truncation · render a truncated summary as complete · leak evidence text outside the MCP envelope.
+
+### 6.9 Schema numbering after this slice
+
+12c-ii takes **v7**. The Row 13 and Row 14 plans were written assuming v7 and v8 were theirs; both
+are unimplemented, so both are corrected to **v8** and **v9** in their own files rather than here.
+No applied migration is edited.
 
 ---
 
