@@ -296,7 +296,17 @@ fn rename(row: &RenameRow) -> Value {
         "from_path": row.from_path,
         "to_path": row.to_path,
         "evidence": row.evidence.as_str(),
-        "blob_oid": row.blob_oid,
+        // Two blob oids since schema v7, because a similarity pair has two. For an exact-content
+        // hypothesis they are equal, and that identity is the evidence rather than a redundancy.
+        "from_blob_oid": row.from_blob_oid,
+        "to_blob_oid": row.to_blob_oid,
+        // The producer of the row, and its measurement as two integers. A ratio without the
+        // method that computed it is a percentage from nowhere, so they travel together or not
+        // at all; both measurement fields are null on an exact match, which carries none.
+        "matcher_id": row.matcher_id,
+        "matcher_version": row.matcher_version,
+        "match_numerator": row.match_numerator,
+        "match_denominator": row.match_denominator,
         "ambiguity": row.ambiguity.as_str(),
         "ambiguity_note": row.ambiguity.note(),
         // On every row rather than in a footnote a client can drop. Git records no rename; this is a

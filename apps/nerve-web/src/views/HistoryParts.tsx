@@ -463,7 +463,15 @@ export function RenameList({ renames }: { renames: HistoryRename[] }) {
             {row.from_path} → {row.to_path}
           </div>
           <div className="head__sub wrapany">{row.ambiguity_note}</div>
-          <div className="hash wrapany">blob {row.blob_oid.slice(0, 12)}</div>
+          {/*
+            Two blob oids since schema v7. For an `exact_content` hypothesis they are equal and that
+            equality is the evidence, so showing one would hide the very thing being claimed; for a
+            similarity hypothesis they differ. Rendered the same way in both cases rather than
+            collapsed when equal, because a reader should not have to know which case they are in.
+          */}
+          <div className="hash wrapany">
+            blob {row.from_blob_oid.slice(0, 12)} → {row.to_blob_oid.slice(0, 12)}
+          </div>
         </div>
       ))}
     </div>

@@ -1,5 +1,5 @@
-//! The historical model: `git_commit`, `git_change`, `git_rename_hypothesis` and
-//! `git_history_ingest` (schema v6, Slice 12b).
+//! The historical model: `git_commit`, `git_change`, `git_rename_hypothesis`,
+//! `git_rename_analysis` and `git_history_ingest` (schema v6, Slice 12b; v7, Slice 12c-ii).
 //!
 //! These four tables are **not** part of the evidence graph and are deliberately absent from the
 //! canonical dump. They record what the repository *was*, read out of the Git object store as
@@ -18,8 +18,9 @@
 //!    the same oid is the same commit and `INSERT OR IGNORE` is exactly right there. It is wrong
 //!    everywhere else, and the reason is measured rather than stylistic: Slice 3b lost graph rows
 //!    to an `INSERT OR IGNORE` that swallowed `NOT NULL` violations and exited zero
-//!    (`crates/nerve-index/src/pipeline.rs:654-666`). [`insert_changes`] and [`insert_renames`]
-//!    use a plain `INSERT`, so a constraint or foreign-key violation is an error.
+//!    (`crates/nerve-index/src/pipeline.rs:654-666`). [`insert_changes`], [`insert_renames`] and
+//!    [`insert_rename_analysis`] use a plain `INSERT`, so a constraint or foreign-key violation is
+//!    an error.
 //! 3. **Every read has a total order.** History fixtures use fixed synthetic dates, so ties on
 //!    `committer_time` are guaranteed rather than unlikely; an order that stopped at the timestamp
 //!    would be a flaky test waiting for a fixture to grow a second commit in the same second.
@@ -30,7 +31,8 @@ use rusqlite::{params, Connection, Row};
 
 use nerve_core::vocab::{
     ChangeKind, ChangesEnumerated, FirstObservedKind, HistoryFreshness, ParentCompleteness,
-    PathRole, RenameAmbiguity, RenameEvidence, WalkTermination,
+    PathRole, RenameAmbiguity, RenameAnalysisCompleteness, RenameEvidence, SimilarityUnmeasured,
+    SummaryTruncation, WalkTermination,
 };
 
 use crate::error::{Result, StoreError};
@@ -74,6 +76,13 @@ pub struct CommitRow {
     /// surface: it is repository prose, it is attacker-influencable wherever contributions are
     /// accepted, and it is never interpreted.
     pub summary: String,
+    /// Whether [`CommitRow::summary`] is the whole first line or a cut one.
+    ///
+    /// Per record, because the per-repository tally
+    /// (`git_history_ingest.refusals["history-summary-truncated"]`) cannot say which summary was
+    /// cut. [`SummaryTruncation::Unknown`] is what the v6→v7 migration wrote and must never be
+    /// written by a fresh ingest — a writer that knows the bound knows the answer.
+    pub summary_truncation: SummaryTruncation,
     /// Whether the commit has more than one parent. Denormalised from `parent_oids` so that
     /// counting merges does not require decoding a JSON array per row.
     pub is_merge: bool,
@@ -106,6 +115,12 @@ pub struct ChangeRow {
 ///
 /// There is no score. `evidence` and `ambiguity` are separate columns because they are separate
 /// facts, and when one blob matches several paths every pairing is recorded and none is promoted.
+///
+/// **Two blob oids, not one.** An exact-content hypothesis has
+/// `from_blob_oid == to_blob_oid` — that identity *is* the evidence. A similarity hypothesis has
+/// two different blobs and a measurement of how much content they share. The schema's `CHECK`
+/// enforces which combination goes with which evidence, so the two kinds cannot be blended by a
+/// writer that forgot the rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenameRow {
     /// The commit in which the deletion and the addition both appear.
@@ -116,10 +131,68 @@ pub struct RenameRow {
     pub to_path: String,
     /// What the hypothesis rests on.
     pub evidence: RenameEvidence,
-    /// The blob both paths name.
-    pub blob_oid: String,
+    /// The blob the deleted path named at the parent.
+    pub from_blob_oid: String,
+    /// The blob the added path names at this commit. Equal to
+    /// [`RenameRow::from_blob_oid`] exactly when the evidence is
+    /// [`RenameEvidence::ExactContent`].
+    pub to_blob_oid: String,
+    /// Which method produced this row. On the row rather than reached by a join, so a hypothesis
+    /// names its own producer instead of being attributed by a caller that might forget.
+    pub matcher_id: String,
+    /// The producing method's version. Changing the method is a version bump, never a silent
+    /// redefinition of what the measurement means.
+    pub matcher_version: String,
+    /// Numerator of the match measurement. `None` for [`RenameEvidence::ExactContent`], which
+    /// carries no measurement at all rather than a perfect one.
+    pub match_numerator: Option<i64>,
+    /// Denominator of the match measurement. Two integers rather than a float: an exact rational
+    /// says *what was counted*, where a float is comparable against anything and rounds.
+    pub match_denominator: Option<i64>,
     /// How many ways the pairing could have been drawn.
     pub ambiguity: RenameAmbiguity,
+}
+
+/// What one matcher's candidate set for one commit was, and how much of it was measured.
+///
+/// **Per commit rather than per row, because the decisive case has no row.** When a bound refuses
+/// the candidate set the commit records no similarity hypothesis at all, and a per-row flag cannot
+/// state that — an absence would have to be interpreted, which is the failure
+/// [`CommitRow::changes_enumerated`] exists to prevent one table over.
+///
+/// Exact-content renames get no [`AnalysisRow`], and that is a claim rather than an omission: the
+/// exact matcher reads no blob content, so it is complete exactly when the diff was enumerated,
+/// which [`CommitRow::changes_enumerated`] already records. Giving it a row with a meaningless
+/// threshold would be inventing a measurement to fill a column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnalysisRow {
+    /// The commit whose candidate set this describes. Must already be recorded.
+    pub commit_oid: String,
+    /// Which method analysed it. Part of the primary key, so a second matcher can analyse the same
+    /// commit later without a migration.
+    pub matcher_id: String,
+    /// The analysing method's version.
+    pub matcher_version: String,
+    /// Numerator of the admission threshold in force for this run.
+    pub threshold_numerator: i64,
+    /// Denominator of the admission threshold. The threshold is stored rather than assumed,
+    /// because a measurement rendered without it is a percentage from nowhere.
+    pub threshold_denominator: i64,
+    /// Deletions in the commit that were considered as candidates.
+    pub deletions_considered: i64,
+    /// Additions in the commit that were considered as candidates.
+    pub additions_considered: i64,
+    /// Candidate pairs the run set out to measure.
+    pub pairs_considered: i64,
+    /// Candidate pairs it actually measured. Never more than
+    /// [`AnalysisRow::pairs_considered`] — the schema refuses it.
+    pub pairs_measured: i64,
+    /// Whether the rows present are the whole answer for this commit.
+    pub completeness: RenameAnalysisCompleteness,
+    /// Why the unmeasured pairs went unmeasured, by reason, with counts. Empty is a claim, so it
+    /// is stored as `{}` rather than as a `NULL` — the same discipline
+    /// [`IngestRow::refusals`] follows.
+    pub unmeasured: BTreeMap<SimilarityUnmeasured, i64>,
 }
 
 /// What one history ingest read, and what it could not.
@@ -184,10 +257,16 @@ pub struct HistoryTotals {
 /// [`read_commit`]'s indices.
 const COMMIT_COLUMNS: &str = "c.commit_oid, c.tree_oid, c.parent_oids, c.parent_completeness, \
      c.changes_enumerated, c.author_time, c.author_tz, c.committer_time, c.committer_tz, \
-     c.author_ident, c.committer_ident, c.summary, c.is_merge";
+     c.author_ident, c.committer_ident, c.summary, c.summary_truncation, c.is_merge";
 
 /// How many columns [`COMMIT_COLUMNS`] names, so a join can offset past them.
-const COMMIT_COLUMN_COUNT: usize = 13;
+const COMMIT_COLUMN_COUNT: usize = 14;
+
+/// Every `git_rename_hypothesis` column a [`RenameRow`] needs, in the order [`read_rename`]
+/// expects. Qualified with the `r` alias every query below gives `git_rename_hypothesis`.
+const RENAME_COLUMNS: &str = "r.commit_oid, r.from_path, r.to_path, r.evidence, r.from_blob_oid, \
+     r.to_blob_oid, r.matcher_id, r.matcher_version, r.match_numerator, r.match_denominator, \
+     r.ambiguity";
 
 /// Every `git_change` column a [`ChangeRow`] needs, in the order [`read_change`] expects.
 /// Qualified with the `ch` alias every query below gives `git_change`.
@@ -220,6 +299,7 @@ struct RawCommit {
     author_ident: Option<String>,
     committer_ident: Option<String>,
     summary: String,
+    summary_truncation: String,
     is_merge: bool,
 }
 
@@ -237,7 +317,8 @@ fn read_commit(row: &Row<'_>, base: usize) -> rusqlite::Result<RawCommit> {
         author_ident: row.get(base + 9)?,
         committer_ident: row.get(base + 10)?,
         summary: row.get(base + 11)?,
-        is_merge: row.get(base + 12)?,
+        summary_truncation: row.get(base + 12)?,
+        is_merge: row.get(base + 13)?,
     })
 }
 
@@ -255,6 +336,7 @@ fn commit_from_raw(raw: RawCommit) -> Result<CommitRow> {
         author_ident: raw.author_ident,
         committer_ident: raw.committer_ident,
         summary: raw.summary,
+        summary_truncation: raw.summary_truncation.parse()?,
         is_merge: raw.is_merge,
     })
 }
@@ -300,8 +382,29 @@ struct RawRename {
     from_path: String,
     to_path: String,
     evidence: String,
-    blob_oid: String,
+    from_blob_oid: String,
+    to_blob_oid: String,
+    matcher_id: String,
+    matcher_version: String,
+    match_numerator: Option<i64>,
+    match_denominator: Option<i64>,
     ambiguity: String,
+}
+
+fn read_rename(row: &Row<'_>, base: usize) -> rusqlite::Result<RawRename> {
+    Ok(RawRename {
+        commit_oid: row.get(base)?,
+        from_path: row.get(base + 1)?,
+        to_path: row.get(base + 2)?,
+        evidence: row.get(base + 3)?,
+        from_blob_oid: row.get(base + 4)?,
+        to_blob_oid: row.get(base + 5)?,
+        matcher_id: row.get(base + 6)?,
+        matcher_version: row.get(base + 7)?,
+        match_numerator: row.get(base + 8)?,
+        match_denominator: row.get(base + 9)?,
+        ambiguity: row.get(base + 10)?,
+    })
 }
 
 fn rename_from_raw(raw: RawRename) -> Result<RenameRow> {
@@ -310,8 +413,54 @@ fn rename_from_raw(raw: RawRename) -> Result<RenameRow> {
         from_path: raw.from_path,
         to_path: raw.to_path,
         evidence: raw.evidence.parse()?,
-        blob_oid: raw.blob_oid,
+        from_blob_oid: raw.from_blob_oid,
+        to_blob_oid: raw.to_blob_oid,
+        matcher_id: raw.matcher_id,
+        matcher_version: raw.matcher_version,
+        match_numerator: raw.match_numerator,
+        match_denominator: raw.match_denominator,
         ambiguity: raw.ambiguity.parse()?,
+    })
+}
+
+/// A `git_rename_analysis` row as SQLite hands it over. Same split, same reason, as [`RawCommit`].
+struct RawAnalysis {
+    commit_oid: String,
+    matcher_id: String,
+    matcher_version: String,
+    threshold_numerator: i64,
+    threshold_denominator: i64,
+    deletions_considered: i64,
+    additions_considered: i64,
+    pairs_considered: i64,
+    pairs_measured: i64,
+    completeness: String,
+    unmeasured: String,
+}
+
+fn analysis_from_raw(raw: RawAnalysis) -> Result<AnalysisRow> {
+    // Decoded key by key rather than straight into a `BTreeMap<SimilarityUnmeasured, i64>`, because
+    // an unrecognised key must be *refused* by the vocabulary that owns it. A serde map key error
+    // would say only that a string did not deserialise, losing which vocabulary rejected it —
+    // the same reason `RawCommit` splits reading from parsing.
+    let raw_counts: BTreeMap<String, i64> =
+        decode_json("git_rename_analysis.unmeasured", &raw.unmeasured)?;
+    let mut unmeasured = BTreeMap::new();
+    for (reason, count) in raw_counts {
+        unmeasured.insert(reason.parse::<SimilarityUnmeasured>()?, count);
+    }
+    Ok(AnalysisRow {
+        commit_oid: raw.commit_oid,
+        matcher_id: raw.matcher_id,
+        matcher_version: raw.matcher_version,
+        threshold_numerator: raw.threshold_numerator,
+        threshold_denominator: raw.threshold_denominator,
+        deletions_considered: raw.deletions_considered,
+        additions_considered: raw.additions_considered,
+        pairs_considered: raw.pairs_considered,
+        pairs_measured: raw.pairs_measured,
+        completeness: raw.completeness.parse()?,
+        unmeasured,
     })
 }
 
@@ -344,14 +493,17 @@ fn as_bound(value: usize) -> i64 {
 /// one. Because this function ignores the second insert, such a commit keeps its old availability
 /// values until something deletes and re-records it. That is a real limit of the write path, and it
 /// is stated here rather than left to be discovered.
+///
+/// [`CommitRow::summary_truncation`] inherits that limitation and is stable in practice, because
+/// the bound it is computed against is a compile-time constant.
 pub fn insert_commit(conn: &Connection, repo_id: &str, row: &CommitRow) -> Result<bool> {
     let parent_oids = encode_json("git_commit.parent_oids", &row.parent_oids)?;
     let written = conn.execute(
         "INSERT OR IGNORE INTO git_commit
              (repo_id, commit_oid, tree_oid, parent_oids, parent_completeness,
               changes_enumerated, author_time, author_tz, committer_time, committer_tz,
-              author_ident, committer_ident, summary, is_merge)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+              author_ident, committer_ident, summary, summary_truncation, is_merge)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             repo_id,
             row.commit_oid,
@@ -366,6 +518,7 @@ pub fn insert_commit(conn: &Connection, repo_id: &str, row: &CommitRow) -> Resul
             row.author_ident,
             row.committer_ident,
             row.summary,
+            row.summary_truncation.as_str(),
             row.is_merge,
         ],
     )?;
@@ -420,11 +573,16 @@ pub fn insert_changes(conn: &Connection, repo_id: &str, rows: &[ChangeRow]) -> R
 /// Every pairing an ambiguous match produces is a row of its own, carrying
 /// [`RenameAmbiguity::ManyTo`] or its siblings. None is promoted and none is scored, so passing
 /// several rows for one blob is the normal case rather than a caller error.
+///
+/// The schema's `CHECK` decides whether the evidence and the measurement agree — an exact-content
+/// row with a measurement, or a similar-content row without one, is refused here rather than
+/// reviewed later. The plain `INSERT` is what makes that refusal visible.
 pub fn insert_renames(conn: &Connection, repo_id: &str, rows: &[RenameRow]) -> Result<usize> {
     let mut stmt = conn.prepare(
         "INSERT INTO git_rename_hypothesis
-             (repo_id, commit_oid, from_path, to_path, evidence, blob_oid, ambiguity)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             (repo_id, commit_oid, from_path, to_path, evidence, from_blob_oid, to_blob_oid,
+              matcher_id, matcher_version, match_numerator, match_denominator, ambiguity)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
     )?;
     let mut written = 0;
     for row in rows {
@@ -434,10 +592,68 @@ pub fn insert_renames(conn: &Connection, repo_id: &str, rows: &[RenameRow]) -> R
             row.from_path,
             row.to_path,
             row.evidence.as_str(),
-            row.blob_oid,
+            row.from_blob_oid,
+            row.to_blob_oid,
+            row.matcher_id,
+            row.matcher_version,
+            row.match_numerator,
+            row.match_denominator,
             row.ambiguity.as_str(),
         ])?;
     }
+    Ok(written)
+}
+
+/// Record what one matcher's candidate set for one commit was. Returns the number of rows written.
+///
+/// **Plain `INSERT`, never `INSERT OR IGNORE`**, for the same measured reason as
+/// [`insert_changes`] and [`insert_renames`]: Slice 3b lost graph rows to an `INSERT OR IGNORE`
+/// that swallowed `NOT NULL` violations and exited zero
+/// (`crates/nerve-index/src/pipeline.rs:654-666`). A silently dropped analysis row is worse here
+/// than anywhere else in this module, because its absence is exactly what a
+/// [`RenameAnalysisCompleteness::RefusedBound`] commit looks like from the hypothesis table — a
+/// commit with no similarity rows. Losing the row would turn *"a bound refused this"* into
+/// *"nothing was renamed"*, which is the one confusion this table exists to remove.
+///
+/// **Contract: call this only for a commit that is already recorded.** The foreign key on
+/// `(repo_id, commit_oid)` is enforced, and the primary key on `(repo_id, commit_oid, matcher_id)`
+/// means re-supplying one matcher's analysis of a recorded commit is a conflict rather than a
+/// duplicate.
+pub fn insert_rename_analysis(
+    conn: &Connection,
+    repo_id: &str,
+    row: &AnalysisRow,
+) -> Result<usize> {
+    // Keyed by the vocabulary's canonical name. A JSON object's keys are strings, so the map is
+    // restated over `&'static str` on the way out rather than deriving `Serialize` for a
+    // vocabulary that has exactly one wire form already.
+    let unmeasured: BTreeMap<&'static str, i64> = row
+        .unmeasured
+        .iter()
+        .map(|(reason, count)| (reason.as_str(), *count))
+        .collect();
+    let unmeasured = encode_json("git_rename_analysis.unmeasured", &unmeasured)?;
+    let written = conn.execute(
+        "INSERT INTO git_rename_analysis
+             (repo_id, commit_oid, matcher_id, matcher_version, threshold_numerator,
+              threshold_denominator, deletions_considered, additions_considered,
+              pairs_considered, pairs_measured, completeness, unmeasured)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![
+            repo_id,
+            row.commit_oid,
+            row.matcher_id,
+            row.matcher_version,
+            row.threshold_numerator,
+            row.threshold_denominator,
+            row.deletions_considered,
+            row.additions_considered,
+            row.pairs_considered,
+            row.pairs_measured,
+            row.completeness.as_str(),
+            unmeasured,
+        ],
+    )?;
     Ok(written)
 }
 
@@ -647,27 +863,79 @@ pub fn renames_touching_path(
     path: &str,
     limit: usize,
 ) -> Result<Vec<RenameRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT r.commit_oid, r.from_path, r.to_path, r.evidence, r.blob_oid, r.ambiguity
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {RENAME_COLUMNS}
            FROM git_rename_hypothesis r
            JOIN git_commit c ON c.repo_id = r.repo_id AND c.commit_oid = r.commit_oid
           WHERE r.repo_id = ?1 AND (r.from_path = ?2 OR r.to_path = ?2)
           ORDER BY c.committer_time DESC, r.commit_oid ASC, r.from_path ASC, r.to_path ASC
-          LIMIT ?3",
-    )?;
+          LIMIT ?3"
+    ))?;
     let rows = stmt.query_map(params![repo_id, path, as_bound(limit)], |row| {
-        Ok(RawRename {
-            commit_oid: row.get(0)?,
-            from_path: row.get(1)?,
-            to_path: row.get(2)?,
-            evidence: row.get(3)?,
-            blob_oid: row.get(4)?,
-            ambiguity: row.get(5)?,
-        })
+        read_rename(row, 0)
     })?;
     let mut out = Vec::new();
     for row in rows {
         out.push(rename_from_raw(row?)?);
+    }
+    Ok(out)
+}
+
+/// One matcher's analysis of each of the given commits, keyed by commit oid.
+///
+/// **A missing key is the answer to a different question from a
+/// [`RenameAnalysisCompleteness::RefusedBound`] row**, and that is the whole reason this read
+/// exists as a join rather than as an inference. A commit absent from the returned map was never
+/// analysed by this matcher; a commit present with `refused_bound` was analysed and refused. Both
+/// have zero similarity hypotheses, and only the stored row tells them apart.
+///
+/// `matcher_id` is a parameter rather than implicit, because the primary key admits several
+/// matchers per commit and merging their analyses would produce a completeness that describes no
+/// run that ever happened.
+///
+/// A `BTreeMap` rather than a `Vec`, because the one use is joining completeness onto hypotheses a
+/// surface already holds, and that is a lookup. Ordered by construction, which keeps a caller that
+/// iterates it deterministic.
+pub fn rename_analysis_for_commits(
+    conn: &Connection,
+    repo_id: &str,
+    commit_oids: &[&str],
+    matcher_id: &str,
+) -> Result<BTreeMap<String, AnalysisRow>> {
+    let mut out = BTreeMap::new();
+    if commit_oids.is_empty() {
+        return Ok(out);
+    }
+    // One prepared statement executed per oid rather than an `IN (…)` list built by string
+    // concatenation: the oids come from stored rows, but building SQL out of values is how a
+    // query stops being parameterised, and the statement is prepared once either way.
+    let mut stmt = conn.prepare(
+        "SELECT commit_oid, matcher_id, matcher_version, threshold_numerator,
+                threshold_denominator, deletions_considered, additions_considered,
+                pairs_considered, pairs_measured, completeness, unmeasured
+           FROM git_rename_analysis
+          WHERE repo_id = ?1 AND commit_oid = ?2 AND matcher_id = ?3",
+    )?;
+    for commit_oid in commit_oids {
+        let mut rows = stmt.query(params![repo_id, commit_oid, matcher_id])?;
+        let Some(row) = rows.next()? else {
+            continue;
+        };
+        let raw = RawAnalysis {
+            commit_oid: row.get(0)?,
+            matcher_id: row.get(1)?,
+            matcher_version: row.get(2)?,
+            threshold_numerator: row.get(3)?,
+            threshold_denominator: row.get(4)?,
+            deletions_considered: row.get(5)?,
+            additions_considered: row.get(6)?,
+            pairs_considered: row.get(7)?,
+            pairs_measured: row.get(8)?,
+            completeness: row.get(9)?,
+            unmeasured: row.get(10)?,
+        };
+        let analysis = analysis_from_raw(raw)?;
+        out.insert(analysis.commit_oid.clone(), analysis);
     }
     Ok(out)
 }

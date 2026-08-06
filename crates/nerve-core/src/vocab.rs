@@ -1033,16 +1033,47 @@ impl FromStr for WalkTermination {
 pub enum RenameEvidence {
     /// The deleted path and the added path name the same blob oid. Byte-identical content.
     ExactContent,
+    /// The two blobs differ, and a named method measured how much of their content they share.
+    ///
+    /// The measurement lives in `match_numerator` / `match_denominator` as an exact rational, and
+    /// the method that produced it in `matcher_id` / `matcher_version`. All four are `NOT NULL` for
+    /// this value and `NULL` for [`RenameEvidence::ExactContent`], enforced by the schema's `CHECK`
+    /// rather than by convention.
+    SimilarContent,
 }
 
 impl RenameEvidence {
     /// Every value, in declaration order.
-    pub const ALL: [RenameEvidence; 1] = [RenameEvidence::ExactContent];
+    pub const ALL: [RenameEvidence; 2] =
+        [RenameEvidence::ExactContent, RenameEvidence::SimilarContent];
 
     /// Canonical lower-case name, stored in `git_rename_hypothesis.evidence`.
     pub fn as_str(self) -> &'static str {
         match self {
             RenameEvidence::ExactContent => "exact_content",
+            RenameEvidence::SimilarContent => "similar_content",
+        }
+    }
+
+    /// What a rename hypothesis rests on, in words. There is no score, and none is invented.
+    ///
+    /// Both sentences say the row is a **hypothesis rather than a confirmed rename**, because Git
+    /// records no rename and neither value changes that. [`RenameEvidence::SimilarContent`]'s says
+    /// the measurement is meaningless without the method and threshold that produced it: a bare
+    /// ratio is a percentage from nowhere, and it is comparable against nothing —
+    /// least of all against an exact match, which carries no measurement at all.
+    pub fn note(self) -> &'static str {
+        match self {
+            RenameEvidence::ExactContent => {
+                "the deleted path and the added path name the same blob, so the content is \
+                 byte-identical — no similarity was computed and no threshold applied, and it is \
+                 still a hypothesis rather than a rename Git recorded"
+            }
+            RenameEvidence::SimilarContent => {
+                "the two blobs differ and a named method measured how much content they share — \
+                 the measurement means nothing without that method, its version and the threshold \
+                 it was admitted against, and it is a hypothesis rather than a rename Git recorded"
+            }
         }
     }
 }
@@ -1143,6 +1174,256 @@ impl FromStr for RenameAmbiguity {
             .into_iter()
             .find(|a| a.as_str() == s)
             .ok_or_else(|| NerveError::unknown("RenameAmbiguity", s))
+    }
+}
+
+/// Whether a commit's similarity candidate set was measured in full, and if not, why not.
+///
+/// **This is a per-commit fact and it needs its own row, because a per-row flag cannot state it.**
+/// When a bound refuses the candidate set, the commit records *no* similarity hypothesis — there is
+/// no row left to carry the qualification, and an absence would have to be interpreted, which is
+/// exactly the failure [`ChangesEnumerated`] exists to prevent one table over.
+///
+/// Added in Slice 12c-ii. `git_rename_analysis.completeness`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RenameAnalysisCompleteness {
+    /// Every candidate pair was measured.
+    Complete,
+    /// Some pairs could not be measured. The rows present are **not** the full set.
+    Partial,
+    /// The candidate set exceeded a bound, so **no** similarity row exists for this commit.
+    RefusedBound,
+    /// The diff was not enumerated, so there was no candidate set to measure.
+    NotAttempted,
+}
+
+impl RenameAnalysisCompleteness {
+    /// Every value, in declaration order.
+    pub const ALL: [RenameAnalysisCompleteness; 4] = [
+        RenameAnalysisCompleteness::Complete,
+        RenameAnalysisCompleteness::Partial,
+        RenameAnalysisCompleteness::RefusedBound,
+        RenameAnalysisCompleteness::NotAttempted,
+    ];
+
+    /// Canonical lower-case name, stored in `git_rename_analysis.completeness`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RenameAnalysisCompleteness::Complete => "complete",
+            RenameAnalysisCompleteness::Partial => "partial",
+            RenameAnalysisCompleteness::RefusedBound => "refused_bound",
+            RenameAnalysisCompleteness::NotAttempted => "not_attempted",
+        }
+    }
+
+    /// How much of the candidate set was measured, in words.
+    ///
+    /// Three of the four values say the similarity rows for this commit are not an exhaustive
+    /// answer. Naming that is not a violation of *"no partial set presented as exhaustive"* — the
+    /// prohibition is on presenting it as exhaustive, and these sentences are how it is not.
+    pub fn note(self) -> &'static str {
+        match self {
+            RenameAnalysisCompleteness::Complete => {
+                "every candidate pair in this commit was measured, so the similarity rows present \
+                 are the full set for this matcher"
+            }
+            RenameAnalysisCompleteness::Partial => {
+                "some candidate pairs could not be measured — the rows present are not the full \
+                 set, and the reasons are counted rather than summarised away"
+            }
+            RenameAnalysisCompleteness::RefusedBound => {
+                "the candidate set exceeded a bound, so no similarity hypothesis was recorded for \
+                 this commit at all — an empty result here is a refusal, not an absence of renames"
+            }
+            RenameAnalysisCompleteness::NotAttempted => {
+                "the commit's changes were not enumerated, so there was no candidate set to \
+                 measure — this says nothing about whether the commit renamed anything"
+            }
+        }
+    }
+}
+
+impl fmt::Display for RenameAnalysisCompleteness {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for RenameAnalysisCompleteness {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        RenameAnalysisCompleteness::ALL
+            .into_iter()
+            .find(|c| c.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("RenameAnalysisCompleteness", s))
+    }
+}
+
+/// Whether a stored commit summary is the whole first line or a cut one.
+///
+/// **Three values rather than a boolean, because a boolean would have to lie about the past.** A
+/// summary written before Slice 12c-ii carries no record of whether it was cut, and length cannot
+/// recover it: a first line of exactly `MAX_SUMMARY_BYTES` is *not* truncated, so
+/// `length(summary) = bound ⟹ truncated` would manufacture a false positive on precisely the
+/// boundary case. [`SummaryTruncation::Unknown`] is what the v6→v7 migration writes, and it is
+/// reachable rather than theoretical.
+///
+/// Added in Slice 12c-ii. `git_commit.summary_truncation`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SummaryTruncation {
+    /// The stored summary is the whole first line of the commit message.
+    Complete,
+    /// The first line was longer than the bound and was cut.
+    Truncated,
+    /// Written before Nerve recorded this, and it cannot be recovered.
+    Unknown,
+}
+
+impl SummaryTruncation {
+    /// Every value, in declaration order.
+    pub const ALL: [SummaryTruncation; 3] = [
+        SummaryTruncation::Complete,
+        SummaryTruncation::Truncated,
+        SummaryTruncation::Unknown,
+    ];
+
+    /// Canonical lower-case name, stored in `git_commit.summary_truncation`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SummaryTruncation::Complete => "complete",
+            SummaryTruncation::Truncated => "truncated",
+            SummaryTruncation::Unknown => "unknown",
+        }
+    }
+
+    /// What the stored summary is, in words. No surface renders a summary without this.
+    pub fn note(self) -> &'static str {
+        match self {
+            SummaryTruncation::Complete => {
+                "the whole first line of the commit message is stored — nothing was cut"
+            }
+            SummaryTruncation::Truncated => {
+                "the first line was longer than the stored bound and was cut, so the text ends \
+                 where Nerve stopped rather than where the author did"
+            }
+            SummaryTruncation::Unknown => {
+                "this commit was recorded before Nerve stored whether a summary was cut, and it \
+                 cannot be recovered — the length alone cannot tell a short first line from a cut \
+                 one"
+            }
+        }
+    }
+}
+
+impl fmt::Display for SummaryTruncation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for SummaryTruncation {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        SummaryTruncation::ALL
+            .into_iter()
+            .find(|t| t.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("SummaryTruncation", s))
+    }
+}
+
+/// Why a similarity candidate pair carries no measurement.
+///
+/// The keys of `git_rename_analysis.unmeasured`, which is a `reason -> count` object over this
+/// closed vocabulary rather than a free-text tally. Every value names something about a *blob*: a
+/// pair goes unmeasured because one of its two sides could not be turned into lines, never because
+/// the matcher preferred not to.
+///
+/// Added in Slice 12c-ii.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SimilarityUnmeasured {
+    /// The blob was not in the object store.
+    BlobAbsent,
+    /// The blob was in the store and could not be read back.
+    BlobUnreadable,
+    /// The blob exceeded the matcher's own byte bound.
+    BlobTooLarge,
+    /// The blob contains a `NUL` byte, so it has no lines and a ratio over it means nothing.
+    BlobBinary,
+    /// The blob has fewer lines than the floor beneath which a ratio is not a measurement.
+    BlobTooSmall,
+}
+
+impl SimilarityUnmeasured {
+    /// Every value, in declaration order.
+    pub const ALL: [SimilarityUnmeasured; 5] = [
+        SimilarityUnmeasured::BlobAbsent,
+        SimilarityUnmeasured::BlobUnreadable,
+        SimilarityUnmeasured::BlobTooLarge,
+        SimilarityUnmeasured::BlobBinary,
+        SimilarityUnmeasured::BlobTooSmall,
+    ];
+
+    /// Canonical name, used as a key of `git_rename_analysis.unmeasured`.
+    ///
+    /// Hyphenated rather than underscored, matching the refusal-form keys of
+    /// `git_history_ingest.refusals` that this object sits beside.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SimilarityUnmeasured::BlobAbsent => "blob-absent",
+            SimilarityUnmeasured::BlobUnreadable => "blob-unreadable",
+            SimilarityUnmeasured::BlobTooLarge => "blob-too-large",
+            SimilarityUnmeasured::BlobBinary => "blob-binary",
+            SimilarityUnmeasured::BlobTooSmall => "blob-too-small",
+        }
+    }
+
+    /// Why a pair went unmeasured, in words.
+    ///
+    /// Each sentence says what was *not* learned. None of them means "these paths are unrelated":
+    /// an unmeasured pair is an unanswered question, and reading it as a negative answer is the
+    /// mistake these values exist to prevent.
+    pub fn note(self) -> &'static str {
+        match self {
+            SimilarityUnmeasured::BlobAbsent => {
+                "the blob was not in the object store, so the pair could not be measured — an \
+                 unanswered question, not a negative answer"
+            }
+            SimilarityUnmeasured::BlobUnreadable => {
+                "the blob was named by the tree and could not be read back, so the pair could not \
+                 be measured"
+            }
+            SimilarityUnmeasured::BlobTooLarge => {
+                "the blob exceeded the matcher's own byte bound, which sits beneath the object \
+                 reader's, so it was refused rather than inflated"
+            }
+            SimilarityUnmeasured::BlobBinary => {
+                "the blob contains a NUL byte, so it has no lines and a line ratio over it would \
+                 be a number without a meaning"
+            }
+            SimilarityUnmeasured::BlobTooSmall => {
+                "the blob has fewer lines than the floor beneath which a ratio is not a \
+                 measurement — two one-line files agreeing says nothing"
+            }
+        }
+    }
+}
+
+impl fmt::Display for SimilarityUnmeasured {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for SimilarityUnmeasured {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        SimilarityUnmeasured::ALL
+            .into_iter()
+            .find(|u| u.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("SimilarityUnmeasured", s))
     }
 }
 
@@ -2044,17 +2325,21 @@ mod tests {
         }
     }
 
-    /// The rename vocabulary claims exactly what 12b's evidence carries, and no more.
+    /// The rename vocabulary claims exactly what 12b and 12c-ii's evidence carries, and no more.
     ///
-    /// `similar_content` is a plausible future member and **must not parse until Slice 12c writes
-    /// the rule that produces it** — the same discipline `EndpointKind` applies to `cli_command`.
+    /// `similar_content` was withheld until Slice 12c-ii added the storage that can record it
+    /// honestly — the same discipline `EndpointKind` applies to `cli_command`. `similarity` and
+    /// `content_similarity` are still not members: a near-miss name that parsed would let a writer
+    /// invent a third evidence kind by spelling.
+    ///
     /// Evidence and ambiguity are two vocabularies rather than one number, because "what this rests
     /// on" and "how many ways it could have been drawn" are separate facts and a single score
     /// would make an exact match indistinguishable from a similar one.
     #[test]
     fn the_rename_vocabulary_keeps_evidence_and_ambiguity_apart() {
-        assert_eq!(RenameEvidence::ALL.len(), 1);
+        assert_eq!(RenameEvidence::ALL.len(), 2);
         assert_eq!(RenameEvidence::ExactContent.as_str(), "exact_content");
+        assert_eq!(RenameEvidence::SimilarContent.as_str(), "similar_content");
         for evidence in RenameEvidence::ALL {
             assert_eq!(
                 evidence.as_str().parse::<RenameEvidence>().unwrap(),
@@ -2062,12 +2347,25 @@ mod tests {
             );
             assert_eq!(evidence.to_string(), evidence.as_str());
         }
-        for not_yet in ["similar_content", "similarity", "content_similarity", ""] {
+        for not_yet in ["similarity", "content_similarity", "exact", ""] {
             assert!(
                 not_yet.parse::<RenameEvidence>().is_err(),
                 "{not_yet:?} parsed as a RenameEvidence without a rule that emits it"
             );
         }
+
+        // The two evidence kinds are never blended, and the notes are where a reader is told so:
+        // each says the row is a hypothesis, and the similarity one says its measurement is
+        // meaningless without the method and threshold that produced it.
+        for evidence in RenameEvidence::ALL {
+            assert!(
+                evidence.note().contains("hypothesis"),
+                "{evidence:?} does not say it is a hypothesis"
+            );
+        }
+        let similar = RenameEvidence::SimilarContent.note();
+        assert!(similar.contains("method"), "{similar}");
+        assert!(similar.contains("threshold"), "{similar}");
 
         let pinned: [(RenameAmbiguity, &str); 4] = [
             // The only unambiguous shape.
@@ -2108,6 +2406,99 @@ mod tests {
         for scored in ["confidence", "score", "probable", "likely"] {
             assert!(scored.parse::<RenameEvidence>().is_err());
             assert!(scored.parse::<RenameAmbiguity>().is_err());
+        }
+    }
+
+    // ---- Slice 12c-ii: the similarity-storage vocabularies --------------------------------------
+
+    /// The three vocabularies schema v7 stores, each pinned against its written-out names.
+    ///
+    /// Pinned rather than generated: a stored value is a wire format, so renaming one is a
+    /// migration and must fail here first. The `note()` assertions are the ones that matter — three
+    /// of the four completeness values must say the rows present are not the whole answer, and
+    /// `unknown` must say it cannot be recovered, because those are the sentences that stop an
+    /// absence being read as a negative.
+    #[test]
+    fn the_similarity_storage_vocabularies_are_pinned_and_glossed() {
+        let completeness: [(RenameAnalysisCompleteness, &str); 4] = [
+            (RenameAnalysisCompleteness::Complete, "complete"),
+            (RenameAnalysisCompleteness::Partial, "partial"),
+            (RenameAnalysisCompleteness::RefusedBound, "refused_bound"),
+            (RenameAnalysisCompleteness::NotAttempted, "not_attempted"),
+        ];
+        for (value, name) in completeness {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<RenameAnalysisCompleteness>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+            assert!(!value.note().is_empty());
+        }
+        assert_eq!(
+            completeness.len(),
+            RenameAnalysisCompleteness::ALL.len(),
+            "a completeness value was added without a name above"
+        );
+        // `refused_bound` is the one that must say no row was written at all: a per-row flag
+        // could not have carried it, which is why the analysis table exists.
+        assert!(
+            RenameAnalysisCompleteness::RefusedBound
+                .note()
+                .contains("no similarity hypothesis"),
+            "{}",
+            RenameAnalysisCompleteness::RefusedBound.note()
+        );
+
+        let truncation: [(SummaryTruncation, &str); 3] = [
+            (SummaryTruncation::Complete, "complete"),
+            (SummaryTruncation::Truncated, "truncated"),
+            (SummaryTruncation::Unknown, "unknown"),
+        ];
+        for (value, name) in truncation {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<SummaryTruncation>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+            assert!(!value.note().is_empty());
+        }
+        assert_eq!(truncation.len(), SummaryTruncation::ALL.len());
+        // The value the migration writes, and the sentence that stops it being read as `complete`.
+        let unknown = SummaryTruncation::Unknown.note();
+        assert!(unknown.contains("before"), "{unknown}");
+        assert!(unknown.contains("cannot be recovered"), "{unknown}");
+
+        let unmeasured: [(SimilarityUnmeasured, &str); 5] = [
+            (SimilarityUnmeasured::BlobAbsent, "blob-absent"),
+            (SimilarityUnmeasured::BlobUnreadable, "blob-unreadable"),
+            (SimilarityUnmeasured::BlobTooLarge, "blob-too-large"),
+            (SimilarityUnmeasured::BlobBinary, "blob-binary"),
+            (SimilarityUnmeasured::BlobTooSmall, "blob-too-small"),
+        ];
+        for (value, name) in unmeasured {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<SimilarityUnmeasured>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+            assert!(!value.note().is_empty());
+        }
+        assert_eq!(unmeasured.len(), SimilarityUnmeasured::ALL.len());
+
+        // A near-miss spelling is not a member of any of the three. Storage is where these names
+        // live, so a value invented by typing would be a row nothing can read back.
+        for invented in ["unknown_reason", "blob_absent", "refused", "truncate", ""] {
+            assert!(invented.parse::<RenameAnalysisCompleteness>().is_err());
+            assert!(invented.parse::<SimilarityUnmeasured>().is_err());
+        }
+        for invented in ["cut", "partial", "blob-absent", ""] {
+            assert!(invented.parse::<SummaryTruncation>().is_err());
         }
     }
 
@@ -2276,7 +2667,7 @@ mod tests {
         }
     }
 
-    /// Every value of the four rendered vocabularies has a note, and no two share one.
+    /// Every value of the eight rendered vocabularies has a note, and no two share one.
     ///
     /// The notes were four functions inside the CLI binary until Slice 12c-i moved them here. This
     /// test is what makes the move a property rather than a tidy-up: a value added without a
@@ -2284,6 +2675,10 @@ mod tests {
     /// given a *copy* of its neighbour's sentence fails on the uniqueness check below — which is the
     /// drift the single-copy source scan in `crates/nerve-cli/tests/history_wording.rs` cannot see,
     /// because a duplicate inside this file is still inside this file.
+    ///
+    /// Slice 12c-ii adds four more. The uniqueness check earns its keep immediately:
+    /// [`RenameAnalysisCompleteness::Complete`] and [`SummaryTruncation::Complete`] share a *name*,
+    /// and a sentence copied between them would describe a summary by a candidate set's rule.
     #[test]
     fn every_rendered_history_value_has_its_own_note() {
         let mut notes: Vec<&'static str> = Vec::new();
@@ -2299,12 +2694,28 @@ mod tests {
         for value in RenameAmbiguity::ALL {
             notes.push(value.note());
         }
+        for value in RenameEvidence::ALL {
+            notes.push(value.note());
+        }
+        for value in RenameAnalysisCompleteness::ALL {
+            notes.push(value.note());
+        }
+        for value in SummaryTruncation::ALL {
+            notes.push(value.note());
+        }
+        for value in SimilarityUnmeasured::ALL {
+            notes.push(value.note());
+        }
         assert_eq!(
             notes.len(),
             WalkTermination::ALL.len()
                 + ParentCompleteness::ALL.len()
                 + ChangesEnumerated::ALL.len()
                 + RenameAmbiguity::ALL.len()
+                + RenameEvidence::ALL.len()
+                + RenameAnalysisCompleteness::ALL.len()
+                + SummaryTruncation::ALL.len()
+                + SimilarityUnmeasured::ALL.len()
         );
         for note in &notes {
             assert!(

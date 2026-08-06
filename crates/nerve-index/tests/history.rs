@@ -1125,7 +1125,17 @@ fn deleted_paths_survive_and_every_rename_pairing_is_recorded() {
             .find(|row| row.to_path == to)
             .unwrap_or_else(|| panic!("{from} -> {to} must be recorded"));
         assert_eq!(row.commit_oid, candidate["commit_oid"].as_str().unwrap());
-        assert_eq!(row.blob_oid, candidate["blob_oid"].as_str().unwrap());
+        // Schema v7 stores two blob oids. For an exact-content hypothesis both are the one blob
+        // the fixture inventory records, and their *equality* is the evidence — asserted here
+        // rather than assumed, because a writer that filled only one side would still satisfy a
+        // single-field check.
+        let blob = candidate["blob_oid"].as_str().unwrap();
+        assert_eq!(row.from_blob_oid, blob);
+        assert_eq!(row.to_blob_oid, blob);
+        assert_eq!(row.matcher_id, "git-blob-oid");
+        assert_eq!(row.matcher_version, "1");
+        assert_eq!(row.match_numerator, None, "an exact match counts nothing");
+        assert_eq!(row.match_denominator, None);
         assert_eq!(row.evidence, RenameEvidence::ExactContent);
         assert_eq!(
             row.ambiguity.as_str(),

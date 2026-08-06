@@ -1,4 +1,4 @@
-//! The historical model at the storage boundary (schema v6, Slice 12b).
+//! The historical model at the storage boundary (schema v6, Slice 12b; v7, Slice 12c-ii).
 //!
 //! Two properties are asserted over and over here because the slice is about them:
 //!
@@ -14,15 +14,16 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use nerve_core::vocab::{
     ChangeKind, ChangesEnumerated, FirstObservedKind, HistoryFreshness, ParentCompleteness,
-    RenameAmbiguity, RenameEvidence, WalkTermination,
+    RenameAmbiguity, RenameAnalysisCompleteness, RenameEvidence, SimilarityUnmeasured,
+    SummaryTruncation, WalkTermination,
 };
 use nerve_store::history::{
     change_frequency, changes_for_commit, cochange, commit_by_oid, commit_log,
     commits_touching_path, earlier_changes_may_exist, first_last_observed, history_freshness,
-    history_ingest, history_totals, insert_changes, insert_commit, insert_renames,
-    recorded_commit_oids, renames_touching_path, state_diff, ChangeRow, CommitRow,
-    EarlierHistoryUnavailable, IngestRow, RenameRow, StateDiff, StateDiffLimits,
-    COCHANGE_IS_NOT_A_DEPENDENCY, CURRENT_TREE_BASIS,
+    history_ingest, history_totals, insert_changes, insert_commit, insert_rename_analysis,
+    insert_renames, recorded_commit_oids, rename_analysis_for_commits, renames_touching_path,
+    state_diff, AnalysisRow, ChangeRow, CommitRow, EarlierHistoryUnavailable, IngestRow, RenameRow,
+    StateDiff, StateDiffLimits, COCHANGE_IS_NOT_A_DEPENDENCY, CURRENT_TREE_BASIS,
 };
 use nerve_store::{migrate, open_in_memory, Connection};
 
@@ -70,6 +71,7 @@ fn commit(label: &str, committer_time: i64) -> CommitRow {
         author_ident: None,
         committer_ident: None,
         summary: format!("commit {label}"),
+        summary_truncation: SummaryTruncation::Complete,
         is_merge: false,
     }
 }
@@ -102,6 +104,11 @@ fn every_field_of_every_row_survives_the_round_trip() {
     // Deliberately awkward: several parents, a negative author time (a repository can carry a
     // commit dated before 1970), a non-UTC offset, identity present, and a summary that is
     // repository prose rather than an identifier.
+    //
+    // `summary_truncation` is the non-default value on purpose. It is decided by the writer that
+    // still holds the untruncated first line — `nerve-index`, not this layer — so the storage
+    // boundary's obligation is to carry back whatever it was given rather than to re-derive it
+    // from the stored length, which is exactly what it cannot do.
     let written = CommitRow {
         commit_oid: oid("merge"),
         tree_oid: oid("tree"),
@@ -115,6 +122,7 @@ fn every_field_of_every_row_survives_the_round_trip() {
         author_ident: Some("A U Thor <a@example.invalid>".to_string()),
         committer_ident: Some("C O Mitter <c@example.invalid>".to_string()),
         summary: "fix: <script>alert(1)</script> and a trailing space ".to_string(),
+        summary_truncation: SummaryTruncation::Truncated,
         is_merge: true,
     };
     assert!(insert_commit(&conn, "r", &written).unwrap());
@@ -175,7 +183,12 @@ fn every_field_of_every_row_survives_the_round_trip() {
         from_path: "src/deleted.ts".to_string(),
         to_path: "src/added.ts".to_string(),
         evidence: RenameEvidence::ExactContent,
-        blob_oid: oid("b1"),
+        from_blob_oid: oid("b1"),
+        to_blob_oid: oid("b1"),
+        matcher_id: "git-blob-oid".to_string(),
+        matcher_version: "1".to_string(),
+        match_numerator: None,
+        match_denominator: None,
         ambiguity: RenameAmbiguity::Unique,
     };
     assert_eq!(
@@ -538,7 +551,12 @@ fn an_ambiguous_rename_records_every_pairing_and_promotes_none() {
             from_path: "src/gone.ts".to_string(),
             to_path: to_path.to_string(),
             evidence: RenameEvidence::ExactContent,
-            blob_oid: shared.clone(),
+            from_blob_oid: shared.clone(),
+            to_blob_oid: shared.clone(),
+            matcher_id: "git-blob-oid".to_string(),
+            matcher_version: "1".to_string(),
+            match_numerator: None,
+            match_denominator: None,
             ambiguity: RenameAmbiguity::ManyTo,
         })
         .collect();
@@ -549,7 +567,12 @@ fn an_ambiguous_rename_records_every_pairing_and_promotes_none() {
         from_path: "docs/old.md".to_string(),
         to_path: "docs/new.md".to_string(),
         evidence: RenameEvidence::ExactContent,
-        blob_oid: oid("solo"),
+        from_blob_oid: oid("solo"),
+        to_blob_oid: oid("solo"),
+        matcher_id: "git-blob-oid".to_string(),
+        matcher_version: "1".to_string(),
+        match_numerator: None,
+        match_denominator: None,
         ambiguity: RenameAmbiguity::Unique,
     };
     assert_eq!(
@@ -566,7 +589,8 @@ fn an_ambiguous_rename_records_every_pairing_and_promotes_none() {
             "a pairing was promoted out of ambiguity"
         );
         assert_eq!(row.evidence, RenameEvidence::ExactContent);
-        assert_eq!(row.blob_oid, shared);
+        assert_eq!(row.from_blob_oid, shared);
+        assert_eq!(row.to_blob_oid, shared);
     }
     // Every added path is reachable from its own side too, and none of them was chosen.
     for to_path in ["src/one.ts", "src/two.ts", "src/three.ts"] {
@@ -594,6 +618,234 @@ fn an_ambiguous_rename_records_every_pairing_and_promotes_none() {
         ),
         1,
         "exactly one pairing in this database is unambiguous"
+    );
+}
+
+/// **A commit that recorded no similarity hypothesis says which kind of nothing that is.**
+///
+/// The reason `git_rename_analysis` is a table rather than a column: a `refused_bound` commit has no
+/// hypothesis row to carry the qualifier, so the only thing that distinguishes *"a bound refused
+/// this"* from *"nothing was renamed here"* is a row of its own. Both commits below have zero
+/// similarity hypotheses and different stored answers, and a third commit is analysed by a second
+/// matcher so the read is shown to be per matcher rather than per commit.
+///
+/// The `unmeasured` object is asserted non-empty on the `partial` row and empty on the `complete`
+/// one, because `{}` is a claim — the same discipline `git_history_ingest.refusals` follows — and a
+/// writer that dropped the reasons would otherwise pass.
+#[test]
+fn a_commit_with_no_similarity_row_says_which_kind_of_nothing_that_is() {
+    let conn = store();
+    let refused = commit("refused", 3_000);
+    let measured = commit("measured", 2_000);
+    let two_matchers = commit("twomatch", 1_000);
+    for row in [&refused, &measured, &two_matchers] {
+        assert!(insert_commit(&conn, "r", row).unwrap());
+    }
+
+    let bounded = AnalysisRow {
+        commit_oid: refused.commit_oid.clone(),
+        matcher_id: "nerve-line-multiset".to_string(),
+        matcher_version: "1".to_string(),
+        threshold_numerator: 6,
+        threshold_denominator: 10,
+        deletions_considered: 900,
+        additions_considered: 900,
+        pairs_considered: 810_000,
+        // Zero measured, and the completeness is what says why. Without the row this commit and a
+        // commit that genuinely renamed nothing are the same empty result.
+        pairs_measured: 0,
+        completeness: RenameAnalysisCompleteness::RefusedBound,
+        unmeasured: BTreeMap::new(),
+    };
+    let partial = AnalysisRow {
+        commit_oid: measured.commit_oid.clone(),
+        matcher_id: "nerve-line-multiset".to_string(),
+        matcher_version: "1".to_string(),
+        threshold_numerator: 6,
+        threshold_denominator: 10,
+        deletions_considered: 2,
+        additions_considered: 3,
+        pairs_considered: 6,
+        pairs_measured: 4,
+        completeness: RenameAnalysisCompleteness::Partial,
+        unmeasured: BTreeMap::from([
+            (SimilarityUnmeasured::BlobBinary, 1),
+            (SimilarityUnmeasured::BlobTooLarge, 1),
+        ]),
+    };
+    let complete = AnalysisRow {
+        commit_oid: two_matchers.commit_oid.clone(),
+        matcher_id: "nerve-line-multiset".to_string(),
+        matcher_version: "1".to_string(),
+        threshold_numerator: 6,
+        threshold_denominator: 10,
+        deletions_considered: 1,
+        additions_considered: 1,
+        pairs_considered: 1,
+        pairs_measured: 1,
+        completeness: RenameAnalysisCompleteness::Complete,
+        unmeasured: BTreeMap::new(),
+    };
+    // The same commit, a second matcher. `matcher_id` is in the primary key so this is a new row
+    // rather than a conflict, and the read below must not merge the two into one verdict.
+    let other_matcher = AnalysisRow {
+        matcher_id: "some-other-matcher".to_string(),
+        completeness: RenameAnalysisCompleteness::NotAttempted,
+        pairs_considered: 0,
+        pairs_measured: 0,
+        ..complete.clone()
+    };
+    for row in [&bounded, &partial, &complete, &other_matcher] {
+        assert_eq!(insert_rename_analysis(&conn, "r", row).unwrap(), 1);
+    }
+
+    let oids: Vec<&str> = vec![
+        refused.commit_oid.as_str(),
+        measured.commit_oid.as_str(),
+        two_matchers.commit_oid.as_str(),
+    ];
+    let read = rename_analysis_for_commits(&conn, "r", &oids, "nerve-line-multiset").unwrap();
+    assert_eq!(read.len(), 3);
+    assert_eq!(read[&refused.commit_oid], bounded);
+    assert_eq!(read[&measured.commit_oid], partial);
+    assert_eq!(read[&two_matchers.commit_oid], complete);
+    // Every field came back, including the reasons, which are the part a JSON round trip loses
+    // first.
+    assert_eq!(read[&measured.commit_oid].unmeasured.len(), 2);
+    assert_eq!(
+        read[&measured.commit_oid].unmeasured[&SimilarityUnmeasured::BlobBinary],
+        1
+    );
+    assert!(
+        read[&refused.commit_oid].unmeasured.is_empty(),
+        "empty is a claim and must survive as one"
+    );
+
+    // The second matcher's answer is its own, and asking for it returns a different verdict for the
+    // same commit. Merging them would produce a completeness that describes no run that happened.
+    let other = rename_analysis_for_commits(&conn, "r", &oids, "some-other-matcher").unwrap();
+    assert_eq!(other.len(), 1);
+    assert_eq!(
+        other[&two_matchers.commit_oid].completeness,
+        RenameAnalysisCompleteness::NotAttempted
+    );
+
+    // A matcher nobody ran is an empty map, which is the third fact: never analysed, as distinct
+    // from analysed-and-refused and from analysed-and-complete.
+    assert!(rename_analysis_for_commits(&conn, "r", &oids, "never-ran")
+        .unwrap()
+        .is_empty());
+    // And the read is scoped by repository like every other, so the second repository sees none of
+    // it even though the oids exist.
+    assert!(
+        rename_analysis_for_commits(&conn, "r2", &oids, "nerve-line-multiset")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        rename_analysis_for_commits(&conn, "r", &[], "nerve-line-multiset")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// An analysis row is a plain `INSERT`: a repeat is an error and an orphan is refused.
+///
+/// The same measured reason as `insert_changes` and `insert_renames`, and it bites harder here.
+/// A silently dropped analysis row leaves a commit with no similarity hypotheses and nothing saying
+/// why — which is exactly what a `refused_bound` commit looks like from the hypothesis table, so the
+/// loss would turn a refusal into "nothing was renamed".
+#[test]
+fn a_repeated_or_orphaned_analysis_row_is_an_error_rather_than_a_silent_drop() {
+    let conn = store();
+    let host = commit("host", 1_000);
+    assert!(insert_commit(&conn, "r", &host).unwrap());
+    let row = AnalysisRow {
+        commit_oid: host.commit_oid.clone(),
+        matcher_id: "nerve-line-multiset".to_string(),
+        matcher_version: "1".to_string(),
+        threshold_numerator: 6,
+        threshold_denominator: 10,
+        deletions_considered: 1,
+        additions_considered: 1,
+        pairs_considered: 1,
+        pairs_measured: 1,
+        completeness: RenameAnalysisCompleteness::Complete,
+        unmeasured: BTreeMap::new(),
+    };
+    assert_eq!(insert_rename_analysis(&conn, "r", &row).unwrap(), 1);
+
+    let err = insert_rename_analysis(&conn, "r", &row).unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("constraint")
+            || err.to_string().to_lowercase().contains("unique"),
+        "expected a primary-key violation, got {err}"
+    );
+
+    let orphan = AnalysisRow {
+        commit_oid: oid("absent"),
+        ..row.clone()
+    };
+    let err = insert_rename_analysis(&conn, "r", &orphan).unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("foreign key"),
+        "expected a foreign-key refusal, got {err}"
+    );
+
+    // And the schema's own `CHECK`: more pairs measured than considered is not a tally.
+    let impossible = AnalysisRow {
+        matcher_id: "second".to_string(),
+        pairs_considered: 1,
+        pairs_measured: 2,
+        ..row.clone()
+    };
+    assert!(insert_rename_analysis(&conn, "r", &impossible).is_err());
+
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM git_rename_analysis"), 1);
+}
+
+/// A stored `unmeasured` key outside the closed vocabulary is refused on read, never defaulted.
+///
+/// The column is `TEXT` holding JSON, so nothing in SQL constrains its keys. That makes the read
+/// the enforcement point, exactly as it is for `parent_completeness`: a key nobody defined must not
+/// become a count nobody can explain.
+#[test]
+fn an_unknown_unmeasured_reason_is_refused_rather_than_dropped() {
+    let conn = store();
+    let host = commit("host", 1_000);
+    assert!(insert_commit(&conn, "r", &host).unwrap());
+    let good = AnalysisRow {
+        commit_oid: host.commit_oid.clone(),
+        matcher_id: "nerve-line-multiset".to_string(),
+        matcher_version: "1".to_string(),
+        threshold_numerator: 6,
+        threshold_denominator: 10,
+        deletions_considered: 1,
+        additions_considered: 1,
+        pairs_considered: 1,
+        pairs_measured: 0,
+        completeness: RenameAnalysisCompleteness::Partial,
+        unmeasured: BTreeMap::from([(SimilarityUnmeasured::BlobAbsent, 1)]),
+    };
+    assert_eq!(insert_rename_analysis(&conn, "r", &good).unwrap(), 1);
+    // The control: the well-formed row reads back.
+    let oids = [host.commit_oid.as_str()];
+    assert_eq!(
+        rename_analysis_for_commits(&conn, "r", &oids, "nerve-line-multiset")
+            .unwrap()
+            .len(),
+        1
+    );
+
+    conn.execute(
+        "UPDATE git_rename_analysis SET unmeasured = '{\"blob_absent\":1}' WHERE repo_id = 'r'",
+        [],
+    )
+    .unwrap();
+    let err = rename_analysis_for_commits(&conn, "r", &oids, "nerve-line-multiset").unwrap_err();
+    assert!(
+        matches!(err, nerve_store::StoreError::Core(_)),
+        "expected a vocabulary refusal, got {err}"
     );
 }
 
@@ -896,7 +1148,12 @@ fn insert_changes_refuses_a_change_for_an_unrecorded_commit() {
         from_path: "a".to_string(),
         to_path: "b".to_string(),
         evidence: RenameEvidence::ExactContent,
-        blob_oid: oid("blob"),
+        from_blob_oid: oid("blob"),
+        to_blob_oid: oid("blob"),
+        matcher_id: "git-blob-oid".to_string(),
+        matcher_version: "1".to_string(),
+        match_numerator: None,
+        match_denominator: None,
         ambiguity: RenameAmbiguity::Unique,
     };
     let err = insert_renames(&conn, "r", &[orphan]).unwrap_err();
@@ -949,7 +1206,12 @@ fn a_repeated_change_row_is_an_error_rather_than_a_silent_drop() {
         from_path: "src/old.ts".to_string(),
         to_path: "src/a.ts".to_string(),
         evidence: RenameEvidence::ExactContent,
-        blob_oid: oid("blob"),
+        from_blob_oid: oid("blob"),
+        to_blob_oid: oid("blob"),
+        matcher_id: "git-blob-oid".to_string(),
+        matcher_version: "1".to_string(),
+        match_numerator: None,
+        match_denominator: None,
         ambiguity: RenameAmbiguity::Unique,
     };
     assert_eq!(
@@ -978,10 +1240,16 @@ fn a_malformed_historical_row_is_refused_rather_than_defaulted() {
     // The control: the well-formed row reads back.
     assert_eq!(commit_log(&conn, "r", 10, 0).unwrap().len(), 1);
 
+    // Columns named rather than positional: v7 appends `summary_truncation` after `is_merge`, so a
+    // positional insert written against v6 would put the merge flag in a vocabulary column and this
+    // test would refuse the wrong thing.
     conn.execute(
-        "INSERT INTO git_commit VALUES
-             ('r', ?1, 'aa', '[]', 'not_a_vocabulary_value', 'enumerated',
-              1, '+0000', 1, '+0000', NULL, NULL, 'bad', 0)",
+        "INSERT INTO git_commit
+             (repo_id, commit_oid, tree_oid, parent_oids, parent_completeness, changes_enumerated,
+              author_time, author_tz, committer_time, committer_tz, author_ident, committer_ident,
+              summary, summary_truncation, is_merge)
+         VALUES ('r', ?1, 'aa', '[]', 'not_a_vocabulary_value', 'enumerated',
+                 1, '+0000', 1, '+0000', NULL, NULL, 'bad', 'complete', 0)",
         [&oid("badvocab")],
     )
     .unwrap();
@@ -997,24 +1265,52 @@ fn a_malformed_historical_row_is_refused_rather_than_defaulted() {
     )
     .unwrap();
     conn.execute(
-        "INSERT INTO git_commit VALUES
-             ('r', ?1, 'aa', 'not json', 'root', 'enumerated',
-              1, '+0000', 1, '+0000', NULL, NULL, 'bad', 0)",
+        "INSERT INTO git_commit
+             (repo_id, commit_oid, tree_oid, parent_oids, parent_completeness, changes_enumerated,
+              author_time, author_tz, committer_time, committer_tz, author_ident, committer_ident,
+              summary, summary_truncation, is_merge)
+         VALUES ('r', ?1, 'aa', 'not json', 'root', 'enumerated',
+                 1, '+0000', 1, '+0000', NULL, NULL, 'bad', 'complete', 0)",
         [&oid("badjson")],
     )
     .unwrap();
+
     let err = commit_log(&conn, "r", 10, 0).unwrap_err();
     assert!(
         matches!(err, nerve_store::StoreError::Json { .. }),
         "expected a JSON refusal, got {err}"
     );
 
-    // A malformed change kind is refused by the totals query too, not only by the row read.
+    // And `summary_truncation` is a closed vocabulary on the same terms as the two above: a stored
+    // value nobody defined is refused rather than read as `complete`, which would report a cut
+    // summary as whole — the exact substitution the third vocabulary value exists to prevent.
     conn.execute(
         "DELETE FROM git_commit WHERE commit_oid = ?1",
         [&oid("badjson")],
     )
     .unwrap();
+    conn.execute(
+        "INSERT INTO git_commit
+             (repo_id, commit_oid, tree_oid, parent_oids, parent_completeness, changes_enumerated,
+              author_time, author_tz, committer_time, committer_tz, author_ident, committer_ident,
+              summary, summary_truncation, is_merge)
+         VALUES ('r', ?1, 'aa', '[]', 'root', 'enumerated',
+                 1, '+0000', 1, '+0000', NULL, NULL, 'bad', 'maybe', 0)",
+        [&oid("badtrunc")],
+    )
+    .unwrap();
+    let err = commit_log(&conn, "r", 10, 0).unwrap_err();
+    assert!(
+        matches!(err, nerve_store::StoreError::Core(_)),
+        "expected a vocabulary refusal, got {err}"
+    );
+    conn.execute(
+        "DELETE FROM git_commit WHERE commit_oid = ?1",
+        [&oid("badtrunc")],
+    )
+    .unwrap();
+
+    // A malformed change kind is refused by the totals query too, not only by the row read.
     conn.execute(
         "INSERT INTO git_change VALUES ('r', ?1, 'src/a.ts', 'renamed', 'bb', NULL, 33188, NULL)",
         [&good.commit_oid],

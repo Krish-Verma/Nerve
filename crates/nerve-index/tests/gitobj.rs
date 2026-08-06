@@ -631,18 +631,19 @@ fn no_rust_source_references_the_fixture_script() {
 
 /// Slice 12a creates no entity, no relation and no schema change. Asserted, not asserted-about.
 ///
-/// **The literal moved from 5 to 6 in Slice 12b, and it is still a tripwire rather than a
-/// bookkeeping value.** 12a was a reader with no schema change of its own, which is what this test
-/// was written to pin. Schema v6 belongs to 12b and lives entirely in `nerve-store`; the invariant
-/// that survives is that the *reader* is never what moves the version, and what enforces that is
-/// the source scan below — no module under `crates/nerve-index/src/gitobj` may name an entity kind,
-/// a relation, or the evidence tables. Pinning the number keeps the next slice that touches the
-/// schema from doing it from inside the reader without noticing.
+/// **The literal moved from 5 to 6 in Slice 12b and from 6 to 7 in Slice 12c-ii, and it is still a
+/// tripwire rather than a bookkeeping value.** 12a was a reader with no schema change of its own,
+/// which is what this test was written to pin. v6 belongs to 12b and v7 to 12c-ii, and both live
+/// entirely in `nerve-store`; the invariant that survives is that the *reader* is never what moves
+/// the version, and what enforces that is the source scan below — no module under
+/// `crates/nerve-index/src/gitobj` may name an entity kind, a relation, or the evidence tables.
+/// Pinning the number keeps the next slice that touches the schema from doing it from inside the
+/// reader without noticing.
 #[test]
 fn the_reader_touches_no_entity_kind_no_relation_and_no_schema_version() {
     assert_eq!(
         nerve_store::SCHEMA_VERSION,
-        6,
+        7,
         "the Git object reader must not be what migrates the schema"
     );
 

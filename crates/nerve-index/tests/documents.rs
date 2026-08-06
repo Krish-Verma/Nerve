@@ -367,9 +367,10 @@ fn a_real_v3_database_migrates_to_exactly_what_the_current_build_produces() {
         // against a table that already exists. Both should be — a migration that tolerated
         // re-application would hide a real double-apply. So the downgrade has to be a real one.
         //
-        // The four v6 tables go in dependency order: `git_change` and `git_rename_hypothesis`
-        // carry a foreign key onto `git_commit`, so dropping the parent first would leave two
-        // tables referencing a table that is gone.
+        // The v6 and v7 tables go in dependency order: `git_change`, `git_rename_hypothesis` and
+        // v7's `git_rename_analysis` carry a foreign key onto `git_commit`, so dropping the parent
+        // first would leave three tables referencing a table that is gone. v7's `summary_truncation`
+        // column goes with `git_commit` itself, so there is no separate column to rewind.
         conn.execute("DELETE FROM schema_version WHERE version >= 4", [])
             .unwrap();
         conn.execute("ALTER TABLE module_facts DROP COLUMN framework_version", [])
@@ -377,6 +378,7 @@ fn a_real_v3_database_migrates_to_exactly_what_the_current_build_produces() {
         for table in [
             "git_change",
             "git_rename_hypothesis",
+            "git_rename_analysis",
             "git_history_ingest",
             "git_commit",
         ] {

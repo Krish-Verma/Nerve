@@ -128,6 +128,97 @@ const V6_TABLES: [&str; 4] = [
     "git_history_ingest",
 ];
 
+/// What v6 added on top of v5, exactly as the Slice 12b build shipped it.
+///
+/// Written out rather than reached by calling `migrate` part of the way, for the same reason
+/// [`V1_ONLY`] is: "a v6 database" has to mean what v6 actually left behind. It is the starting
+/// point for the v7 rebuild, and `git_rename_hypothesis.blob_oid` — the single column v7 splits in
+/// two — only exists here.
+const V6_ONLY: &str = r#"
+CREATE TABLE git_commit (
+    repo_id              TEXT    NOT NULL REFERENCES repository(repo_id),
+    commit_oid           TEXT    NOT NULL,
+    tree_oid             TEXT    NOT NULL,
+    parent_oids          TEXT    NOT NULL,
+    parent_completeness  TEXT    NOT NULL,
+    changes_enumerated   TEXT    NOT NULL,
+    author_time          INTEGER NOT NULL,
+    author_tz            TEXT    NOT NULL,
+    committer_time       INTEGER NOT NULL,
+    committer_tz         TEXT    NOT NULL,
+    author_ident         TEXT,
+    committer_ident      TEXT,
+    summary              TEXT    NOT NULL,
+    is_merge             INTEGER NOT NULL,
+    PRIMARY KEY (repo_id, commit_oid)
+);
+CREATE INDEX idx_git_commit_time ON git_commit(repo_id, committer_time);
+CREATE TABLE git_change (
+    repo_id        TEXT    NOT NULL REFERENCES repository(repo_id),
+    commit_oid     TEXT    NOT NULL,
+    path           TEXT    NOT NULL,
+    change_kind    TEXT    NOT NULL,
+    blob_oid       TEXT,
+    prev_blob_oid  TEXT,
+    mode           INTEGER,
+    prev_mode      INTEGER,
+    PRIMARY KEY (repo_id, commit_oid, path),
+    FOREIGN KEY (repo_id, commit_oid) REFERENCES git_commit(repo_id, commit_oid)
+);
+CREATE INDEX idx_git_change_path ON git_change(repo_id, path);
+CREATE INDEX idx_git_change_blob ON git_change(repo_id, blob_oid);
+CREATE TABLE git_rename_hypothesis (
+    repo_id       TEXT NOT NULL REFERENCES repository(repo_id),
+    commit_oid    TEXT NOT NULL,
+    from_path     TEXT NOT NULL,
+    to_path       TEXT NOT NULL,
+    evidence      TEXT NOT NULL,
+    blob_oid      TEXT NOT NULL,
+    ambiguity     TEXT NOT NULL,
+    PRIMARY KEY (repo_id, commit_oid, from_path, to_path),
+    FOREIGN KEY (repo_id, commit_oid) REFERENCES git_commit(repo_id, commit_oid)
+);
+CREATE TABLE git_history_ingest (
+    repo_id             TEXT    PRIMARY KEY REFERENCES repository(repo_id),
+    head_oid            TEXT,
+    walked_from         TEXT    NOT NULL,
+    commits_recorded    INTEGER NOT NULL,
+    commit_budget       INTEGER NOT NULL,
+    walk_terminated_by  TEXT    NOT NULL,
+    shallow             INTEGER NOT NULL,
+    shallow_boundary    TEXT    NOT NULL,
+    promisor            INTEGER NOT NULL,
+    refusals            TEXT    NOT NULL,
+    reader_version      TEXT    NOT NULL,
+    ingested_at         TEXT    NOT NULL
+);
+INSERT INTO schema_version (version, applied_at, description)
+    VALUES (6, '2026-01-01T00:00:00.000Z', 'Slice 12b');
+"#;
+
+/// The table v7 adds and the column it adds to `git_commit`.
+const V7_TABLE: &str = "git_rename_analysis";
+
+/// A v7 `git_commit` row, named by column rather than by position.
+///
+/// Positional `VALUES` is what v7 broke: `ALTER TABLE … ADD COLUMN` appends `summary_truncation`
+/// after `is_merge`, so an unqualified insert written against v6 now puts the merge flag in the
+/// vocabulary column. Naming the columns is not tidiness here — it is the reason these tests keep
+/// asserting what they were written to assert.
+const COMMIT_INSERT: &str = "INSERT INTO git_commit
+     (repo_id, commit_oid, tree_oid, parent_oids, parent_completeness, changes_enumerated,
+      author_time, author_tz, committer_time, committer_tz, author_ident, committer_ident,
+      summary, summary_truncation, is_merge)
+ VALUES ('r', ?1, 'aa', '[]', 'root', 'enumerated', 100, '+0000', 100, '+0000',
+         NULL, NULL, 'first', 'complete', 0)";
+
+/// A v7 exact-content rename hypothesis: one blob named twice, no measurement.
+const EXACT_RENAME_INSERT: &str = "INSERT INTO git_rename_hypothesis
+     (repo_id, commit_oid, from_path, to_path, evidence, from_blob_oid, to_blob_oid,
+      matcher_id, matcher_version, match_numerator, match_denominator, ambiguity)
+ VALUES ('r', ?1, 'old.ts', 'new.ts', 'exact_content', ?2, ?2,
+         'git-blob-oid', '1', NULL, NULL, 'unique')";
+
 /// Filesystem containment as every build before Slice 5d-i wrote it, plus the two controls that
 /// must survive the v4 rewrite untouched.
 ///
@@ -393,7 +484,7 @@ fn fresh_database_reaches_the_current_schema_version() {
     assert_eq!(schema_version(&conn).unwrap(), None);
     migrate(&conn).unwrap();
     assert_eq!(schema_version(&conn).unwrap(), Some(SCHEMA_VERSION));
-    assert_eq!(SCHEMA_VERSION, 6);
+    assert_eq!(SCHEMA_VERSION, 7);
     // A fresh database reaches v6 directly, without a v1, v2, v3, v4 or v5 database ever existing.
     // v5's column is present from the start, with the default that makes a *migrated* row miss the
     // framework cache. On a fresh database nothing has been cached yet, so the default is inert
@@ -409,6 +500,34 @@ fn fresh_database_reaches_the_current_schema_version() {
         );
         assert_eq!(scalar(&conn, &format!("SELECT count(*) FROM {table}")), 0);
     }
+    // v7's table and column, present from the start. `summary_truncation` carries the migration's
+    // `'unknown'` default here too, and that is inert rather than wrong: on a fresh database no
+    // commit exists to be mislabelled, and `insert_commit` supplies the value explicitly. The
+    // upgrade path is where the default is load-bearing, and it is tested separately.
+    assert!(
+        table_names(&conn).contains(&V7_TABLE.to_string()),
+        "v7 table {V7_TABLE} is missing from a fresh database"
+    );
+    assert_eq!(
+        scalar(&conn, &format!("SELECT count(*) FROM {V7_TABLE}")),
+        0
+    );
+    assert!(column_names(&conn, "git_commit").contains(&"summary_truncation".to_string()));
+    for column in [
+        "from_blob_oid",
+        "to_blob_oid",
+        "matcher_id",
+        "matcher_version",
+    ] {
+        assert!(
+            column_names(&conn, "git_rename_hypothesis").contains(&column.to_string()),
+            "v7 column git_rename_hypothesis.{column} is missing from a fresh database"
+        );
+    }
+    assert!(
+        !column_names(&conn, "git_rename_hypothesis").contains(&"blob_oid".to_string()),
+        "v6's single blob column survived the rebuild"
+    );
     for (table, column) in [
         ("occurrence", "state_id"),
         ("observation", "state_id"),
@@ -670,7 +789,7 @@ fn a_v5_database_upgrades_to_v6_and_the_history_tables_appear() {
 
     migrate(&conn).unwrap();
 
-    assert_eq!(schema_version(&conn).unwrap(), Some(6));
+    assert_eq!(schema_version(&conn).unwrap(), Some(SCHEMA_VERSION));
     for table in V6_TABLES {
         assert!(
             table_names(&conn).contains(&table.to_string()),
@@ -711,8 +830,8 @@ fn every_pre_v6_starting_version_reaches_v6_with_the_history_tables() {
 
         assert_eq!(
             schema_version(&conn).unwrap(),
-            Some(6),
-            "a v{version} database did not reach v6"
+            Some(SCHEMA_VERSION),
+            "a v{version} database did not reach v{SCHEMA_VERSION}"
         );
         for table in V6_TABLES {
             assert!(
@@ -820,7 +939,7 @@ fn an_interrupted_v6_migration_commits_nothing() {
     // would pass just as well against a migration that could never succeed.
     let clean = v5_database_with_rows();
     migrate(&clean).unwrap();
-    assert_eq!(schema_version(&clean).unwrap(), Some(6));
+    assert_eq!(schema_version(&clean).unwrap(), Some(SCHEMA_VERSION));
     for table in V6_TABLES {
         assert!(table_names(&clean).contains(&table.to_string()));
     }
@@ -871,13 +990,7 @@ fn a_change_for_an_unrecorded_commit_is_refused() {
     let commit = "1".repeat(40);
     let absent = "2".repeat(40);
 
-    conn.execute(
-        "INSERT INTO git_commit VALUES
-             ('r', ?1, 'aa', '[]', 'root', 'enumerated', 100, '+0000', 100, '+0000',
-              NULL, NULL, 'first', 0)",
-        [&commit],
-    )
-    .unwrap();
+    conn.execute(COMMIT_INSERT, [&commit]).unwrap();
 
     // The control: the identical row against the recorded commit is accepted, so the refusal below
     // is the foreign key doing its job and not the statement being malformed.
@@ -924,31 +1037,16 @@ fn a_rename_hypothesis_for_an_unrecorded_commit_is_refused() {
     let absent = "2".repeat(40);
     let blob = "3".repeat(40);
 
-    conn.execute(
-        "INSERT INTO git_commit VALUES
-             ('r', ?1, 'aa', '[]', 'root', 'enumerated', 100, '+0000', 100, '+0000',
-              NULL, NULL, 'first', 0)",
-        [&commit],
-    )
-    .unwrap();
+    conn.execute(COMMIT_INSERT, [&commit]).unwrap();
 
-    conn.execute(
-        "INSERT INTO git_rename_hypothesis
-             VALUES ('r', ?1, 'old.ts', 'new.ts', 'exact_content', ?2, 'unique')",
-        [&commit, &blob],
-    )
-    .unwrap();
+    conn.execute(EXACT_RENAME_INSERT, [&commit, &blob]).unwrap();
     assert_eq!(
         scalar(&conn, "SELECT count(*) FROM git_rename_hypothesis"),
         1
     );
 
     let err = conn
-        .execute(
-            "INSERT INTO git_rename_hypothesis
-                 VALUES ('r', ?1, 'old.ts', 'new.ts', 'exact_content', ?2, 'unique')",
-            [&absent, &blob],
-        )
+        .execute(EXACT_RENAME_INSERT, [&absent, &blob])
         .unwrap_err();
     assert!(
         err.to_string().to_lowercase().contains("foreign key"),
@@ -958,6 +1056,418 @@ fn a_rename_hypothesis_for_an_unrecorded_commit_is_refused() {
         scalar(&conn, "SELECT count(*) FROM git_rename_hypothesis"),
         1,
         "the refused row must not have landed"
+    );
+}
+
+// ---- v7: two blob oids, a named matcher, and what a summary is ---------------------------------
+
+/// Build a database as the Slice 12b (v6) build would have left it, with history rows in it.
+///
+/// The rename hypotheses are the point. v7 rebuilds `git_rename_hypothesis` by create-copy-drop-
+/// rename, and the only way to know the copy is lossless is to put rows in the old shape and count
+/// them out of the new one.
+fn v6_database_with_history() -> nerve_store::Connection {
+    let conn = open_in_memory().unwrap();
+    conn.execute_batch(V1_ONLY).unwrap();
+    conn.execute_batch(V2_ONLY).unwrap();
+    conn.execute_batch(SKELETON).unwrap();
+    conn.execute_batch(&rows_at_state("s", "o1", 1, 1)).unwrap();
+    conn.execute_batch(
+        "INSERT INTO assertion_state VALUES ('a1','s','SUPPORTED','AST_DIRECT',1,1,0,'s');",
+    )
+    .unwrap();
+    conn.execute_batch(V3_ONLY).unwrap();
+    conn.execute_batch(V4_ONLY).unwrap();
+    conn.execute_batch(V5_ONLY).unwrap();
+    conn.execute_batch(
+        "INSERT INTO module_facts
+             VALUES ('r','src/math.ts','h','typescript','1.1.0','1.0.0','{}','2.0.0');",
+    )
+    .unwrap();
+    conn.execute_batch(V6_ONLY).unwrap();
+
+    // Two commits, four changes, three hypotheses — one unambiguous and two pairings of one
+    // ambiguous match, so the copy is checked against a shape where a "keep one row per blob"
+    // mistake would show up as a missing row rather than as a passing test.
+    let c1 = "1".repeat(40);
+    let c2 = "2".repeat(40);
+    let b1 = "a".repeat(40);
+    let b2 = "b".repeat(40);
+    conn.execute_batch(&format!(
+        "INSERT INTO git_commit VALUES
+             ('r','{c1}','aa','[]','root','enumerated',100,'+0000',100,'+0000',
+              NULL,NULL,'first',0);
+         INSERT INTO git_commit VALUES
+             ('r','{c2}','bb','[\"{c1}\"]','parents_available','enumerated',
+              200,'+0000',200,'+0000',NULL,NULL,'second',0);
+         INSERT INTO git_change VALUES ('r','{c1}','old.ts','deleted',NULL,'{b1}',NULL,33188);
+         INSERT INTO git_change VALUES ('r','{c1}','new.ts','added','{b1}',NULL,33188,NULL);
+         INSERT INTO git_change VALUES ('r','{c2}','gone.ts','deleted',NULL,'{b2}',NULL,33188);
+         INSERT INTO git_change VALUES ('r','{c2}','one.ts','added','{b2}',NULL,33188,NULL);
+         INSERT INTO git_rename_hypothesis
+             VALUES ('r','{c1}','old.ts','new.ts','exact_content','{b1}','unique');
+         INSERT INTO git_rename_hypothesis
+             VALUES ('r','{c2}','gone.ts','one.ts','exact_content','{b2}','many_to');
+         INSERT INTO git_rename_hypothesis
+             VALUES ('r','{c2}','gone.ts','two.ts','exact_content','{b2}','many_to');
+         INSERT INTO git_history_ingest
+             VALUES ('r','{c2}','[\"{c2}\"]',2,5000,'exhausted',0,'[]',0,'{{}}','gitobj-1.0.0','t');"
+    ))
+    .unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), Some(6));
+    conn
+}
+
+/// The three hypotheses, as `from_path -> to_path : evidence / from_blob / to_blob / matcher`.
+fn rename_labels(conn: &nerve_store::Connection) -> Vec<String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT from_path || ' -> ' || to_path || ' : ' || evidence || ' / '
+                 || from_blob_oid || ' / ' || to_blob_oid || ' / '
+                 || matcher_id || '@' || matcher_version || ' / ' || ambiguity
+                 || ' / ' || coalesce(match_numerator, 'none')
+                 || ':' || coalesce(match_denominator, 'none')
+               FROM git_rename_hypothesis ORDER BY 1",
+        )
+        .unwrap();
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0)).unwrap();
+    rows.map(|row| row.unwrap()).collect()
+}
+
+/// **The upgrade path a database with history actually takes, and it must lose nothing.**
+///
+/// Three assertions carry the slice: every hypothesis row survives, each with
+/// `from_blob_oid = to_blob_oid = ` its old `blob_oid`; every commit gets `summary_truncation`
+/// with `'unknown'`, which is the only honest value for a row written before the column existed;
+/// and the changes and the ingest record are untouched.
+#[test]
+fn a_v6_database_upgrades_to_v7_and_every_rename_row_survives() {
+    let conn = v6_database_with_history();
+    assert!(
+        column_names(&conn, "git_rename_hypothesis").contains(&"blob_oid".to_string()),
+        "the fixture is not at v6; the test would prove nothing"
+    );
+    assert!(!column_names(&conn, "git_commit").contains(&"summary_truncation".to_string()));
+    assert!(!table_names(&conn).contains(&V7_TABLE.to_string()));
+    let renames_before = scalar(&conn, "SELECT count(*) FROM git_rename_hypothesis");
+    assert_eq!(renames_before, 3, "three rows, or the count proves nothing");
+
+    migrate(&conn).unwrap();
+
+    assert_eq!(schema_version(&conn).unwrap(), Some(SCHEMA_VERSION));
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM git_rename_hypothesis"),
+        renames_before,
+        "the rebuild dropped a rename hypothesis"
+    );
+
+    // Every row, in full. The old `blob_oid` is on both sides, the copied rows name the exact
+    // matcher, and neither measurement column was invented for them.
+    let b1 = "a".repeat(40);
+    let b2 = "b".repeat(40);
+    assert_eq!(
+        rename_labels(&conn),
+        vec![
+            format!("gone.ts -> one.ts : exact_content / {b2} / {b2} / git-blob-oid@1 / many_to / none:none"),
+            format!("gone.ts -> two.ts : exact_content / {b2} / {b2} / git-blob-oid@1 / many_to / none:none"),
+            format!("old.ts -> new.ts : exact_content / {b1} / {b1} / git-blob-oid@1 / unique / none:none"),
+        ]
+    );
+    assert!(
+        !column_names(&conn, "git_rename_hypothesis").contains(&"blob_oid".to_string()),
+        "the v6 column survived the rebuild, so the table was altered rather than replaced"
+    );
+    // The rebuilt table is the real one, not a leftover working copy under its build name.
+    assert!(!table_names(&conn).contains(&"git_rename_hypothesis_v7".to_string()));
+
+    // Every pre-existing commit says `unknown`, which is the fact that cannot be recovered — not
+    // `complete`, which would be a claim, and not `truncated`, which would be a different one.
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM git_commit"), 2);
+    assert_eq!(
+        scalar(
+            &conn,
+            "SELECT count(*) FROM git_commit WHERE summary_truncation = 'unknown'"
+        ),
+        2,
+        "a v6 commit cannot be backfilled, so every one of them must say so"
+    );
+
+    // Nothing else in the history moved, and the rest of the database is where v5 left it.
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM git_change"), 4);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM git_history_ingest"), 1);
+    assert_eq!(
+        scalar(&conn, &format!("SELECT count(*) FROM {V7_TABLE}")),
+        0
+    );
+    assert_row_counts(&conn, &V5_ROW_COUNTS);
+    assert_eq!(
+        conn.query_row("SELECT framework_version FROM module_facts", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .unwrap(),
+        "2.0.0"
+    );
+}
+
+/// The oldest database Nerve can still read reaches v7, end to end.
+///
+/// v1 is the interesting starting point rather than a redundant one: it is the only route on which
+/// v3's identity restatement, v4's re-attribution, v5's column, v6's tables and v7's rebuild all
+/// run in one call, so a step that displaced an earlier one shows up here and nowhere else.
+#[test]
+fn a_v1_database_reaches_v7_with_every_earlier_step_still_done() {
+    let conn = database_with_filesystem_rows(1);
+    assert!(!table_names(&conn).contains(&"git_rename_hypothesis".to_string()));
+
+    migrate(&conn).unwrap();
+
+    assert_eq!(schema_version(&conn).unwrap(), Some(SCHEMA_VERSION));
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM schema_version"),
+        SCHEMA_VERSION,
+        "one row per applied step"
+    );
+    assert_v4_re_attributed(&conn);
+    assert!(column_names(&conn, "module_facts").contains(&"framework_version".to_string()));
+    for table in V6_TABLES {
+        assert!(table_names(&conn).contains(&table.to_string()));
+    }
+    assert!(table_names(&conn).contains(&V7_TABLE.to_string()));
+    assert!(column_names(&conn, "git_commit").contains(&"summary_truncation".to_string()));
+    assert!(column_names(&conn, "git_rename_hypothesis").contains(&"to_blob_oid".to_string()));
+}
+
+/// Re-migrating a v7 database changes nothing: no version row, no table, no row.
+///
+/// v7 is where this matters most. Its rebuild is a `DROP TABLE` followed by a rename, so a version
+/// guard that ever let step 7 replay would not fail loudly — it would drop the rebuilt table and
+/// copy from a `git_rename_hypothesis` that no longer has a `blob_oid` column. Counting rows before
+/// and after is what would catch it.
+#[test]
+fn re_migrating_a_v7_database_changes_nothing_and_appends_no_version_row() {
+    let conn = v6_database_with_history();
+    migrate(&conn).unwrap();
+    let tables_before = table_names(&conn);
+    let renames_before = rename_labels(&conn);
+    let versions_before = scalar(&conn, "SELECT count(*) FROM schema_version");
+    assert_eq!(versions_before, SCHEMA_VERSION);
+    assert_eq!(renames_before.len(), 3);
+
+    migrate(&conn).unwrap();
+    migrate(&conn).unwrap();
+
+    assert_eq!(table_names(&conn), tables_before);
+    assert_eq!(rename_labels(&conn), renames_before, "the rebuild replayed");
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM schema_version"),
+        versions_before,
+        "re-migrating must not append a version row"
+    );
+    assert_eq!(schema_version(&conn).unwrap(), Some(SCHEMA_VERSION));
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM git_commit"), 2);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM git_change"), 4);
+    assert_row_counts(&conn, &V5_ROW_COUNTS);
+}
+
+/// **A failing v7 step commits nothing — including the `ALTER TABLE` that ran first.**
+///
+/// The sabotage is on the migration's **last** statement, `CREATE TABLE git_rename_analysis`, which
+/// runs after the `ALTER TABLE`, after the rebuild's create-copy, after the `DROP TABLE` and after
+/// the rename. Without a transaction the database would sit at v6 with `git_commit` already carrying
+/// `summary_truncation` and `git_rename_hypothesis` already rebuilt — a state no migration path
+/// could repair, because step 7 would never run again to finish the job and, worse, replaying it
+/// would copy from a table whose `blob_oid` column had already gone.
+///
+/// The three rename rows are what make this a measurement rather than a demonstration: they have to
+/// come back readable from the *v6* table, which only exists if the drop was rolled back too.
+#[test]
+fn an_interrupted_v7_migration_commits_nothing() {
+    let conn = v6_database_with_history();
+    conn.execute_batch("CREATE TABLE git_rename_analysis (sabotage TEXT);")
+        .unwrap();
+
+    let err = migrate(&conn).unwrap_err();
+    assert!(
+        matches!(err, nerve_store::StoreError::Sqlite(_)),
+        "expected the CREATE to fail, got {err}"
+    );
+
+    assert_eq!(
+        schema_version(&conn).unwrap(),
+        Some(6),
+        "a failed step must not record its version"
+    );
+    // The `ALTER TABLE` went back with it.
+    assert!(
+        !column_names(&conn, "git_commit").contains(&"summary_truncation".to_string()),
+        "the v7 column survived a failed migration; step 7 is not transactional"
+    );
+    // So did the whole rebuild: the v6 table is back, with its single blob column and all three rows.
+    assert!(
+        column_names(&conn, "git_rename_hypothesis").contains(&"blob_oid".to_string()),
+        "the rebuilt table survived a failed migration"
+    );
+    assert!(!column_names(&conn, "git_rename_hypothesis").contains(&"to_blob_oid".to_string()));
+    assert!(!table_names(&conn).contains(&"git_rename_hypothesis_v7".to_string()));
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM git_rename_hypothesis"),
+        3,
+        "the drop was not rolled back; the hypotheses are gone"
+    );
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM git_commit"), 2);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM git_change"), 4);
+    assert_eq!(
+        column_names(&conn, "git_rename_analysis"),
+        vec!["sabotage".to_string()],
+        "the pre-existing table was rewritten rather than left alone"
+    );
+    assert_row_counts(&conn, &V5_ROW_COUNTS);
+
+    // The control: the identical fixture without the sabotage reaches v7. Without this the test
+    // would pass just as well against a migration that could never succeed.
+    let clean = v6_database_with_history();
+    migrate(&clean).unwrap();
+    assert_eq!(schema_version(&clean).unwrap(), Some(SCHEMA_VERSION));
+    assert_eq!(rename_labels(&clean).len(), 3);
+}
+
+/// **The `CHECK` is where "evidence is never blended" stops being a convention.**
+///
+/// Four refusals, each the shape a future writer would actually produce, and each with a control
+/// that lands so the refusal is the constraint doing its job rather than a malformed statement:
+///
+/// - an exact-content row carrying a measurement — a score attached to a match that computed none;
+/// - a similar-content row without one — a similarity claim that never says what was counted;
+/// - a similar-content row whose two blob oids are equal — the exact matcher's row wearing the
+///   other evidence label, which is the blend §6's first constraint forbids;
+/// - `match_numerator > match_denominator` — a ratio above one, which is not a measurement.
+#[test]
+fn the_rename_check_refuses_every_blend_of_the_two_evidence_kinds() {
+    let conn = open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+    conn.execute("INSERT INTO repository VALUES ('r','p','/tmp','t')", [])
+        .unwrap();
+    let commit = "1".repeat(40);
+    let from_blob = "a".repeat(40);
+    let to_blob = "b".repeat(40);
+    conn.execute(COMMIT_INSERT, [&commit]).unwrap();
+
+    // The controls. One of each evidence kind, well formed, so every refusal below is about the
+    // combination and not about the statement.
+    conn.execute(EXACT_RENAME_INSERT, [&commit, &from_blob])
+        .unwrap();
+    let insert = "INSERT INTO git_rename_hypothesis
+         (repo_id, commit_oid, from_path, to_path, evidence, from_blob_oid, to_blob_oid,
+          matcher_id, matcher_version, match_numerator, match_denominator, ambiguity)
+     VALUES ('r', ?1, ?2, ?3, ?4, ?5, ?6, 'nerve-line-multiset', '1', ?7, ?8, 'unique')";
+    conn.execute(
+        insert,
+        rusqlite::params![
+            commit,
+            "moved.ts",
+            "moved-to.ts",
+            "similar_content",
+            from_blob,
+            to_blob,
+            1_320,
+            1_500
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM git_rename_hypothesis"),
+        2,
+        "both well-formed shapes must land, or the refusals prove nothing"
+    );
+
+    // 1. An exact match given a score.
+    let err = conn
+        .execute(
+            insert,
+            rusqlite::params![
+                commit,
+                "a.ts",
+                "b.ts",
+                "exact_content",
+                from_blob,
+                from_blob,
+                1,
+                1
+            ],
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("constraint"),
+        "an exact-content row carried a measurement: {err}"
+    );
+
+    // 2. A similarity claim that says nothing about what was counted.
+    let err = conn
+        .execute(
+            insert,
+            rusqlite::params![
+                commit,
+                "c.ts",
+                "d.ts",
+                "similar_content",
+                from_blob,
+                to_blob,
+                None::<i64>,
+                None::<i64>
+            ],
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("constraint"),
+        "a similar-content row omitted its measurement: {err}"
+    );
+
+    // 3. The exact matcher's row wearing the other label.
+    let err = conn
+        .execute(
+            insert,
+            rusqlite::params![
+                commit,
+                "e.ts",
+                "f.ts",
+                "similar_content",
+                from_blob,
+                from_blob,
+                9,
+                10
+            ],
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("constraint"),
+        "a similar-content row named one blob twice: {err}"
+    );
+
+    // 4. A ratio above one.
+    let err = conn
+        .execute(
+            insert,
+            rusqlite::params![
+                commit,
+                "g.ts",
+                "h.ts",
+                "similar_content",
+                from_blob,
+                to_blob,
+                11,
+                10
+            ],
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("constraint"),
+        "a measurement above one was accepted: {err}"
+    );
+
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM git_rename_hypothesis"),
+        2,
+        "a refused row landed anyway"
     );
 }
 

@@ -283,14 +283,92 @@ export function walkTerminationGloss(value: string): string {
   return WALK_TERMINATION[value] ?? 'This build has no description for that walk termination.';
 }
 
-/** What a rename hypothesis rests on. There is no score here and none may be invented. */
+/**
+ * What a rename hypothesis rests on. There is no score here and none may be invented.
+ *
+ * The two values are never blended into one number. A blended figure would let a byte-identical
+ * match and a 60%-similar one arrive at the same reading and become indistinguishable, which is
+ * the whole reason this is a vocabulary rather than a percentage.
+ */
 const RENAME_EVIDENCE: Record<string, string> = {
   exact_content:
     'A path was deleted and another added in the same commit naming the same blob, so the content is byte-identical. No similarity was computed and no threshold was applied.',
+  similar_content:
+    'The two paths name different blobs, and a named method measured how much content they share. The measurement means nothing without that method, its version and the threshold it was admitted against, so those are shown beside it and never on their own.',
 };
 
 export function renameEvidenceGloss(value: string): string {
   return RENAME_EVIDENCE[value] ?? 'This build has no description for that rename evidence.';
+}
+
+/**
+ * Whether a commit's similarity candidate set was measured in full.
+ *
+ * `refused_bound` is the value that cannot be a flag on a row, because there is no row: a commit
+ * that exceeded a bound records no similarity hypothesis at all. Without this the empty result
+ * reads as "nothing was renamed here", which is the opposite of what happened.
+ */
+const RENAME_ANALYSIS_COMPLETENESS: Record<string, string> = {
+  complete:
+    'Every candidate pair in this commit was measured, so the hypotheses shown are the full set for this matcher.',
+  partial:
+    'Some candidate pairs could not be measured. What is shown is not the full set, and the reasons are counted rather than summarised away.',
+  refused_bound:
+    'The candidate set exceeded a bound, so no similarity hypothesis was recorded for this commit at all. An empty result here is a refusal, not an absence of renames.',
+  not_attempted:
+    'The changes in this commit were not enumerated, so there was no candidate set to measure. That says nothing about whether the commit renamed anything.',
+};
+
+export function renameAnalysisCompletenessGloss(value: string): string {
+  return (
+    RENAME_ANALYSIS_COMPLETENESS[value] ??
+    'This build has no description for that candidate-set completeness.'
+  );
+}
+
+/**
+ * Whether a stored commit summary is the whole first line or a cut one.
+ *
+ * Three values rather than a checkbox, and `unknown` is the one that earns the third. A summary of
+ * exactly the stored bound is not truncated, so the length cannot be used to work the answer out
+ * afterwards — a commit read before Nerve recorded this simply cannot be told either way.
+ */
+const SUMMARY_TRUNCATION: Record<string, string> = {
+  complete: 'The whole first line of the commit message is here. Nothing was cut.',
+  truncated:
+    'The first line was longer than the stored bound and was cut, so this text ends where Nerve stopped rather than where the author did.',
+  unknown:
+    'This commit was recorded before Nerve stored whether a summary was cut, and it cannot be recovered. The length alone cannot tell a short first line from a cut one.',
+};
+
+export function summaryTruncationGloss(value: string): string {
+  return SUMMARY_TRUNCATION[value] ?? 'This build has no description for that summary state.';
+}
+
+/**
+ * Why a similarity candidate pair carries no measurement.
+ *
+ * Every one of these is an unanswered question rather than a negative answer. A pair that could not
+ * be measured is not a pair that was measured and found unrelated, and reading it as one is the
+ * mistake these reasons exist to prevent.
+ */
+const SIMILARITY_UNMEASURED: Record<string, string> = {
+  'blob-absent':
+    'The blob was not in the object store, so the pair could not be measured. An unanswered question, not a negative answer.',
+  'blob-unreadable':
+    'The blob was named by the tree and could not be read back, so the pair could not be measured.',
+  'blob-too-large':
+    'The blob was larger than the matcher will inflate, so it was refused rather than read. A bound Nerve set, not a property of the file.',
+  'blob-binary':
+    'The blob contains a NUL byte, so it has no lines, and a line ratio over it would be a number without a meaning.',
+  'blob-too-small':
+    'The blob has fewer lines than the floor beneath which a ratio is not a measurement. Two one-line files agreeing says nothing.',
+};
+
+export function similarityUnmeasuredGloss(value: string): string {
+  return (
+    SIMILARITY_UNMEASURED[value] ?? 'This build has no description for that unmeasured reason.'
+  );
 }
 
 /**

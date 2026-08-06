@@ -21,5 +21,6 @@ pub use model::{
 pub use vocab::{
     AssertionStatus, ChangeKind, ChangesEnumerated, Directness, EndpointKind, EntityKind,
     EvidenceSourceType, FirstObservedKind, HistoryFreshness, ParentCompleteness, PathRole,
-    Relation, RenameAmbiguity, RenameEvidence, UnresolvedCategory, WalkTermination,
+    Relation, RenameAmbiguity, RenameAnalysisCompleteness, RenameEvidence, SimilarityUnmeasured,
+    SummaryTruncation, UnresolvedCategory, WalkTermination,
 };

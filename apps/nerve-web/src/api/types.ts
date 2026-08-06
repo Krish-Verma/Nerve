@@ -458,7 +458,21 @@ export interface HistoryRename {
   to_path: string;
   /** A `RenameEvidence` member. */
   evidence: string;
-  blob_oid: string;
+  /**
+   * The blob each side names. Two, not one, since schema v7: a similarity pair has two blobs, and
+   * for an `exact_content` hypothesis they are equal — that equality is the evidence.
+   */
+  from_blob_oid: string;
+  to_blob_oid: string;
+  /** Which method produced this row, and its version. A measurement without them means nothing. */
+  matcher_id: string;
+  matcher_version: string;
+  /**
+   * The measurement, as an exact rational rather than a float. `null` on both for `exact_content`,
+   * which computes no similarity at all — not a perfect score, no score.
+   */
+  match_numerator: number | null;
+  match_denominator: number | null;
   /** A `RenameAmbiguity` member. Not decoration: `many_to` is not `unique`. */
   ambiguity: string;
   ambiguity_note: string;

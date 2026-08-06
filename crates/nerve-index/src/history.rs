@@ -53,7 +53,7 @@ use std::time::Instant;
 
 use nerve_core::vocab::{
     ChangeKind, ChangesEnumerated, ParentCompleteness, RenameAmbiguity, RenameEvidence,
-    WalkTermination,
+    SummaryTruncation, WalkTermination,
 };
 use nerve_store::{ChangeRow, CommitRow, IngestRow, RenameRow};
 
@@ -91,6 +91,18 @@ pub const MAX_CHANGES_PER_COMMIT: usize = 10_000;
 /// repository that accepts contributions. 512 bytes is more than a conventional subject line and
 /// bounds what one commit can put in the database. Truncation is **counted**, never silent.
 pub const MAX_SUMMARY_BYTES: usize = 512;
+
+/// The producer named on every exact-content rename hypothesis.
+///
+/// On the row rather than left implicit, because schema v7 admits more than one matcher and a row
+/// that did not name its own producer would have to be attributed by a join a caller might forget.
+/// This one reads no blob content at all — the oids are already in the tree diff — which is exactly
+/// why it records no measurement and no analysis row.
+pub const EXACT_MATCHER_ID: &str = "git-blob-oid";
+
+/// Version of [`EXACT_MATCHER_ID`]. Changing what the matcher means is a version bump here, never a
+/// silent redefinition of rows already on disk.
+pub const EXACT_MATCHER_VERSION: &str = "1";
 
 /// Bytes of an author or committer identity that are stored when identity capture is requested.
 ///
@@ -994,6 +1006,7 @@ impl<'a> Walker<'a> {
         enumeration: ChangesEnumerated,
         options: &HistoryOptions,
     ) -> CommitRow {
+        let (summary, summary_truncation) = self.summary(&commit.message);
         CommitRow {
             commit_oid,
             tree_oid: commit.tree.to_hex(),
@@ -1008,27 +1021,42 @@ impl<'a> Walker<'a> {
             committer_ident: options
                 .with_identity
                 .then(|| self.identity(&commit.committer)),
-            summary: self.summary(&commit.message),
+            summary,
+            summary_truncation,
             is_merge: commit.parents.len() > 1,
         }
     }
 
-    /// The commit summary: first line, bounded, lossy, never interpreted.
+    /// The commit summary: first line, bounded, lossy, never interpreted — and whether it was cut.
     ///
     /// The order matters. Lossy conversion happens **before** the bound, because a replacement
     /// character is three bytes where the invalid one was one, so bounding first would let a summary
     /// grow past the bound on its way into the database. Truncation is counted, because a consumer
     /// cannot otherwise tell a short summary from a cut one.
-    fn summary(&mut self, message: &[u8]) -> String {
+    ///
+    /// **The per-record verdict is decided here, where the untruncated length is still in hand, and
+    /// is never [`SummaryTruncation::Unknown`].** `Unknown` is what the v6→v7 migration wrote for
+    /// commits recorded before the column existed; a fresh write knows the answer, and returning
+    /// `Unknown` from a writer that measured the length would be manufacturing an absence. The
+    /// comparison is `>` rather than `>=`, so a first line of exactly [`MAX_SUMMARY_BYTES`] is
+    /// [`SummaryTruncation::Complete`] — the boundary case a length-based reconstruction would get
+    /// wrong, which is why the column exists at all.
+    fn summary(&mut self, message: &[u8]) -> (String, SummaryTruncation) {
         let first_line = message
             .split(|byte| *byte == b'\n')
             .next()
             .unwrap_or_default();
         let text = String::from_utf8_lossy(first_line).into_owned();
-        if text.len() > MAX_SUMMARY_BYTES {
+        let truncation = if text.len() > MAX_SUMMARY_BYTES {
             self.summaries_truncated += 1;
-        }
-        self.bound(text, MAX_SUMMARY_BYTES, form::SUMMARY_TRUNCATED)
+            SummaryTruncation::Truncated
+        } else {
+            SummaryTruncation::Complete
+        };
+        (
+            self.bound(text, MAX_SUMMARY_BYTES, form::SUMMARY_TRUNCATED),
+            truncation,
+        )
     }
 
     fn identity(&mut self, identity: &Identity) -> String {
@@ -1125,7 +1153,16 @@ fn rename_hypotheses(commit_oid: &str, changes: &[ChangeRow]) -> Vec<RenameRow> 
                     from_path: (*from_path).to_string(),
                     to_path: (*to_path).to_string(),
                     evidence: RenameEvidence::ExactContent,
-                    blob_oid: (*blob).to_string(),
+                    // One blob, named twice. The identity of the two oids *is* the evidence, and
+                    // the schema's `CHECK` requires it of an `exact_content` row.
+                    from_blob_oid: (*blob).to_string(),
+                    to_blob_oid: (*blob).to_string(),
+                    matcher_id: EXACT_MATCHER_ID.to_string(),
+                    matcher_version: EXACT_MATCHER_VERSION.to_string(),
+                    // No measurement, rather than a perfect one. An exact match computes no
+                    // similarity, so a `1/1` here would be a number this matcher never counted.
+                    match_numerator: None,
+                    match_denominator: None,
                     ambiguity,
                 });
             }
@@ -1252,18 +1289,57 @@ mod tests {
         let store = ObjectStore::open(store_dir.path()).unwrap();
         let mut walker = Walker::new(&store);
 
-        let short = walker.summary(b"first line\nsecond line\n");
+        let (short, truncation) = walker.summary(b"first line\nsecond line\n");
         assert_eq!(short, "first line");
+        assert_eq!(truncation, SummaryTruncation::Complete);
         assert_eq!(walker.summaries_truncated, 0);
 
         // Three-byte characters, so a naive slice at 512 would land inside one.
         let wide = "\u{4e00}".repeat(400);
-        let bounded = walker.summary(wide.as_bytes());
+        let (bounded, truncation) = walker.summary(wide.as_bytes());
         assert!(bounded.len() <= MAX_SUMMARY_BYTES);
         assert_eq!(bounded.len(), 510, "512 is not a multiple of three");
         assert!(wide.starts_with(&bounded));
+        assert_eq!(truncation, SummaryTruncation::Truncated);
         assert_eq!(walker.summaries_truncated, 1);
         assert_eq!(walker.refused.get(form::SUMMARY_TRUNCATED), Some(&1));
+    }
+
+    /// **The boundary case the column exists for.** Exactly `MAX_SUMMARY_BYTES` is *not* truncated.
+    ///
+    /// This is why `summary_truncation` is stored rather than reconstructed from the stored length:
+    /// `length(summary) = MAX_SUMMARY_BYTES ⟹ truncated` would call this summary cut when nothing
+    /// was cut from it, and one byte more is where the answer genuinely changes. Neither answer is
+    /// [`SummaryTruncation::Unknown`] — a writer that measured the length knows.
+    #[test]
+    fn a_summary_of_exactly_the_bound_is_complete_and_one_byte_more_is_truncated() {
+        let store_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(store_dir.path().join("objects")).unwrap();
+        let store = ObjectStore::open(store_dir.path()).unwrap();
+        let mut walker = Walker::new(&store);
+
+        let exact = "a".repeat(MAX_SUMMARY_BYTES);
+        let (stored, truncation) = walker.summary(exact.as_bytes());
+        assert_eq!(stored.len(), MAX_SUMMARY_BYTES);
+        assert_eq!(stored, exact, "nothing was cut, so nothing may be dropped");
+        assert_eq!(truncation, SummaryTruncation::Complete);
+        assert_eq!(walker.summaries_truncated, 0);
+
+        let over = "a".repeat(MAX_SUMMARY_BYTES + 1);
+        let (stored, truncation) = walker.summary(over.as_bytes());
+        assert_eq!(stored.len(), MAX_SUMMARY_BYTES);
+        assert_eq!(truncation, SummaryTruncation::Truncated);
+        assert_eq!(walker.summaries_truncated, 1);
+
+        // And a short one, so the test is a measurement rather than a demonstration that the
+        // function returns `Truncated` for everything at or above the bound.
+        let (stored, truncation) = walker.summary(b"short");
+        assert_eq!(stored, "short");
+        assert_eq!(truncation, SummaryTruncation::Complete);
+        assert_eq!(
+            walker.summaries_truncated, 1,
+            "unchanged by a short summary"
+        );
     }
 
     /// Invalid UTF-8 is replaced before the bound is applied, because a replacement character is
@@ -1275,8 +1351,9 @@ mod tests {
         let store = ObjectStore::open(store_dir.path()).unwrap();
         let mut walker = Walker::new(&store);
 
-        let bounded = walker.summary(&[0xff; 200]);
+        let (bounded, truncation) = walker.summary(&[0xff; 200]);
         assert!(bounded.len() <= MAX_SUMMARY_BYTES);
+        assert_eq!(truncation, SummaryTruncation::Truncated);
         assert_eq!(walker.summaries_truncated, 1, "200 invalid bytes is 600");
     }
 
@@ -1310,6 +1387,7 @@ mod tests {
             author_ident: None,
             committer_ident: None,
             summary: "s".to_string(),
+            summary_truncation: SummaryTruncation::Complete,
             is_merge: false,
         }
     }
@@ -1416,7 +1494,12 @@ mod tests {
                     from_path: "old.txt".to_string(),
                     to_path: "p.txt".to_string(),
                     evidence: RenameEvidence::ExactContent,
-                    blob_oid: "b".repeat(40),
+                    from_blob_oid: "b".repeat(40),
+                    to_blob_oid: "b".repeat(40),
+                    matcher_id: EXACT_MATCHER_ID.to_string(),
+                    matcher_version: EXACT_MATCHER_VERSION.to_string(),
+                    match_numerator: None,
+                    match_denominator: None,
                     ambiguity: RenameAmbiguity::Unique,
                 }],
             )

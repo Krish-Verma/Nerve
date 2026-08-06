@@ -2437,7 +2437,16 @@ fn rename_json(rename: &nerve_store::RenameRow) -> serde_json::Value {
         "from_path": rename.from_path,
         "to_path": rename.to_path,
         "evidence": rename.evidence.as_str(),
-        "blob_oid": rename.blob_oid,
+        // Two blob oids since schema v7, because a similarity pair has two. For an exact-content
+        // hypothesis they are equal, and that identity is the evidence rather than a redundancy.
+        "from_blob_oid": rename.from_blob_oid,
+        "to_blob_oid": rename.to_blob_oid,
+        // The producer of the row, and its measurement as two integers rather than one float. Both
+        // measurement fields are null on an exact match, which computes no similarity at all.
+        "matcher_id": rename.matcher_id,
+        "matcher_version": rename.matcher_version,
+        "match_numerator": rename.match_numerator,
+        "match_denominator": rename.match_denominator,
         "ambiguity": rename.ambiguity.as_str(),
         "ambiguity_note": rename.ambiguity.note(),
         // Stated on every row rather than in a footnote a consumer can drop. Git records no rename;
@@ -3197,9 +3206,10 @@ fn run_history_file(output: &Output, path: &Path, tree_path: &str, limit: usize)
         ));
         output.line(format!("  to             {}", inert_text(&rename.to_path)));
         output.line(format!(
-            "  evidence       {} · blob {}",
+            "  evidence       {} · blob {} → {}",
             rename.evidence.as_str(),
-            rename.blob_oid
+            rename.from_blob_oid,
+            rename.to_blob_oid
         ));
         output.line(format!(
             "  ambiguity      {} — {}",

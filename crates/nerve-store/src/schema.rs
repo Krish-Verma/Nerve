@@ -1,5 +1,5 @@
 //! Schema v1 (ADR-0003), v2 (Slice 3), v3 (Slice 3b), v4 (Slice 5d-i), v5 (Slice 10a),
-//! v6 (Slice 12b), and migrations.
+//! v6 (Slice 12b), v7 (Slice 12c-ii), and migrations.
 //!
 //! Migrations are append-only. `V1` is immutable: a database written by an older build must be
 //! upgradable by replaying the later steps, so editing an already-shipped step in place would
@@ -12,7 +12,7 @@ use nerve_core::ids;
 use crate::error::{Result, StoreError};
 
 /// The schema version this build writes and understands.
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 /// Human-readable description recorded in `schema_version`.
 pub const SCHEMA_V1_DESCRIPTION: &str =
@@ -41,6 +41,12 @@ pub const SCHEMA_V5_DESCRIPTION: &str =
 pub const SCHEMA_V6_DESCRIPTION: &str =
     "Slice 12b: the historical model — git_commit, git_change, git_rename_hypothesis and \
      git_history_ingest; history availability recorded as data, never inferred from absence";
+
+/// Human-readable description recorded in `schema_version` for the Slice 12c-ii upgrade.
+pub const SCHEMA_V7_DESCRIPTION: &str =
+    "Slice 12c-ii: git_rename_hypothesis rebuilt with two blob oids, a named matcher and an \
+     integer measurement; git_rename_analysis for per-commit candidate-set completeness; \
+     git_commit.summary_truncation, defaulting to 'unknown' because v6 rows cannot be backfilled";
 
 const V1: &str = r#"
 CREATE TABLE repository (
@@ -330,6 +336,13 @@ ALTER TABLE module_facts ADD COLUMN framework_version TEXT NOT NULL DEFAULT '';
 ///
 /// No `IF NOT EXISTS`: no permanent table in this schema has it, and a migration that tolerated
 /// re-application would hide a real double-apply.
+///
+/// **Superseded in part by [`V7`], which is why the SQL below still says `blob_oid`.** Slice 12c-ii
+/// replaces `git_rename_hypothesis.blob_oid` with `from_blob_oid` and `to_blob_oid`, because a
+/// similarity pair has two blobs and one `NOT NULL` column cannot hold both. This string is not
+/// edited: a v5 database still has to reach v6 by running exactly what v6 shipped, and then reach
+/// v7 by running the rebuild. Reading the current shape off this constant is therefore wrong —
+/// [`V7`] is where `git_rename_hypothesis` is defined today.
 const V6: &str = r#"
 CREATE TABLE git_commit (
     repo_id              TEXT    NOT NULL REFERENCES repository(repo_id),
@@ -395,6 +408,115 @@ CREATE TABLE git_history_ingest (
 );
 "#;
 
+/// Schema v7 — Slice 12c-ii. Storage for a second kind of rename evidence, and for what a summary is.
+///
+/// Three changes, and the first two are the ones a reader will want justified.
+///
+/// **`git_rename_hypothesis` is rebuilt rather than altered**, because `blob_oid TEXT NOT NULL`
+/// becomes `from_blob_oid` and `to_blob_oid`: a similarity pair names two blobs and one column
+/// cannot hold both. SQLite has no `ALTER TABLE … RENAME COLUMN` that could split one column into
+/// two, and no way to add a table-level `CHECK` to an existing table, so this is the documented
+/// create-copy-drop-rename. It is **lossless**: every v6 row copies with
+/// `from_blob_oid = to_blob_oid = blob_oid`, `matcher_id = 'git-blob-oid'`, `matcher_version = '1'`
+/// and no measurement, which is precisely what an exact-content hypothesis is.
+///
+/// **Nothing in this schema references `git_rename_hypothesis` by foreign key**, so the drop and the
+/// rename violate no constraint even though `PRAGMA foreign_keys=ON` is set for every connection
+/// (`db.rs:37`). The direction of the dependency is the other way round — the table points at
+/// `repository` and `git_commit`, and both survive the rebuild untouched. That is also why the
+/// pragma cannot be, and is not, turned off here: it cannot be changed inside a transaction, and
+/// this step has no need to. Each entry in [`MIGRATIONS`] runs in its own transaction
+/// (`migrate()`, below), so a failure anywhere in this step rolls the whole of it back and leaves
+/// the database at v6 — including the `ALTER TABLE` that ran first.
+///
+/// **The `CHECK` is where "evidence is never blended" stops being a convention.** An exact-content
+/// row cannot carry a measurement and a similar-content row cannot omit one, so a future writer
+/// that tried to give an exact match a score, or to record a similarity hypothesis without saying
+/// what was counted, gets a constraint violation rather than a code review. The measurement is two
+/// integers rather than a float on purpose: `1320 / 1500` says what was counted and can be checked
+/// by hand, where `0.88` is a number comparable against anything and rounds away its own meaning —
+/// which is the generic `confidence: float` `CLAUDE.md` §3 forbids, arriving by the back door.
+///
+/// The primary key needs no widening. For one `(commit, from_path, to_path)` the two blob oids are
+/// fixed by the tree diff, so a pair is exact or similar and never both.
+///
+/// **`git_rename_analysis` is per commit, not per row**, because the decisive case has no row to
+/// carry a flag: when the candidate set exceeds a bound the commit records *no* similarity
+/// hypothesis, and an absence would once again have to be interpreted — the failure
+/// `git_commit.changes_enumerated` exists to prevent. `matcher_id` is in the primary key so a
+/// second matcher can analyse the same commit later without a migration. Exact-content renames get
+/// no analysis row at all, and that is a claim rather than an omission: the exact matcher reads no
+/// blob content, so it is complete exactly when the diff was enumerated, which
+/// `git_commit.changes_enumerated` already records.
+///
+/// **`git_commit.summary_truncation` defaults to `'unknown'`, and that is the honest migration.** A
+/// v6 row cannot be backfilled, and length is not the answer: a summary of exactly
+/// `MAX_SUMMARY_BYTES` is *not* truncated, so `length(summary) = bound ⟹ truncated` would
+/// manufacture a false positive on the one boundary case that matters. `unknown` is a third
+/// vocabulary value rather than a boolean precisely so the past does not have to be guessed at.
+const V7: &str = r#"
+ALTER TABLE git_commit ADD COLUMN summary_truncation TEXT NOT NULL DEFAULT 'unknown';
+
+CREATE TABLE git_rename_hypothesis_v7 (
+    repo_id           TEXT    NOT NULL REFERENCES repository(repo_id),
+    commit_oid        TEXT    NOT NULL,
+    from_path         TEXT    NOT NULL,
+    to_path           TEXT    NOT NULL,
+    evidence          TEXT    NOT NULL,   -- closed vocabulary: RenameEvidence
+    from_blob_oid     TEXT    NOT NULL,
+    to_blob_oid       TEXT    NOT NULL,
+    matcher_id        TEXT    NOT NULL,   -- which method produced this row
+    matcher_version   TEXT    NOT NULL,
+    match_numerator   INTEGER,            -- NULL iff evidence = exact_content
+    match_denominator INTEGER,            -- NULL iff evidence = exact_content
+    ambiguity         TEXT    NOT NULL,   -- closed vocabulary: RenameAmbiguity
+    PRIMARY KEY (repo_id, commit_oid, from_path, to_path),
+    FOREIGN KEY (repo_id, commit_oid) REFERENCES git_commit(repo_id, commit_oid),
+    CHECK (
+        (evidence = 'exact_content'
+            AND from_blob_oid = to_blob_oid
+            AND match_numerator IS NULL AND match_denominator IS NULL)
+     OR (evidence = 'similar_content'
+            AND from_blob_oid <> to_blob_oid
+            AND match_numerator IS NOT NULL AND match_denominator IS NOT NULL
+            AND match_denominator > 0
+            AND match_numerator >= 0
+            AND match_numerator <= match_denominator)
+    )
+);
+
+INSERT INTO git_rename_hypothesis_v7
+    (repo_id, commit_oid, from_path, to_path, evidence,
+     from_blob_oid, to_blob_oid, matcher_id, matcher_version,
+     match_numerator, match_denominator, ambiguity)
+SELECT repo_id, commit_oid, from_path, to_path, evidence,
+       blob_oid, blob_oid, 'git-blob-oid', '1',
+       NULL, NULL, ambiguity
+  FROM git_rename_hypothesis;
+
+DROP TABLE git_rename_hypothesis;
+
+ALTER TABLE git_rename_hypothesis_v7 RENAME TO git_rename_hypothesis;
+
+CREATE TABLE git_rename_analysis (
+    repo_id               TEXT    NOT NULL REFERENCES repository(repo_id),
+    commit_oid            TEXT    NOT NULL,
+    matcher_id            TEXT    NOT NULL,
+    matcher_version       TEXT    NOT NULL,
+    threshold_numerator   INTEGER NOT NULL,
+    threshold_denominator INTEGER NOT NULL,
+    deletions_considered  INTEGER NOT NULL,
+    additions_considered  INTEGER NOT NULL,
+    pairs_considered      INTEGER NOT NULL,
+    pairs_measured        INTEGER NOT NULL,
+    completeness          TEXT    NOT NULL,   -- closed vocabulary: RenameAnalysisCompleteness
+    unmeasured            TEXT    NOT NULL,   -- JSON object, reason -> count
+    PRIMARY KEY (repo_id, commit_oid, matcher_id),
+    FOREIGN KEY (repo_id, commit_oid) REFERENCES git_commit(repo_id, commit_oid),
+    CHECK (threshold_denominator > 0 AND pairs_measured <= pairs_considered)
+);
+"#;
+
 /// One migration step. Almost all of them are SQL; v3 is not, because it must recompute a
 /// BLAKE3 digest and SQLite has no such function.
 enum Step {
@@ -407,13 +529,14 @@ enum Step {
 /// Migration steps, in application order: `(version, description, step)`.
 ///
 /// Appending to this list is how the schema evolves. Editing an existing entry is prohibited.
-const MIGRATIONS: [(i64, &str, Step); 6] = [
+const MIGRATIONS: [(i64, &str, Step); 7] = [
     (1, SCHEMA_V1_DESCRIPTION, Step::Sql(V1)),
     (2, SCHEMA_V2_DESCRIPTION, Step::Sql(V2)),
     (3, SCHEMA_V3_DESCRIPTION, Step::Rust(migrate_v3)),
     (4, SCHEMA_V4_DESCRIPTION, Step::Rust(migrate_v4)),
     (5, SCHEMA_V5_DESCRIPTION, Step::Sql(V5)),
     (6, SCHEMA_V6_DESCRIPTION, Step::Sql(V6)),
+    (7, SCHEMA_V7_DESCRIPTION, Step::Sql(V7)),
 ];
 
 /// Apply [`V3`], then restate every `occurrence_id` under the ADR-0006 tuple.

@@ -28,7 +28,8 @@ use std::path::{Path, PathBuf};
 use nerve_core::vocab::{
     AssertionStatus, ChangeKind, ChangesEnumerated, Directness, EntityKind, EvidenceSourceType,
     FirstObservedKind, HistoryFreshness, ParentCompleteness, Relation, RenameAmbiguity,
-    RenameEvidence, UnresolvedCategory, WalkTermination,
+    RenameAnalysisCompleteness, RenameEvidence, SimilarityUnmeasured, SummaryTruncation,
+    UnresolvedCategory, WalkTermination,
 };
 use nerve_index::docref;
 use nerve_index::docs::{AdrStatus, STATUS_UNPARSED};
@@ -90,6 +91,108 @@ const GLOSS_TABLES: [(&str, &str); 19] = [
     ("vocab.ts", "FIRST_OBSERVED_KIND"),
     ("vocab.ts", "HISTORY_FRESHNESS"),
 ];
+
+/// Gloss tables the interface **declares and does not yet render**.
+///
+/// Slice 12c-ii adds storage and vocabulary for similarity renames; the surfaces that read
+/// `git_rename_analysis` and `git_commit.summary_truncation` are a later pass. Nothing imports
+/// these three functions yet, so Rollup drops the tables from the bundle, and listing them in
+/// [`GLOSS_TABLES`] would fail the staleness check for a reason that is not staleness — the source
+/// and the artifact agree exactly, and both agree that nothing renders them.
+///
+/// **The list exists so the gap is data rather than an omission**, which is the same discipline
+/// `git_commit.changes_enumerated` applies to a commit with no change rows. A table on neither list
+/// fails [`every_gloss_table_the_source_declares_is_on_exactly_one_list`] by name, and the pass that
+/// renders one of these has to move it rather than remember to add it: leaving it here once a view
+/// imports it makes the bundle check stop covering a gloss that is now on screen.
+///
+/// Their per-value coverage is guarded regardless — `every_rename_analysis_completeness_is_glossed`
+/// and its two siblings read the TypeScript source, so a Rust value without a sentence fails today.
+const DECLARED_NOT_RENDERED: [(&str, &str); 3] = [
+    ("vocab.ts", "RENAME_ANALYSIS_COMPLETENESS"),
+    ("vocab.ts", "SUMMARY_TRUNCATION"),
+    ("vocab.ts", "SIMILARITY_UNMEASURED"),
+];
+
+/// Every `const NAME: Record<…>` a gloss source declares, in declaration order.
+///
+/// A scan rather than a written-out list, because a written-out list is the thing being checked.
+///
+/// **`export` is stripped first, and that is not tidiness.** Matching only a bare `const ` would
+/// have made one keyword enough to hide a table from
+/// [`every_gloss_table_the_source_declares_is_on_exactly_one_list`]: `export const FOO: Record<…>`
+/// would appear on neither list and fail nothing, which is a guard going quietly vacuous — the
+/// defect class this file exists to catch, arriving in the file that catches it. No gloss table is
+/// exported today; the point is that one becoming exported must not turn the check off.
+fn declared_gloss_tables(source: &str) -> Vec<String> {
+    source
+        .lines()
+        .filter_map(|line| {
+            let line = line.strip_prefix("export ").unwrap_or(line);
+            let rest = line.strip_prefix("const ")?;
+            let (name, tail) = rest.split_once(':')?;
+            tail.trim_start()
+                .starts_with("Record<")
+                .then(|| name.trim().to_string())
+        })
+        .collect()
+}
+
+/// **A gloss table belongs to exactly one list, and a new one belongs to neither by accident.**
+///
+/// The failure this closes is the quiet one: adding a table to `vocab.ts`, glossing every value
+/// correctly, and never wiring it to the bundle check — which is `82a6ff3`'s defect with the
+/// omission moved one file to the left. Being on *both* lists is a failure too, because
+/// [`DECLARED_NOT_RENDERED`] would then be claiming something the bundle check contradicts.
+#[test]
+fn every_gloss_table_the_source_declares_is_on_exactly_one_list() {
+    let mut unlisted = Vec::new();
+    let mut both = Vec::new();
+    let mut seen = 0;
+    for file in ["vocab.ts", "format.ts"] {
+        for table in declared_gloss_tables(&read(&format!("apps/nerve-web/src/{file}"))) {
+            seen += 1;
+            let rendered = GLOSS_TABLES.contains(&(file, table.as_str()));
+            let deferred = DECLARED_NOT_RENDERED.contains(&(file, table.as_str()));
+            match (rendered, deferred) {
+                (false, false) => unlisted.push(format!("{file}/{table}")),
+                (true, true) => both.push(format!("{file}/{table}")),
+                _ => {}
+            }
+        }
+    }
+    // Anti-vacuity: a scan that found nothing would make every assertion below hold.
+    assert!(seen >= 20, "the scan found only {seen} gloss tables");
+    assert!(
+        unlisted.is_empty(),
+        "gloss table(s) on neither list — add to GLOSS_TABLES once a view renders one, or to \
+         DECLARED_NOT_RENDERED until it does: {unlisted:?}"
+    );
+    assert!(
+        both.is_empty(),
+        "gloss table(s) on both lists; DECLARED_NOT_RENDERED must be moved out once rendered: \
+         {both:?}"
+    );
+
+    // Every deferred table is genuinely unrendered: if its prose is in the bundle, a view imports
+    // it and the entry is stale. This is what stops the list becoming a way to opt out.
+    let bundle_bytes =
+        std::fs::read(repository_root().join("crates/nerve-server/assets/assets/nerve.js"))
+            .expect("the embedded bundle must exist");
+    let bundle = String::from_utf8_lossy(&bundle_bytes);
+    for (file, table) in DECLARED_NOT_RENDERED {
+        let source = read(&format!("apps/nerve-web/src/{file}"));
+        let phrases = quoted_prose_in_table(&source, table);
+        assert!(!phrases.is_empty(), "{file}/{table} declares no prose");
+        for phrase in phrases {
+            assert!(
+                !bundle.contains(&phrase),
+                "{file}/{table} is in the shipped bundle, so something renders it — move it to \
+                 GLOSS_TABLES"
+            );
+        }
+    }
+}
 
 /// The interface compiled into the binary must be built from the interface source.
 ///
@@ -800,6 +903,54 @@ fn every_first_observed_kind_is_glossed() {
     );
 }
 
+/// The three vocabularies Slice 12c-ii adds, each guarded by name.
+///
+/// `SUMMARY_TRUNCATION` is the one that matters most on this list. Its `unknown` value is what the
+/// v6 to v7 migration wrote for every commit already on disk, so it is the *common* value on an
+/// upgraded database — an interface that fell back to "this build has no description" for it would
+/// be silent about the whole of a user's existing history.
+#[test]
+fn every_rename_analysis_completeness_is_glossed() {
+    let expected: Vec<String> = RenameAnalysisCompleteness::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    covers(
+        "RenameAnalysisCompleteness::ALL",
+        "RENAME_ANALYSIS_COMPLETENESS (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "RENAME_ANALYSIS_COMPLETENESS"),
+    );
+}
+
+#[test]
+fn every_summary_truncation_value_is_glossed() {
+    let expected: Vec<String> = SummaryTruncation::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    covers(
+        "SummaryTruncation::ALL",
+        "SUMMARY_TRUNCATION (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "SUMMARY_TRUNCATION"),
+    );
+}
+
+#[test]
+fn every_similarity_unmeasured_reason_is_glossed() {
+    let expected: Vec<String> = SimilarityUnmeasured::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    covers(
+        "SimilarityUnmeasured::ALL",
+        "SIMILARITY_UNMEASURED (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "SIMILARITY_UNMEASURED"),
+    );
+}
+
 #[test]
 fn every_history_freshness_verdict_is_glossed() {
     let expected: Vec<String> = HistoryFreshness::ALL
@@ -862,6 +1013,9 @@ fn no_gloss_is_empty_or_the_fallback_sentence() {
         (vocab_ts(), "RENAME_AMBIGUITY"),
         (vocab_ts(), "FIRST_OBSERVED_KIND"),
         (vocab_ts(), "HISTORY_FRESHNESS"),
+        (vocab_ts(), "RENAME_ANALYSIS_COMPLETENESS"),
+        (vocab_ts(), "SUMMARY_TRUNCATION"),
+        (vocab_ts(), "SIMILARITY_UNMEASURED"),
         (format_ts(), "SOURCE_TYPES"),
         (format_ts(), "DIRECTNESS"),
         (format_ts(), "STATUS_GLOSS"),
