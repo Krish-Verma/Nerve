@@ -2685,9 +2685,13 @@ fn run_history_sync(
     }
 
     let root = path.unwrap_or_else(|| PathBuf::from("."));
+    // Similarity limits are the shipped defaults here. They are a field on `HistoryOptions` so a
+    // test can tighten them and observe a bound refusal end to end; exposing them as flags is a
+    // presentation decision that belongs with the rest of 12c-ii's surface work.
     let options = nerve_index::HistoryOptions {
         max_commits,
         with_identity,
+        ..nerve_index::HistoryOptions::default()
     };
     match nerve_index::ingest_history(&root, &options) {
         Ok(outcome) => {

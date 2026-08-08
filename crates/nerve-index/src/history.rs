@@ -63,6 +63,7 @@ use crate::error::{IndexError, Result};
 use crate::gitinfo;
 use crate::gitobj::{self, Commit, Identity, Object, ObjectStore, Oid, TreeEntry};
 use crate::pipeline::RunStatus;
+use crate::similarity::{self, SimilarityAnalysis, SimilarityLimits};
 
 /// Commits one sync will walk, however large the request.
 ///
@@ -177,6 +178,14 @@ pub struct HistoryOptions {
     /// addresses would put third-party personal data in the index with no query behind it. The
     /// columns exist so that enabling it later needs no migration.
     pub with_identity: bool,
+    /// What the [`similarity`] matcher is allowed to read and record, per commit.
+    ///
+    /// A field rather than a set of constants reached directly, so that **every bound is
+    /// exercisable from outside** — a sync can be run with tight limits and the resulting
+    /// [`nerve_core::vocab::RenameAnalysisCompleteness::RefusedBound`] observed end to end, rather
+    /// than only in a unit test over the matcher. The admission threshold is deliberately not part
+    /// of it; see [`SimilarityLimits`].
+    pub similarity: SimilarityLimits,
 }
 
 impl Default for HistoryOptions {
@@ -184,6 +193,7 @@ impl Default for HistoryOptions {
         Self {
             max_commits: MAX_HISTORY_COMMITS,
             with_identity: false,
+            similarity: SimilarityLimits::default(),
         }
     }
 }
@@ -216,8 +226,19 @@ pub struct HistoryOutcome {
     pub commits_repaired: usize,
     /// `git_change` rows written.
     pub changes_written: usize,
-    /// `git_rename_hypothesis` rows written.
+    /// `git_rename_hypothesis` rows written by the **exact-content** matcher.
+    ///
+    /// Kept apart from [`HistoryOutcome::similar_renames_written`] and **never summed with it**.
+    /// The two are different claims resting on different evidence, in the manner of the
+    /// `py-framework` and `ts-js-framework` precision tables: one says *these two paths named the
+    /// same bytes*, the other says *a named method measured how much two different blobs share*.
+    /// A single total would be a number that describes neither.
     pub renames_written: usize,
+    /// `git_rename_hypothesis` rows written by the **similarity** matcher.
+    pub similar_renames_written: usize,
+    /// `git_rename_analysis` rows written — exactly one per newly recorded commit, including
+    /// commits with no candidate pair at all, because an absence must be explained.
+    pub rename_analyses_written: usize,
     /// Why the walk stopped. [`WalkTermination::CommitBudget`] is **Nerve's** boundary and must
     /// never be read as the repository being unable to go further.
     pub walk_terminated_by: WalkTermination,
@@ -324,6 +345,8 @@ pub fn ingest_history(root: &Path, options: &HistoryOptions) -> Result<HistoryOu
         commits_repaired,
         changes_written: 0,
         renames_written: 0,
+        similar_renames_written: 0,
+        rename_analyses_written: 0,
         walk_terminated_by: WalkTermination::Exhausted,
         shallow: store.limits().shallow.is_some(),
         shallow_boundary: boundary.iter().map(Oid::to_hex).collect(),
@@ -414,13 +437,24 @@ pub fn ingest_history(root: &Path, options: &HistoryOptions) -> Result<HistoryOu
 
         let (enumeration, changes) = walker.enumerate(&commit_oid, &commit, completeness);
         let renames = rename_hypotheses(&commit_oid, &changes);
+        // After the exact matcher, over the same diff, and never instead of it: a pair whose blobs
+        // are equal belongs to the rows above and the similarity matcher skips it.
+        let similar = similarity::analyse(
+            &store,
+            &commit_oid,
+            &changes,
+            enumeration,
+            &options.similarity,
+        );
         let row = walker.commit_row(commit_oid, &commit, completeness, enumeration, options);
 
-        match write_commit(&mut conn, &repo_id, &row, &changes, &renames)? {
+        match write_commit(&mut conn, &repo_id, &row, &changes, &renames, &similar)? {
             Some(written) => {
                 outcome.commits_recorded += 1;
                 outcome.changes_written += written.changes;
                 outcome.renames_written += written.renames;
+                outcome.similar_renames_written += written.similar_renames;
+                outcome.rename_analyses_written += written.analyses;
                 *outcome.completeness.entry(completeness).or_insert(0) += 1;
                 *outcome.enumeration.entry(enumeration).or_insert(0) += 1;
             }
@@ -473,10 +507,16 @@ pub fn ingest_history(root: &Path, options: &HistoryOptions) -> Result<HistoryOu
     Ok(outcome)
 }
 
-/// Rows one commit contributed, so the caller does not have to add up two return values.
+/// Rows one commit contributed, kept apart rather than added up.
+///
+/// [`Written::renames`] and [`Written::similar_renames`] are **never summed**: they are two
+/// evidence values resting on two different kinds of proof, and a single total would let a caller
+/// read a similarity hypothesis as an exact-content one.
 struct Written {
     changes: usize,
     renames: usize,
+    similar_renames: usize,
+    analyses: usize,
 }
 
 /// Delete every commit whose availability was a conclusion from **absence**, with its dependent rows.
@@ -511,8 +551,11 @@ fn delete_commits_with_unavailable_parents(
         ParentCompleteness::Root.as_str(),
         ParentCompleteness::ParentsAvailable.as_str(),
     ];
-    // Foreign-key order: the two dependent tables first, then the commits they point at.
-    for table in ["git_rename_hypothesis", "git_change"] {
+    // Foreign-key order: the three dependent tables first, then the commits they point at.
+    // `git_rename_analysis` carries the same foreign key as the other two and has **no**
+    // `ON DELETE CASCADE`, so omitting it here would make the repair fail with a constraint
+    // violation the moment any commit had been analysed.
+    for table in ["git_rename_analysis", "git_rename_hypothesis", "git_change"] {
         tx.execute(
             &format!("DELETE FROM {table} WHERE repo_id = ?1 AND commit_oid IN ({selection})"),
             keep,
@@ -541,12 +584,17 @@ fn delete_commits_with_unavailable_parents(
 /// commit.
 ///
 /// So an error here rolls the commit row back with it, and the commit is re-read on the next sync.
+/// The similarity analysis row is written **unconditionally**, including for a commit whose
+/// candidate set was empty. Zero similarity rows has four different causes, and only the stored
+/// analysis row tells *"nothing to pair"* from *"a bound refused the whole set"* — which is the same
+/// reason `changes_enumerated` is a column rather than an inference from a row count.
 fn write_commit(
     conn: &mut nerve_store::Connection,
     repo_id: &str,
     commit: &CommitRow,
     changes: &[ChangeRow],
     renames: &[RenameRow],
+    similar: &SimilarityAnalysis,
 ) -> Result<Option<Written>> {
     let tx = conn.transaction().map_err(nerve_store::StoreError::from)?;
     if !nerve_store::insert_commit(&tx, repo_id, commit)? {
@@ -555,6 +603,8 @@ fn write_commit(
     let written = Written {
         changes: nerve_store::insert_changes(&tx, repo_id, changes)?,
         renames: nerve_store::insert_renames(&tx, repo_id, renames)?,
+        similar_renames: nerve_store::insert_renames(&tx, repo_id, &similar.rows)?,
+        analyses: nerve_store::insert_rename_analysis(&tx, repo_id, &similar.analysis)?,
     };
     tx.commit().map_err(nerve_store::StoreError::from)?;
     Ok(Some(written))
@@ -1373,6 +1423,36 @@ mod tests {
         (conn, repo_id)
     }
 
+    /// The analysis row a commit with no candidate pair produces, which is what these two write
+    /// tests need: one row, per commit, unconditionally.
+    fn no_similarity(oid: &str) -> SimilarityAnalysis {
+        SimilarityAnalysis {
+            rows: Vec::new(),
+            analysis: nerve_store::AnalysisRow {
+                commit_oid: oid.to_string(),
+                matcher_id: similarity::MATCHER_ID.to_string(),
+                matcher_version: similarity::MATCHER_VERSION.to_string(),
+                threshold_numerator: similarity::SIMILARITY_THRESHOLD_NUMERATOR,
+                threshold_denominator: similarity::SIMILARITY_THRESHOLD_DENOMINATOR,
+                deletions_considered: 0,
+                additions_considered: 0,
+                pairs_considered: 0,
+                pairs_measured: 0,
+                completeness: nerve_core::vocab::RenameAnalysisCompleteness::Complete,
+                unmeasured: BTreeMap::new(),
+            },
+        }
+    }
+
+    fn analysis_rows(conn: &nerve_store::Connection, repo_id: &str) -> i64 {
+        conn.query_row(
+            "SELECT count(*) FROM git_rename_analysis WHERE repo_id = ?1",
+            [repo_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
     fn commit_row(oid: &str, enumeration: ChangesEnumerated) -> CommitRow {
         CommitRow {
             commit_oid: oid.to_string(),
@@ -1425,10 +1505,15 @@ mod tests {
             &commit_row(&oid, ChangesEnumerated::Enumerated),
             std::slice::from_ref(&good),
             &[],
+            &no_similarity(&oid),
         )
         .unwrap()
         .expect("a fresh commit is written");
         assert_eq!(written.changes, 1);
+        assert_eq!(
+            written.analyses, 1,
+            "every recorded commit gets exactly one analysis row"
+        );
         assert_eq!(
             nerve_store::history_totals(&conn, &repo_id)
                 .unwrap()
@@ -1449,6 +1534,7 @@ mod tests {
                 orphan,
             ],
             &[],
+            &no_similarity(&second),
         );
         assert!(result.is_err(), "an orphan change row must be refused");
 
@@ -1461,6 +1547,11 @@ mod tests {
         assert!(!nerve_store::recorded_commit_oids(&conn, &repo_id)
             .unwrap()
             .contains(&second));
+        assert_eq!(
+            analysis_rows(&conn, &repo_id),
+            1,
+            "the failed commit's analysis row must roll back with it"
+        );
     }
 
     /// The repair deletes exactly the three availability values that are conclusions from absence,
@@ -1502,6 +1593,7 @@ mod tests {
                     match_denominator: None,
                     ambiguity: RenameAmbiguity::Unique,
                 }],
+                &no_similarity(oid),
             )
             .unwrap()
             .expect("written");
@@ -1510,6 +1602,7 @@ mod tests {
         assert_eq!(before.commits, 5, "five values, five commits");
         assert_eq!(before.changes, 5);
         assert_eq!(before.renames, 5);
+        assert_eq!(analysis_rows(&conn, &repo_id), 5);
 
         let deleted = delete_commits_with_unavailable_parents(&mut conn, &repo_id).unwrap();
         assert_eq!(
@@ -1521,6 +1614,12 @@ mod tests {
         assert_eq!(after.commits, 2);
         assert_eq!(after.changes, 2, "dependent rows go with the commit");
         assert_eq!(after.renames, 2);
+        assert_eq!(
+            analysis_rows(&conn, &repo_id),
+            2,
+            "git_rename_analysis has the same foreign key and no cascade, so the repair has to \
+             delete it too — omitting it is a constraint violation, not a leak"
+        );
         let surviving = nerve_store::recorded_commit_oids(&conn, &repo_id).unwrap();
         assert!(surviving.contains(&oids[&ParentCompleteness::Root]));
         assert!(surviving.contains(&oids[&ParentCompleteness::ParentsAvailable]));

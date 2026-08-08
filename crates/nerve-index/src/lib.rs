@@ -76,6 +76,7 @@ pub mod pystruct;
 pub mod pysurface;
 pub mod refs;
 pub mod resolve;
+pub mod similarity;
 pub mod trace;
 pub mod trace_ingest;
 pub mod tsframework;
@@ -152,6 +153,14 @@ pub use pysurface::{PyModuleSurface, PySurfaceIndex};
 pub use refs::{
     extract_references, RefTarget, ReferenceExtraction, ReferenceSite, UnresolvedReason,
     EXTRACTOR_ID as REFERENCE_EXTRACTOR_ID, EXTRACTOR_VERSION as REFERENCE_EXTRACTOR_VERSION,
+};
+pub use similarity::{
+    admits as similarity_admits, analyse as analyse_similarity, SimilarityAnalysis,
+    SimilarityLimits, MATCHER_ID as SIMILARITY_MATCHER_ID,
+    MATCHER_VERSION as SIMILARITY_MATCHER_VERSION, MAX_SIMILARITY_ADDITIONS,
+    MAX_SIMILARITY_BLOB_BYTES, MAX_SIMILARITY_DELETIONS, MAX_SIMILARITY_LINES,
+    MAX_SIMILARITY_PAIRS, MAX_SIMILARITY_ROWS_PER_COMMIT, MIN_SIMILARITY_LINES,
+    SIMILARITY_THRESHOLD_DENOMINATOR, SIMILARITY_THRESHOLD_NUMERATOR,
 };
 pub use trace::{
     parse_trace, CompletionState, SourceMapState, TraceArtifact, TraceCounters, TraceHeader,

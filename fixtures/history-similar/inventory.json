@@ -1,0 +1,1497 @@
+{
+  "absent_object_oids": [],
+  "attacks": null,
+  "commit_order": [
+    "7f45c29fa8e00912302f4ce3e82c5aa3d2b0f263",
+    "651cf691351d3b375e4f45241f69470360ebc59e",
+    "4eaeea17d1d8c8606d6b9851735dc031e347647e",
+    "00e75bfbf59786905e83f05d4469b2e64880c416",
+    "709eb3642127882e15aa9f7e6686bd12c2309658",
+    "bb2563da84d7e35cdc5ad4fd90e90e88bd54f949",
+    "ef654532d386127fcc639d2a3a10daf48e5468e6",
+    "92ecfa7111c4a17899d3fee7165b67cf595ec6e7",
+    "019af83b057d0b95047551c0a49a344b01e304bd",
+    "527820a8cac15cef28636615c3f66b778f9ecc41",
+    "7620890910129cdaa18353279db9772dbc64ed07",
+    "b4d79f0a5c44c28e5122b24d12a5d4c64fe4ca7e",
+    "1e330006320df4bfdada85bfb36e992ae651b3b4",
+    "d8a5a62a28b9fda5b1c68030729ab89ef102a4e1"
+  ],
+  "commits": [
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767225600,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [
+        {
+          "blob_oid": "145a23cc61be77ce5ed9c678cee1b866f31a86ce",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "bin/blob.bin",
+          "path_hex": "62696e2f626c6f622e62696e",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": "f4b81dcff334ea5a6721c102f8bceedf633972a3",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "conf/old-service.yaml",
+          "path_hex": "636f6e662f6f6c642d736572766963652e79616d6c",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": "2a8eb6eed67b0c88b97f9a10e37931b141b771aa",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "copy/original.txt",
+          "path_hex": "636f70792f6f726967696e616c2e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "empty/a.txt",
+          "path_hex": "656d7074792f612e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": "4f3fdf27b07971ff43c20e8b95e3de027f4050d3",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "fan/left.txt",
+          "path_hex": "66616e2f6c6566742e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": "2074765fa6ba21aefc8d1c19ba757611f9340c3f",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "fan/one.txt",
+          "path_hex": "66616e2f6f6e652e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": "01cb7b004ae6fd3f29a288be9e34c071b9be37c7",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "fan/right.txt",
+          "path_hex": "66616e2f72696768742e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": "9f60e953e50c11a10e9ff1bb2825b7581039e3e5",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "gen/old.lock",
+          "path_hex": "67656e2f6f6c642e6c6f636b",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": "e184add73eae42b593d7f5b5275f5f100b9269f9",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "legal/old.txt",
+          "path_hex": "6c6567616c2f6f6c642e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": "4f3487ebb108467873f239203f65c0b378275269",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "mod/alpha.txt",
+          "path_hex": "6d6f642f616c7068612e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": "18af57bf4c015cc767ad138899fa9b1006d0b509",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "mod/beta.txt",
+          "path_hex": "6d6f642f626574612e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": "fe9717a2d7299dbb571c9b38b988c1bb7e2ab2e9",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "mod/gamma.txt",
+          "path_hex": "6d6f642f67616d6d612e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": "0c899ba31a6d0c4f97924daf8cdc0fa73c3c2858",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "ord/source.txt",
+          "path_hex": "6f72642f736f757263652e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": "da9f2304b9474f4923b723d961a7d7c148a0a0e7",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "tiny/small.txt",
+          "path_hex": "74696e792f736d616c6c2e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        }
+      ],
+      "committer_epoch": 1767225600,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": null,
+      "is_merge": false,
+      "oid": "7f45c29fa8e00912302f4ce3e82c5aa3d2b0f263",
+      "parent_oids": [],
+      "parent_oids_from_revision_walk": [],
+      "shallow_boundary": false,
+      "summary": "root commit: every file that is later deleted",
+      "summary_bytes": 45,
+      "tree_oid": "f15f6e5a0f869bc829b7fa63969fdfe8cd785d7e"
+    },
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767229200,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [
+        {
+          "blob_oid": "44b150f3facb808a487137837d0c7ada4d1a45b7",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "mod/alpha-renamed.txt",
+          "path_hex": "6d6f642f616c7068612d72656e616d65642e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": null,
+          "change_kind": "deleted",
+          "git_status": "D",
+          "mode_octal": null,
+          "path": "mod/alpha.txt",
+          "path_hex": "6d6f642f616c7068612e747874",
+          "prev_blob_oid": "4f3487ebb108467873f239203f65c0b378275269",
+          "prev_mode_octal": "100644"
+        }
+      ],
+      "committer_epoch": 1767229200,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": [
+        {
+          "name": "bin",
+          "name_hex": "62696e",
+          "oid": "d93b7e9aff4dab7d753f5001e4066ac6300438e5",
+          "type": "tree"
+        },
+        {
+          "name": "conf",
+          "name_hex": "636f6e66",
+          "oid": "b59e315a8b9a16fbed138e89b1bcb1a7cba1e1e3",
+          "type": "tree"
+        },
+        {
+          "name": "copy",
+          "name_hex": "636f7079",
+          "oid": "1bcddb1b2d1dbb698e80aa876afd1b342326e2fe",
+          "type": "tree"
+        },
+        {
+          "name": "empty",
+          "name_hex": "656d707479",
+          "oid": "65a457425a679cbe9adf0d2741785d3ceabb44a7",
+          "type": "tree"
+        },
+        {
+          "name": "fan",
+          "name_hex": "66616e",
+          "oid": "d9332cf3ca8700759aacadb60eac432200dcf740",
+          "type": "tree"
+        },
+        {
+          "name": "gen",
+          "name_hex": "67656e",
+          "oid": "429cced4c52099d9b52cfe773a739700a8301434",
+          "type": "tree"
+        },
+        {
+          "name": "legal",
+          "name_hex": "6c6567616c",
+          "oid": "0a40d0de4d274497075f6d324782b3f656b438ab",
+          "type": "tree"
+        },
+        {
+          "name": "ord",
+          "name_hex": "6f7264",
+          "oid": "2d90562a016f445d6f139975a6c8e4c7bd8120ad",
+          "type": "tree"
+        },
+        {
+          "name": "tiny",
+          "name_hex": "74696e79",
+          "oid": "995a7ad6b90a6617844210dab7a3831adc07ccb5",
+          "type": "tree"
+        }
+      ],
+      "is_merge": false,
+      "oid": "651cf691351d3b375e4f45241f69470360ebc59e",
+      "parent_oids": [
+        "7f45c29fa8e00912302f4ce3e82c5aa3d2b0f263"
+      ],
+      "parent_oids_from_revision_walk": [
+        "7f45c29fa8e00912302f4ce3e82c5aa3d2b0f263"
+      ],
+      "shallow_boundary": false,
+      "summary": "c1: move mod/alpha.txt to mod/alpha-renamed.txt with two lines edited",
+      "summary_bytes": 69,
+      "tree_oid": "0babc0065307eee1f34fdbe075fe2d00540f3454"
+    },
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767232800,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [
+        {
+          "blob_oid": "19f9cace11ef3fd0816b6d8c95d780d2449976ff",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "mod/beta-moved.txt",
+          "path_hex": "6d6f642f626574612d6d6f7665642e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": null,
+          "change_kind": "deleted",
+          "git_status": "D",
+          "mode_octal": null,
+          "path": "mod/beta.txt",
+          "path_hex": "6d6f642f626574612e747874",
+          "prev_blob_oid": "18af57bf4c015cc767ad138899fa9b1006d0b509",
+          "prev_mode_octal": "100644"
+        }
+      ],
+      "committer_epoch": 1767232800,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": [
+        {
+          "name": "bin",
+          "name_hex": "62696e",
+          "oid": "d93b7e9aff4dab7d753f5001e4066ac6300438e5",
+          "type": "tree"
+        },
+        {
+          "name": "conf",
+          "name_hex": "636f6e66",
+          "oid": "b59e315a8b9a16fbed138e89b1bcb1a7cba1e1e3",
+          "type": "tree"
+        },
+        {
+          "name": "copy",
+          "name_hex": "636f7079",
+          "oid": "1bcddb1b2d1dbb698e80aa876afd1b342326e2fe",
+          "type": "tree"
+        },
+        {
+          "name": "empty",
+          "name_hex": "656d707479",
+          "oid": "65a457425a679cbe9adf0d2741785d3ceabb44a7",
+          "type": "tree"
+        },
+        {
+          "name": "fan",
+          "name_hex": "66616e",
+          "oid": "d9332cf3ca8700759aacadb60eac432200dcf740",
+          "type": "tree"
+        },
+        {
+          "name": "gen",
+          "name_hex": "67656e",
+          "oid": "429cced4c52099d9b52cfe773a739700a8301434",
+          "type": "tree"
+        },
+        {
+          "name": "legal",
+          "name_hex": "6c6567616c",
+          "oid": "0a40d0de4d274497075f6d324782b3f656b438ab",
+          "type": "tree"
+        },
+        {
+          "name": "ord",
+          "name_hex": "6f7264",
+          "oid": "2d90562a016f445d6f139975a6c8e4c7bd8120ad",
+          "type": "tree"
+        },
+        {
+          "name": "tiny",
+          "name_hex": "74696e79",
+          "oid": "995a7ad6b90a6617844210dab7a3831adc07ccb5",
+          "type": "tree"
+        }
+      ],
+      "is_merge": false,
+      "oid": "4eaeea17d1d8c8606d6b9851735dc031e347647e",
+      "parent_oids": [
+        "651cf691351d3b375e4f45241f69470360ebc59e"
+      ],
+      "parent_oids_from_revision_walk": [
+        "651cf691351d3b375e4f45241f69470360ebc59e"
+      ],
+      "shallow_boundary": false,
+      "summary": "c2: move mod/beta.txt to mod/beta-moved.txt with twelve lines edited",
+      "summary_bytes": 68,
+      "tree_oid": "35bedaa632ce2521413fa13e925b0c69827a7849"
+    },
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767236400,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [
+        {
+          "blob_oid": null,
+          "change_kind": "deleted",
+          "git_status": "D",
+          "mode_octal": null,
+          "path": "mod/gamma.txt",
+          "path_hex": "6d6f642f67616d6d612e747874",
+          "prev_blob_oid": "fe9717a2d7299dbb571c9b38b988c1bb7e2ab2e9",
+          "prev_mode_octal": "100644"
+        },
+        {
+          "blob_oid": "0f811d721eaa12dd285fe8da5100f24a9f9cd0ac",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "mod/unrelated.txt",
+          "path_hex": "6d6f642f756e72656c617465642e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        }
+      ],
+      "committer_epoch": 1767236400,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": [
+        {
+          "name": "bin",
+          "name_hex": "62696e",
+          "oid": "d93b7e9aff4dab7d753f5001e4066ac6300438e5",
+          "type": "tree"
+        },
+        {
+          "name": "conf",
+          "name_hex": "636f6e66",
+          "oid": "b59e315a8b9a16fbed138e89b1bcb1a7cba1e1e3",
+          "type": "tree"
+        },
+        {
+          "name": "copy",
+          "name_hex": "636f7079",
+          "oid": "1bcddb1b2d1dbb698e80aa876afd1b342326e2fe",
+          "type": "tree"
+        },
+        {
+          "name": "empty",
+          "name_hex": "656d707479",
+          "oid": "65a457425a679cbe9adf0d2741785d3ceabb44a7",
+          "type": "tree"
+        },
+        {
+          "name": "fan",
+          "name_hex": "66616e",
+          "oid": "d9332cf3ca8700759aacadb60eac432200dcf740",
+          "type": "tree"
+        },
+        {
+          "name": "gen",
+          "name_hex": "67656e",
+          "oid": "429cced4c52099d9b52cfe773a739700a8301434",
+          "type": "tree"
+        },
+        {
+          "name": "legal",
+          "name_hex": "6c6567616c",
+          "oid": "0a40d0de4d274497075f6d324782b3f656b438ab",
+          "type": "tree"
+        },
+        {
+          "name": "ord",
+          "name_hex": "6f7264",
+          "oid": "2d90562a016f445d6f139975a6c8e4c7bd8120ad",
+          "type": "tree"
+        },
+        {
+          "name": "tiny",
+          "name_hex": "74696e79",
+          "oid": "995a7ad6b90a6617844210dab7a3831adc07ccb5",
+          "type": "tree"
+        }
+      ],
+      "is_merge": false,
+      "oid": "00e75bfbf59786905e83f05d4469b2e64880c416",
+      "parent_oids": [
+        "4eaeea17d1d8c8606d6b9851735dc031e347647e"
+      ],
+      "parent_oids_from_revision_walk": [
+        "4eaeea17d1d8c8606d6b9851735dc031e347647e"
+      ],
+      "shallow_boundary": false,
+      "summary": "c3: delete mod/gamma.txt and add an unrelated mod/unrelated.txt",
+      "summary_bytes": 63,
+      "tree_oid": "b382b70c267f8430983d7136e463ce4d388e05c1"
+    },
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767240000,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [
+        {
+          "blob_oid": "369c3327d3d4ba30eec40380bdc5d264a3b3144e",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "conf/new-thing.yaml",
+          "path_hex": "636f6e662f6e65772d7468696e672e79616d6c",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": null,
+          "change_kind": "deleted",
+          "git_status": "D",
+          "mode_octal": null,
+          "path": "conf/old-service.yaml",
+          "path_hex": "636f6e662f6f6c642d736572766963652e79616d6c",
+          "prev_blob_oid": "f4b81dcff334ea5a6721c102f8bceedf633972a3",
+          "prev_mode_octal": "100644"
+        }
+      ],
+      "committer_epoch": 1767240000,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": [
+        {
+          "name": "bin",
+          "name_hex": "62696e",
+          "oid": "d93b7e9aff4dab7d753f5001e4066ac6300438e5",
+          "type": "tree"
+        },
+        {
+          "name": "copy",
+          "name_hex": "636f7079",
+          "oid": "1bcddb1b2d1dbb698e80aa876afd1b342326e2fe",
+          "type": "tree"
+        },
+        {
+          "name": "empty",
+          "name_hex": "656d707479",
+          "oid": "65a457425a679cbe9adf0d2741785d3ceabb44a7",
+          "type": "tree"
+        },
+        {
+          "name": "fan",
+          "name_hex": "66616e",
+          "oid": "d9332cf3ca8700759aacadb60eac432200dcf740",
+          "type": "tree"
+        },
+        {
+          "name": "gen",
+          "name_hex": "67656e",
+          "oid": "429cced4c52099d9b52cfe773a739700a8301434",
+          "type": "tree"
+        },
+        {
+          "name": "legal",
+          "name_hex": "6c6567616c",
+          "oid": "0a40d0de4d274497075f6d324782b3f656b438ab",
+          "type": "tree"
+        },
+        {
+          "name": "mod",
+          "name_hex": "6d6f64",
+          "oid": "5397c0847db59f171756ef0be9e0827112b5b221",
+          "type": "tree"
+        },
+        {
+          "name": "ord",
+          "name_hex": "6f7264",
+          "oid": "2d90562a016f445d6f139975a6c8e4c7bd8120ad",
+          "type": "tree"
+        },
+        {
+          "name": "tiny",
+          "name_hex": "74696e79",
+          "oid": "995a7ad6b90a6617844210dab7a3831adc07ccb5",
+          "type": "tree"
+        }
+      ],
+      "is_merge": false,
+      "oid": "709eb3642127882e15aa9f7e6686bd12c2309658",
+      "parent_oids": [
+        "00e75bfbf59786905e83f05d4469b2e64880c416"
+      ],
+      "parent_oids_from_revision_walk": [
+        "00e75bfbf59786905e83f05d4469b2e64880c416"
+      ],
+      "shallow_boundary": false,
+      "summary": "c4: two YAML files sharing fourteen scaffold lines and nothing else",
+      "summary_bytes": 67,
+      "tree_oid": "5821c5738e1879d71eaca61015276834eb55f6eb"
+    },
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767243600,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [
+        {
+          "blob_oid": "ee247b9990fb9c15fc359c78064e400a0b243d34",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "legal/new.txt",
+          "path_hex": "6c6567616c2f6e65772e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": null,
+          "change_kind": "deleted",
+          "git_status": "D",
+          "mode_octal": null,
+          "path": "legal/old.txt",
+          "path_hex": "6c6567616c2f6f6c642e747874",
+          "prev_blob_oid": "e184add73eae42b593d7f5b5275f5f100b9269f9",
+          "prev_mode_octal": "100644"
+        }
+      ],
+      "committer_epoch": 1767243600,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": [
+        {
+          "name": "bin",
+          "name_hex": "62696e",
+          "oid": "d93b7e9aff4dab7d753f5001e4066ac6300438e5",
+          "type": "tree"
+        },
+        {
+          "name": "conf",
+          "name_hex": "636f6e66",
+          "oid": "8fe1ae10a68f76134624f46856466240846fbb91",
+          "type": "tree"
+        },
+        {
+          "name": "copy",
+          "name_hex": "636f7079",
+          "oid": "1bcddb1b2d1dbb698e80aa876afd1b342326e2fe",
+          "type": "tree"
+        },
+        {
+          "name": "empty",
+          "name_hex": "656d707479",
+          "oid": "65a457425a679cbe9adf0d2741785d3ceabb44a7",
+          "type": "tree"
+        },
+        {
+          "name": "fan",
+          "name_hex": "66616e",
+          "oid": "d9332cf3ca8700759aacadb60eac432200dcf740",
+          "type": "tree"
+        },
+        {
+          "name": "gen",
+          "name_hex": "67656e",
+          "oid": "429cced4c52099d9b52cfe773a739700a8301434",
+          "type": "tree"
+        },
+        {
+          "name": "mod",
+          "name_hex": "6d6f64",
+          "oid": "5397c0847db59f171756ef0be9e0827112b5b221",
+          "type": "tree"
+        },
+        {
+          "name": "ord",
+          "name_hex": "6f7264",
+          "oid": "2d90562a016f445d6f139975a6c8e4c7bd8120ad",
+          "type": "tree"
+        },
+        {
+          "name": "tiny",
+          "name_hex": "74696e79",
+          "oid": "995a7ad6b90a6617844210dab7a3831adc07ccb5",
+          "type": "tree"
+        }
+      ],
+      "is_merge": false,
+      "oid": "bb2563da84d7e35cdc5ad4fd90e90e88bd54f949",
+      "parent_oids": [
+        "709eb3642127882e15aa9f7e6686bd12c2309658"
+      ],
+      "parent_oids_from_revision_walk": [
+        "709eb3642127882e15aa9f7e6686bd12c2309658"
+      ],
+      "shallow_boundary": false,
+      "summary": "c5: two files sharing a sixteen-line licence header and nothing else",
+      "summary_bytes": 68,
+      "tree_oid": "92ba49113157ced9917b60a1fb513670d8b9f3c4"
+    },
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767247200,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [
+        {
+          "blob_oid": "aa5137de8bc187ed40066f2db35301ea42aae807",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "fan/one-a.txt",
+          "path_hex": "66616e2f6f6e652d612e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": "8aeb97ca23d2df5b89a626bb11415a156ba3e2dd",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "fan/one-b.txt",
+          "path_hex": "66616e2f6f6e652d622e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": null,
+          "change_kind": "deleted",
+          "git_status": "D",
+          "mode_octal": null,
+          "path": "fan/one.txt",
+          "path_hex": "66616e2f6f6e652e747874",
+          "prev_blob_oid": "2074765fa6ba21aefc8d1c19ba757611f9340c3f",
+          "prev_mode_octal": "100644"
+        }
+      ],
+      "committer_epoch": 1767247200,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": [
+        {
+          "name": "bin",
+          "name_hex": "62696e",
+          "oid": "d93b7e9aff4dab7d753f5001e4066ac6300438e5",
+          "type": "tree"
+        },
+        {
+          "name": "conf",
+          "name_hex": "636f6e66",
+          "oid": "8fe1ae10a68f76134624f46856466240846fbb91",
+          "type": "tree"
+        },
+        {
+          "name": "copy",
+          "name_hex": "636f7079",
+          "oid": "1bcddb1b2d1dbb698e80aa876afd1b342326e2fe",
+          "type": "tree"
+        },
+        {
+          "name": "empty",
+          "name_hex": "656d707479",
+          "oid": "65a457425a679cbe9adf0d2741785d3ceabb44a7",
+          "type": "tree"
+        },
+        {
+          "name": "gen",
+          "name_hex": "67656e",
+          "oid": "429cced4c52099d9b52cfe773a739700a8301434",
+          "type": "tree"
+        },
+        {
+          "name": "legal",
+          "name_hex": "6c6567616c",
+          "oid": "337ed8aa567bf78d128bac1c89e84c0d947f442d",
+          "type": "tree"
+        },
+        {
+          "name": "mod",
+          "name_hex": "6d6f64",
+          "oid": "5397c0847db59f171756ef0be9e0827112b5b221",
+          "type": "tree"
+        },
+        {
+          "name": "ord",
+          "name_hex": "6f7264",
+          "oid": "2d90562a016f445d6f139975a6c8e4c7bd8120ad",
+          "type": "tree"
+        },
+        {
+          "name": "tiny",
+          "name_hex": "74696e79",
+          "oid": "995a7ad6b90a6617844210dab7a3831adc07ccb5",
+          "type": "tree"
+        }
+      ],
+      "is_merge": false,
+      "oid": "ef654532d386127fcc639d2a3a10daf48e5468e6",
+      "parent_oids": [
+        "bb2563da84d7e35cdc5ad4fd90e90e88bd54f949"
+      ],
+      "parent_oids_from_revision_walk": [
+        "bb2563da84d7e35cdc5ad4fd90e90e88bd54f949"
+      ],
+      "shallow_boundary": false,
+      "summary": "c6: delete fan/one.txt and add two files that each keep eighteen of its lines",
+      "summary_bytes": 77,
+      "tree_oid": "be6ff1c867401de1be9a8b5827ae42d7101d9087"
+    },
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767250800,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [
+        {
+          "blob_oid": null,
+          "change_kind": "deleted",
+          "git_status": "D",
+          "mode_octal": null,
+          "path": "fan/left.txt",
+          "path_hex": "66616e2f6c6566742e747874",
+          "prev_blob_oid": "4f3fdf27b07971ff43c20e8b95e3de027f4050d3",
+          "prev_mode_octal": "100644"
+        },
+        {
+          "blob_oid": "2e93ba1f65fa3891c6f22483ef315e1e2cde1791",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "fan/merged.txt",
+          "path_hex": "66616e2f6d65726765642e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": null,
+          "change_kind": "deleted",
+          "git_status": "D",
+          "mode_octal": null,
+          "path": "fan/right.txt",
+          "path_hex": "66616e2f72696768742e747874",
+          "prev_blob_oid": "01cb7b004ae6fd3f29a288be9e34c071b9be37c7",
+          "prev_mode_octal": "100644"
+        }
+      ],
+      "committer_epoch": 1767250800,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": [
+        {
+          "name": "bin",
+          "name_hex": "62696e",
+          "oid": "d93b7e9aff4dab7d753f5001e4066ac6300438e5",
+          "type": "tree"
+        },
+        {
+          "name": "conf",
+          "name_hex": "636f6e66",
+          "oid": "8fe1ae10a68f76134624f46856466240846fbb91",
+          "type": "tree"
+        },
+        {
+          "name": "copy",
+          "name_hex": "636f7079",
+          "oid": "1bcddb1b2d1dbb698e80aa876afd1b342326e2fe",
+          "type": "tree"
+        },
+        {
+          "name": "empty",
+          "name_hex": "656d707479",
+          "oid": "65a457425a679cbe9adf0d2741785d3ceabb44a7",
+          "type": "tree"
+        },
+        {
+          "name": "gen",
+          "name_hex": "67656e",
+          "oid": "429cced4c52099d9b52cfe773a739700a8301434",
+          "type": "tree"
+        },
+        {
+          "name": "legal",
+          "name_hex": "6c6567616c",
+          "oid": "337ed8aa567bf78d128bac1c89e84c0d947f442d",
+          "type": "tree"
+        },
+        {
+          "name": "mod",
+          "name_hex": "6d6f64",
+          "oid": "5397c0847db59f171756ef0be9e0827112b5b221",
+          "type": "tree"
+        },
+        {
+          "name": "ord",
+          "name_hex": "6f7264",
+          "oid": "2d90562a016f445d6f139975a6c8e4c7bd8120ad",
+          "type": "tree"
+        },
+        {
+          "name": "tiny",
+          "name_hex": "74696e79",
+          "oid": "995a7ad6b90a6617844210dab7a3831adc07ccb5",
+          "type": "tree"
+        }
+      ],
+      "is_merge": false,
+      "oid": "92ecfa7111c4a17899d3fee7165b67cf595ec6e7",
+      "parent_oids": [
+        "ef654532d386127fcc639d2a3a10daf48e5468e6"
+      ],
+      "parent_oids_from_revision_walk": [
+        "ef654532d386127fcc639d2a3a10daf48e5468e6"
+      ],
+      "shallow_boundary": false,
+      "summary": "c7: delete fan/left.txt and fan/right.txt and add fan/merged.txt",
+      "summary_bytes": 64,
+      "tree_oid": "b4dd8300e86040a750bd91601243968635fb8d14"
+    },
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767254400,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [
+        {
+          "blob_oid": "a40ed57d356210c1810b986e4db584ed597f8636",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "ord/shuffled.txt",
+          "path_hex": "6f72642f73687566666c65642e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": null,
+          "change_kind": "deleted",
+          "git_status": "D",
+          "mode_octal": null,
+          "path": "ord/source.txt",
+          "path_hex": "6f72642f736f757263652e747874",
+          "prev_blob_oid": "0c899ba31a6d0c4f97924daf8cdc0fa73c3c2858",
+          "prev_mode_octal": "100644"
+        }
+      ],
+      "committer_epoch": 1767254400,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": [
+        {
+          "name": "bin",
+          "name_hex": "62696e",
+          "oid": "d93b7e9aff4dab7d753f5001e4066ac6300438e5",
+          "type": "tree"
+        },
+        {
+          "name": "conf",
+          "name_hex": "636f6e66",
+          "oid": "8fe1ae10a68f76134624f46856466240846fbb91",
+          "type": "tree"
+        },
+        {
+          "name": "copy",
+          "name_hex": "636f7079",
+          "oid": "1bcddb1b2d1dbb698e80aa876afd1b342326e2fe",
+          "type": "tree"
+        },
+        {
+          "name": "empty",
+          "name_hex": "656d707479",
+          "oid": "65a457425a679cbe9adf0d2741785d3ceabb44a7",
+          "type": "tree"
+        },
+        {
+          "name": "fan",
+          "name_hex": "66616e",
+          "oid": "102bb35fbf5ccbda99ba95987342700672f252ec",
+          "type": "tree"
+        },
+        {
+          "name": "gen",
+          "name_hex": "67656e",
+          "oid": "429cced4c52099d9b52cfe773a739700a8301434",
+          "type": "tree"
+        },
+        {
+          "name": "legal",
+          "name_hex": "6c6567616c",
+          "oid": "337ed8aa567bf78d128bac1c89e84c0d947f442d",
+          "type": "tree"
+        },
+        {
+          "name": "mod",
+          "name_hex": "6d6f64",
+          "oid": "5397c0847db59f171756ef0be9e0827112b5b221",
+          "type": "tree"
+        },
+        {
+          "name": "tiny",
+          "name_hex": "74696e79",
+          "oid": "995a7ad6b90a6617844210dab7a3831adc07ccb5",
+          "type": "tree"
+        }
+      ],
+      "is_merge": false,
+      "oid": "019af83b057d0b95047551c0a49a344b01e304bd",
+      "parent_oids": [
+        "92ecfa7111c4a17899d3fee7165b67cf595ec6e7"
+      ],
+      "parent_oids_from_revision_walk": [
+        "92ecfa7111c4a17899d3fee7165b67cf595ec6e7"
+      ],
+      "shallow_boundary": false,
+      "summary": "c8: move ord/source.txt to ord/shuffled.txt with the same lines reordered",
+      "summary_bytes": 73,
+      "tree_oid": "7d0b18ef644ab184e85c2671c617a8acd92c4680"
+    },
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767258000,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [
+        {
+          "blob_oid": null,
+          "change_kind": "deleted",
+          "git_status": "D",
+          "mode_octal": null,
+          "path": "tiny/small.txt",
+          "path_hex": "74696e792f736d616c6c2e747874",
+          "prev_blob_oid": "da9f2304b9474f4923b723d961a7d7c148a0a0e7",
+          "prev_mode_octal": "100644"
+        },
+        {
+          "blob_oid": "69683a2d302c8e295e0e0e0094ce01e3a1a2728a",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "tiny/small2.txt",
+          "path_hex": "74696e792f736d616c6c322e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        }
+      ],
+      "committer_epoch": 1767258000,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": [
+        {
+          "name": "bin",
+          "name_hex": "62696e",
+          "oid": "d93b7e9aff4dab7d753f5001e4066ac6300438e5",
+          "type": "tree"
+        },
+        {
+          "name": "conf",
+          "name_hex": "636f6e66",
+          "oid": "8fe1ae10a68f76134624f46856466240846fbb91",
+          "type": "tree"
+        },
+        {
+          "name": "copy",
+          "name_hex": "636f7079",
+          "oid": "1bcddb1b2d1dbb698e80aa876afd1b342326e2fe",
+          "type": "tree"
+        },
+        {
+          "name": "empty",
+          "name_hex": "656d707479",
+          "oid": "65a457425a679cbe9adf0d2741785d3ceabb44a7",
+          "type": "tree"
+        },
+        {
+          "name": "fan",
+          "name_hex": "66616e",
+          "oid": "102bb35fbf5ccbda99ba95987342700672f252ec",
+          "type": "tree"
+        },
+        {
+          "name": "gen",
+          "name_hex": "67656e",
+          "oid": "429cced4c52099d9b52cfe773a739700a8301434",
+          "type": "tree"
+        },
+        {
+          "name": "legal",
+          "name_hex": "6c6567616c",
+          "oid": "337ed8aa567bf78d128bac1c89e84c0d947f442d",
+          "type": "tree"
+        },
+        {
+          "name": "mod",
+          "name_hex": "6d6f64",
+          "oid": "5397c0847db59f171756ef0be9e0827112b5b221",
+          "type": "tree"
+        },
+        {
+          "name": "ord",
+          "name_hex": "6f7264",
+          "oid": "c510591bce31e2e80f855b70467942936696ff3b",
+          "type": "tree"
+        }
+      ],
+      "is_merge": false,
+      "oid": "527820a8cac15cef28636615c3f66b778f9ecc41",
+      "parent_oids": [
+        "019af83b057d0b95047551c0a49a344b01e304bd"
+      ],
+      "parent_oids_from_revision_walk": [
+        "019af83b057d0b95047551c0a49a344b01e304bd"
+      ],
+      "shallow_boundary": false,
+      "summary": "c9: move tiny/small.txt to tiny/small2.txt, two lines each",
+      "summary_bytes": 58,
+      "tree_oid": "04f68c96f8a60ed4eceb7d705fd1c670b4edd8ac"
+    },
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767261600,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [
+        {
+          "blob_oid": null,
+          "change_kind": "deleted",
+          "git_status": "D",
+          "mode_octal": null,
+          "path": "bin/blob.bin",
+          "path_hex": "62696e2f626c6f622e62696e",
+          "prev_blob_oid": "145a23cc61be77ce5ed9c678cee1b866f31a86ce",
+          "prev_mode_octal": "100644"
+        },
+        {
+          "blob_oid": "552a6ee9b2ac19d31f17f1cbd43ed9db1a51b05f",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "bin/other.bin",
+          "path_hex": "62696e2f6f746865722e62696e",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        }
+      ],
+      "committer_epoch": 1767261600,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": [
+        {
+          "name": "conf",
+          "name_hex": "636f6e66",
+          "oid": "8fe1ae10a68f76134624f46856466240846fbb91",
+          "type": "tree"
+        },
+        {
+          "name": "copy",
+          "name_hex": "636f7079",
+          "oid": "1bcddb1b2d1dbb698e80aa876afd1b342326e2fe",
+          "type": "tree"
+        },
+        {
+          "name": "empty",
+          "name_hex": "656d707479",
+          "oid": "65a457425a679cbe9adf0d2741785d3ceabb44a7",
+          "type": "tree"
+        },
+        {
+          "name": "fan",
+          "name_hex": "66616e",
+          "oid": "102bb35fbf5ccbda99ba95987342700672f252ec",
+          "type": "tree"
+        },
+        {
+          "name": "gen",
+          "name_hex": "67656e",
+          "oid": "429cced4c52099d9b52cfe773a739700a8301434",
+          "type": "tree"
+        },
+        {
+          "name": "legal",
+          "name_hex": "6c6567616c",
+          "oid": "337ed8aa567bf78d128bac1c89e84c0d947f442d",
+          "type": "tree"
+        },
+        {
+          "name": "mod",
+          "name_hex": "6d6f64",
+          "oid": "5397c0847db59f171756ef0be9e0827112b5b221",
+          "type": "tree"
+        },
+        {
+          "name": "ord",
+          "name_hex": "6f7264",
+          "oid": "c510591bce31e2e80f855b70467942936696ff3b",
+          "type": "tree"
+        },
+        {
+          "name": "tiny",
+          "name_hex": "74696e79",
+          "oid": "563e723417dad5502b5dccbc297e607b90351481",
+          "type": "tree"
+        }
+      ],
+      "is_merge": false,
+      "oid": "7620890910129cdaa18353279db9772dbc64ed07",
+      "parent_oids": [
+        "527820a8cac15cef28636615c3f66b778f9ecc41"
+      ],
+      "parent_oids_from_revision_walk": [
+        "527820a8cac15cef28636615c3f66b778f9ecc41"
+      ],
+      "shallow_boundary": false,
+      "summary": "c10: move bin/blob.bin to bin/other.bin, both containing NUL",
+      "summary_bytes": 60,
+      "tree_oid": "ded44e8d0681ec9470d06ce4f1a97d693228775e"
+    },
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767265200,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [
+        {
+          "blob_oid": "67bcd87d6d14cbea427ec4a2f312c3b89d744efb",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "copy/duplicate.txt",
+          "path_hex": "636f70792f6475706c69636174652e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        }
+      ],
+      "committer_epoch": 1767265200,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": [
+        {
+          "name": "bin",
+          "name_hex": "62696e",
+          "oid": "19bbad911ffd2d5a1f48a0f41dfe73376e90e3ae",
+          "type": "tree"
+        },
+        {
+          "name": "conf",
+          "name_hex": "636f6e66",
+          "oid": "8fe1ae10a68f76134624f46856466240846fbb91",
+          "type": "tree"
+        },
+        {
+          "name": "empty",
+          "name_hex": "656d707479",
+          "oid": "65a457425a679cbe9adf0d2741785d3ceabb44a7",
+          "type": "tree"
+        },
+        {
+          "name": "fan",
+          "name_hex": "66616e",
+          "oid": "102bb35fbf5ccbda99ba95987342700672f252ec",
+          "type": "tree"
+        },
+        {
+          "name": "gen",
+          "name_hex": "67656e",
+          "oid": "429cced4c52099d9b52cfe773a739700a8301434",
+          "type": "tree"
+        },
+        {
+          "name": "legal",
+          "name_hex": "6c6567616c",
+          "oid": "337ed8aa567bf78d128bac1c89e84c0d947f442d",
+          "type": "tree"
+        },
+        {
+          "name": "mod",
+          "name_hex": "6d6f64",
+          "oid": "5397c0847db59f171756ef0be9e0827112b5b221",
+          "type": "tree"
+        },
+        {
+          "name": "ord",
+          "name_hex": "6f7264",
+          "oid": "c510591bce31e2e80f855b70467942936696ff3b",
+          "type": "tree"
+        },
+        {
+          "name": "tiny",
+          "name_hex": "74696e79",
+          "oid": "563e723417dad5502b5dccbc297e607b90351481",
+          "type": "tree"
+        }
+      ],
+      "is_merge": false,
+      "oid": "b4d79f0a5c44c28e5122b24d12a5d4c64fe4ca7e",
+      "parent_oids": [
+        "7620890910129cdaa18353279db9772dbc64ed07"
+      ],
+      "parent_oids_from_revision_walk": [
+        "7620890910129cdaa18353279db9772dbc64ed07"
+      ],
+      "shallow_boundary": false,
+      "summary": "c11: copy copy/original.txt to copy/duplicate.txt, leaving the original in place",
+      "summary_bytes": 80,
+      "tree_oid": "52562782277e316a9ed78631f3918602ab0196fe"
+    },
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767268800,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [
+        {
+          "blob_oid": "8e9da7aabc8df52e52a2500ff8866f674f8fc337",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "gen/new.lock",
+          "path_hex": "67656e2f6e65772e6c6f636b",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        },
+        {
+          "blob_oid": null,
+          "change_kind": "deleted",
+          "git_status": "D",
+          "mode_octal": null,
+          "path": "gen/old.lock",
+          "path_hex": "67656e2f6f6c642e6c6f636b",
+          "prev_blob_oid": "9f60e953e50c11a10e9ff1bb2825b7581039e3e5",
+          "prev_mode_octal": "100644"
+        }
+      ],
+      "committer_epoch": 1767268800,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": [
+        {
+          "name": "bin",
+          "name_hex": "62696e",
+          "oid": "19bbad911ffd2d5a1f48a0f41dfe73376e90e3ae",
+          "type": "tree"
+        },
+        {
+          "name": "conf",
+          "name_hex": "636f6e66",
+          "oid": "8fe1ae10a68f76134624f46856466240846fbb91",
+          "type": "tree"
+        },
+        {
+          "name": "copy",
+          "name_hex": "636f7079",
+          "oid": "0cd695301d068bf488c9184527577b039ed5174d",
+          "type": "tree"
+        },
+        {
+          "name": "empty",
+          "name_hex": "656d707479",
+          "oid": "65a457425a679cbe9adf0d2741785d3ceabb44a7",
+          "type": "tree"
+        },
+        {
+          "name": "fan",
+          "name_hex": "66616e",
+          "oid": "102bb35fbf5ccbda99ba95987342700672f252ec",
+          "type": "tree"
+        },
+        {
+          "name": "legal",
+          "name_hex": "6c6567616c",
+          "oid": "337ed8aa567bf78d128bac1c89e84c0d947f442d",
+          "type": "tree"
+        },
+        {
+          "name": "mod",
+          "name_hex": "6d6f64",
+          "oid": "5397c0847db59f171756ef0be9e0827112b5b221",
+          "type": "tree"
+        },
+        {
+          "name": "ord",
+          "name_hex": "6f7264",
+          "oid": "c510591bce31e2e80f855b70467942936696ff3b",
+          "type": "tree"
+        },
+        {
+          "name": "tiny",
+          "name_hex": "74696e79",
+          "oid": "563e723417dad5502b5dccbc297e607b90351481",
+          "type": "tree"
+        }
+      ],
+      "is_merge": false,
+      "oid": "1e330006320df4bfdada85bfb36e992ae651b3b4",
+      "parent_oids": [
+        "b4d79f0a5c44c28e5122b24d12a5d4c64fe4ca7e"
+      ],
+      "parent_oids_from_revision_walk": [
+        "b4d79f0a5c44c28e5122b24d12a5d4c64fe4ca7e"
+      ],
+      "shallow_boundary": false,
+      "summary": "c12: replace gen/old.lock with gen/new.lock, sharing ten lines",
+      "summary_bytes": 62,
+      "tree_oid": "e76e22e6057f293d51c3c13b5bad3e0c0b3e8e0a"
+    },
+    {
+      "absent_parent_oids": [],
+      "author_epoch": 1767272400,
+      "author_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "author_tz": "+0000",
+      "changes": [
+        {
+          "blob_oid": null,
+          "change_kind": "deleted",
+          "git_status": "D",
+          "mode_octal": null,
+          "path": "empty/a.txt",
+          "path_hex": "656d7074792f612e747874",
+          "prev_blob_oid": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+          "prev_mode_octal": "100644"
+        },
+        {
+          "blob_oid": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+          "change_kind": "added",
+          "git_status": "A",
+          "mode_octal": "100644",
+          "path": "empty/b.txt",
+          "path_hex": "656d7074792f622e747874",
+          "prev_blob_oid": null,
+          "prev_mode_octal": null
+        }
+      ],
+      "committer_epoch": 1767272400,
+      "committer_ident": "Nerve Fixture <fixture@nerve.invalid>",
+      "committer_tz": "+0000",
+      "equal_top_level_entries": [
+        {
+          "name": "bin",
+          "name_hex": "62696e",
+          "oid": "19bbad911ffd2d5a1f48a0f41dfe73376e90e3ae",
+          "type": "tree"
+        },
+        {
+          "name": "conf",
+          "name_hex": "636f6e66",
+          "oid": "8fe1ae10a68f76134624f46856466240846fbb91",
+          "type": "tree"
+        },
+        {
+          "name": "copy",
+          "name_hex": "636f7079",
+          "oid": "0cd695301d068bf488c9184527577b039ed5174d",
+          "type": "tree"
+        },
+        {
+          "name": "fan",
+          "name_hex": "66616e",
+          "oid": "102bb35fbf5ccbda99ba95987342700672f252ec",
+          "type": "tree"
+        },
+        {
+          "name": "gen",
+          "name_hex": "67656e",
+          "oid": "f61218e452d8e2a3235e10bd452cec987458b971",
+          "type": "tree"
+        },
+        {
+          "name": "legal",
+          "name_hex": "6c6567616c",
+          "oid": "337ed8aa567bf78d128bac1c89e84c0d947f442d",
+          "type": "tree"
+        },
+        {
+          "name": "mod",
+          "name_hex": "6d6f64",
+          "oid": "5397c0847db59f171756ef0be9e0827112b5b221",
+          "type": "tree"
+        },
+        {
+          "name": "ord",
+          "name_hex": "6f7264",
+          "oid": "c510591bce31e2e80f855b70467942936696ff3b",
+          "type": "tree"
+        },
+        {
+          "name": "tiny",
+          "name_hex": "74696e79",
+          "oid": "563e723417dad5502b5dccbc297e607b90351481",
+          "type": "tree"
+        }
+      ],
+      "is_merge": false,
+      "oid": "d8a5a62a28b9fda5b1c68030729ab89ef102a4e1",
+      "parent_oids": [
+        "1e330006320df4bfdada85bfb36e992ae651b3b4"
+      ],
+      "parent_oids_from_revision_walk": [
+        "1e330006320df4bfdada85bfb36e992ae651b3b4"
+      ],
+      "shallow_boundary": false,
+      "summary": "c13: move empty/a.txt to empty/b.txt, both empty",
+      "summary_bytes": 48,
+      "tree_oid": "ab532c854d7f6c0361d19af29fea5989a3198d61"
+    }
+  ],
+  "exact_content_rename_candidates": [
+    {
+      "ambiguity": "unique",
+      "blob_oid": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+      "commit_oid": "d8a5a62a28b9fda5b1c68030729ab89ef102a4e1",
+      "evidence": "exact_content",
+      "from_path": "empty/a.txt",
+      "to_path": "empty/b.txt"
+    }
+  ],
+  "fixture": "history-similar",
+  "git_version": "git version 2.50.1 (Apple Git-155)",
+  "gitdir": "gitdir",
+  "head_oid": "d8a5a62a28b9fda5b1c68030729ab89ef102a4e1",
+  "head_ref": "refs/heads/main",
+  "note": "Generated by scripts/make_history_fixtures.sh, from this fixture's own gitdir/. Every value here is Git's own answer.",
+  "notes": {},
+  "shallow": null
+}
