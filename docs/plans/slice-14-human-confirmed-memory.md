@@ -25,6 +25,29 @@ So the honest control is not an identity check. It is a **surface boundary**, an
 | MCP (the agent surface) | yes | **no — the code path is absent, not gated** |
 | HTTP API | yes (read-only surface: **no**, see §5) | **no** |
 
+> ### Corrected 2026-08-08 — "MCP may propose" would break an invariant already proved
+>
+> The row reading *"MCP · may propose: yes"* is wrong if "propose" means **persist** a `proposed`
+> record, and the HTTP row contradicts itself in the same table. Persisting anything from MCP is a
+> database write, and MCP's read-only behaviour is not an aspiration here — it is an invariant with
+> a passing byte-hash test behind it (12c-iii-b proved the database byte-identical across a full MCP
+> session, and a mutation probe confirmed the test catches a write). One `proposed` insert makes
+> that test fail, and the honest options would be to delete the test or to weaken it.
+>
+> The corrected matrix — **MCP and HTTP are read-only, without exception**:
+>
+> | surface | read | propose *persistently* | confirm | supersede | invalidate |
+> |---|---|---|---|---|---|
+> | CLI | yes | yes | yes | yes | yes |
+> | HTTP / UI | yes | **no** | **no** | **no** | **no** |
+> | MCP | yes | **no** | **no** | **no** | **no** |
+>
+> An agent still has a useful path, and it needs no write: MCP may **list, search and inspect**
+> memory, **report possible staleness**, and **return the exact `nerve memory …` command as text**
+> for a human to run. That is a proposal in the only sense that matters — a suggestion a human
+> executes — and it keeps the boundary in §1 real rather than negotiated. It is the same shape §5
+> already requires of the UI: show the data, explain the boundary, print the command.
+
 An agent reaches Nerve through MCP. `tools/call` has no confirmation tool and the confirm function is
 not reachable from `crates/nerve-server/src/mcp/`, asserted by a source scan of the same shape as
 `crates/nerve-server/tests/layering.rs`. That is a true statement Nerve can enforce.
@@ -85,6 +108,34 @@ used since Slice 2b — never stored as a score.
   which is *detected, counted and never suppressed* because each edge is individually evidenced
   (`CONTINUATION.md:499`).
 
+> ### Corrected 2026-08-08 — six "statuses" are four plus three views, and a shared subject is not a contradiction
+>
+> **Stored and derived are different kinds and the plan lists them as one set.** §7.4 then requires
+> "six statuses" while §3 says two of them are never stored, so the acceptance criterion contradicts
+> the design it is checking. Separate them:
+>
+> | | values |
+> |---|---|
+> | **stored lifecycle** (`memory.status`) | `proposed` · `active` · `superseded` · `invalidated` |
+> | **derived views** (query time, never written) | `potentially_stale` · `conflicted` · `multiple_active` |
+>
+> `multiple_active` is new and it is the point of the next correction.
+>
+> **Two notes about the same file are not a contradiction.** As drafted, `conflicted` fires on two
+> `active` records sharing a subject "whose content the resolver cannot order" — and since the
+> content is free prose, the resolver can *never* order it, so every second note on a subject becomes
+> a conflict. That is a false claim manufactured by a rule, and it is the same error
+> `ADR_DESCRIBES_COMPONENT` was refused for: asserting a semantic relationship that the evidence —
+> here, two English sentences — cannot support.
+>
+> Corrected: a memory record may carry an **optional `claim_key`**, a short caller-supplied label
+> naming *what question this record answers* ("owner", "deprecation-status", "retry-policy"). Only
+> records agreeing on **repository + subject + scope + `claim_key`** are evaluated as competing
+> structured claims and can be reported `conflicted`. Records without a claim key are
+> **`multiple_active`** — several notes on one subject, which is normal and is reported as what it
+> is. An explicit human-created conflict link is also admissible, because a human asserting the
+> contradiction is evidence a resolver reading prose is not.
+
 ---
 
 ## 4. History is append-only
@@ -107,6 +158,55 @@ requires history preserved and a delete verb is how it stops being.
 `author_label` is a **local label, not an identity**. It records what the caller said it was, and the
 schema comment says so, because a field named `author` in a product with no accounts invites being
 read as authentication. Untrusted string, T7 terms.
+
+> ### Corrected 2026-08-08 — `subject_entity_id` as written destroys memory on re-index
+>
+> **This is the row's most serious defect and it is mechanical.** `memory.subject_entity_id`
+> referencing `entity(entity_id)` cannot survive ordinary operation, because entity rows are
+> **routinely deleted**: `prune_orphans` issues `DELETE FROM entity WHERE …` (`prune.rs:376`, and
+> again scoped at `:440`), and `deleting_a_file_removes_its_entities_assertions_and_observations`
+> (`incremental.rs:290`) pins that as required behaviour. With `foreign_keys=ON` (`db.rs:37`) a
+> memory row pointing at a pruned entity leaves exactly two outcomes:
+>
+> - **the delete is refused** — a human note about a file now blocks re-indexing that file, so
+>   writing memory would break indexing; or
+> - **the delete cascades** — the human's note is silently destroyed by a routine re-index, which is
+>   the one thing a memory feature must never do.
+>
+> Neither is acceptable, so **memory does not hold a foreign key into `entity`.** It stores a
+> *snapshot* and resolves the live subject at query time — the same move §3 already makes for
+> staleness, and the same move Row 13 was corrected to make for its targets:
+>
+> ```
+> memory(
+>   memory_id, repo_id,
+>   -- the subject, as it was when the human wrote it. No FK: entities are pruned.
+>   subject_entity_id_snapshot, subject_kind_snapshot, subject_name_snapshot,
+>   subject_path_snapshot, subject_selector_snapshot, anchor_state_id,
+>   scope, claim_key,                       -- see §3 as corrected
+>   content, author_label, created_at,
+>   status,                                 -- STORED lifecycle only, four values
+>   supersedes_memory_id,                   -- one direction; the inverse is derived
+>   invalidated_at, invalidation_reason
+> )
+> ```
+>
+> Subject resolution is a **query-time verdict**, reported and never guessed:
+> `resolved` · `resolved_through_identity_link` · `missing` · `ambiguous` ·
+> `repository_state_unavailable`. The identity-link path matters: Nerve already records renames as
+> `IdentityLink`, so a note about a moved file can often still be attached honestly — but only when
+> a link says so, never by name similarity (`CLAUDE.md` §3).
+>
+> **Citations need the same treatment.** `memory_citation(cited_entity_id | cited_path, …)` has the
+> identical problem and takes the identical fix: durable snapshots plus a resolution verdict.
+>
+> ### Supersession is stored in one direction
+>
+> The sketch stores **both** `supersedes` and `superseded_by`. Two independently writable directions
+> of one fact can disagree, and nothing in the schema would notice — the same "two writable copies of
+> one fact" Row 13 §4.1 rejected for cross-repository links. Store `supersedes_memory_id`; derive the
+> inverse. The status change and the `memory_event` append are **one transaction**, or a crash
+> between them leaves a superseded record with no record of being superseded.
 
 ---
 
@@ -142,6 +242,37 @@ escapes the MCP trust envelope · the UI cannot display a created record.
 
 ---
 
+## 6b. Export, and why import is conditional (added 2026-08-08)
+
+Memory is the only thing in the database a human authored, so it is the only thing whose loss is not
+recoverable by re-indexing. **`nerve memory export` ships: versioned, deterministic, local, offline**
+— a stable schema version, canonical key order, and byte-identical output for identical input, in
+the manner `fixtures/*/inventory.json` is already required to be reproducible.
+
+**Import ships only if it can be made safe**, and safe means all of: a `--dry-run` that reports
+exactly what would change and writes nothing · schema-version validation with refusal on unknown ·
+stable ids so a re-import is not a duplicate · explicit duplicate handling · **refusal on repository
+mismatch**, because importing another repository's memory silently re-subjects every record ·
+no silent overwrite of an existing record · bounds on file size and record count · one transaction
+with full rollback. If any of those cannot be met, **export ships and import is explicitly deferred**
+with the reason recorded — a half-safe import is how a human's notes get overwritten by a file.
+
+---
+
+## 6c. Sub-slices (added 2026-08-08)
+
+Same reason as Row 13 §3 — a slice bundling a store layer and a surface has cost this project five
+agents.
+
+| | scope | independently testable at |
+|---|---|---|
+| **14a** | schema v9, durable subject snapshots, the read model and query-time resolution | a memory row whose subject entity has been pruned still resolves to `missing`, not to nothing |
+| **14b** | CLI lifecycle, citations, `memory_event`, export | supersede + invalidate leave every prior event readable |
+| **14c** | read-only HTTP and MCP, T7 and T13 | database byte-identical across a full MCP session |
+| **14d** | functional UI and the semantic acceptance checks that replace §6's existence loop | the UI displays a record, explains the boundary, prints the command |
+
+---
+
 ## 7. Acceptance criteria
 
 1. `assertion` / `observation` / `occurrence` / `assertion_state` byte-identical across every memory
@@ -149,8 +280,21 @@ escapes the MCP trust envelope · the UI cannot display a created record.
 2. No confirm path reachable from `crates/nerve-server/src/mcp/`, asserted by a source scan with an
    anti-vacuity floor. A probe adding one fails by name.
 3. T13 written, with the shared-shell limitation stated rather than implied.
-4. Six statuses; `potentially_stale` and `conflicted` **derived at query time**, never stored — a
-   probe storing either fails.
+4. **Four stored statuses and three derived views** (§3 as corrected); `potentially_stale`,
+   `conflicted` and `multiple_active` derived at query time, never stored — a probe storing any of
+   them fails by name.
+4b. **A memory record survives the deletion of its subject entity.** Asserted directly: write a
+   record about a file, delete the file, re-index so `prune_orphans` runs, and the record is still
+   readable with subject resolution `missing`. A cascade or a blocked prune both fail this.
+4c. **Two notes on one subject are reported `multiple_active`, not `conflicted`.** `conflicted`
+   requires a shared `claim_key` or an explicit human conflict link — asserted by a negative test,
+   because this is a claim the product would otherwise manufacture.
+4d. **Supersession has one writable direction**; the inverse is derived, and a source scan proves no
+   second column stores it. Status change and event append are one transaction, asserted by an
+   interrupted-write test leaving neither applied.
+4e. **Export is deterministic**: the same database exports byte-identically twice, and the output
+   carries its schema version. If import ships, `--dry-run` writes nothing (hash-asserted) and a
+   repository-mismatch import is refused.
 5. `invalidated` and `superseded` distinguishable in every surface's output.
 6. `memory_event` append-only: after supersede and invalidate, every prior event still readable.
    No delete verb exists — asserted by the CLI-surface test that already fails if a forbidden command
@@ -178,4 +322,29 @@ escapes the MCP trust envelope · the UI cannot display a created record.
    deliberate. §5.
 5. **`nerve memory delete` was drafted** beside invalidate. A delete verb is how "history preserved"
    stops being true. Refused, not deferred. §4.
+
+### Refutations of the corrected draft, found 2026-08-08 before implementation
+
+6. **`memory.subject_entity_id` was drafted as a foreign key into `entity`.** Entity rows are
+   routinely deleted — `prune_orphans` (`prune.rs:376`, `:440`) and the required behaviour pinned by
+   `deleting_a_file_removes_its_entities_assertions_and_observations` (`incremental.rs:290`) — so with
+   `foreign_keys=ON` the delete is either refused (a human note blocks re-indexing a file) or
+   cascades (a routine re-index silently destroys the note). Snapshots plus query-time resolution.
+   §4.
+7. **The surface table let MCP "propose".** If that means persisting a `proposed` row it is a
+   database write, and MCP's byte-identical read-only test — passing today, and proved non-vacuous by
+   a mutation probe in 12c-iii-b — would have to be deleted or weakened. MCP returns the command as
+   text instead. §1.
+8. **Six "statuses" were four stored plus two derived**, and §7.4 required all six as statuses, so
+   the acceptance criterion contradicted the design. Split, and `multiple_active` added. §3.
+9. **`conflicted` would have fired on every second note about a subject.** The content is free prose,
+   so a resolver can never order it, so the rule manufactures a contradiction from two unrelated
+   sentences — `ADR_DESCRIBES_COMPONENT`'s refusal in a new place. Gated behind an optional
+   `claim_key` or an explicit human conflict link. §3.
+10. **Supersession was drafted with two independently writable directions** (`supersedes` and
+    `superseded_by`), which can disagree with nothing to notice — the "two writable copies of one
+    fact" Row 13 §4.1 already rejected. One direction, inverse derived. §4.
+11. **There was no export at all.** Memory is the only thing in the database a human authored and
+    therefore the only thing re-indexing cannot rebuild. Export ships; import ships only if it can be
+    made safe, and is otherwise deferred explicitly rather than half-built. §6b.
 </content>
