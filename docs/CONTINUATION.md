@@ -26,6 +26,52 @@
 A machine restart interrupted this project on 2026-08-01; recovery found no lost work and required
 no repair. See `docs/reports/restart-recovery-report.md`.
 
+## Open defects found 2026-08-05/08 — recorded, deliberately not fixed in 12c-ii
+
+1. **`scripts/make_history_fixtures.sh` is no longer the source of truth for
+   `fixtures/history-hostile/README.md`.** The committed file carries a hand-written
+   *"Corrected 2026-08-03"* section about `canonical_child` vs `safe_tree_name` (landed in
+   `848af72`); the generator's heredoc does not contain it. **Re-running the generator silently
+   reverts a documented correction**, which refutes the script's own byte-identical determinism
+   claim for that file. Verified by the orchestrator. Fix: fold the correction into the heredoc.
+2. **Seven fixture READMEs say "alongside its six siblings"** while eight fixtures now exist.
+   `readme_head` would rewrite seven committed files, so 12c-ii added `readme_head_similar` and left
+   the drift. Docs-pass item.
+3. **12b write-path defect, still open**: `delete_commits_with_unavailable_parents` deletes
+   unconditionally each sync assuming the re-walk re-reaches those commits, which fails once HEAD
+   moves. The asymmetry is the defect — a commit with *available* parents that becomes unreachable
+   stays recorded.
+4. **`MAX_SIMILARITY_LINES` has no `SimilarityUnmeasured` value.** Recording it as `blob-too-large`
+   would attach a reason whose stored text is false for it, so the line cap refuses the **commit**
+   (`RefusedBound`) instead. A sixth vocabulary value would be more precise.
+5. **Similarity blob size is measured after inflation**, because `ObjectStore::read` has no size
+   preview. Bounded by 12a's 64 MiB first, then by the matcher's 1 MiB — not as tight as plan §6.4's
+   wording implies.
+6. Coverage stated honestly: `blob-unreadable` is untested (needs a delta with a missing base as a
+   rename candidate); `blob-absent` is unit-tested against an empty store rather than a fixture;
+   `RenameAmbiguity::ManyBoth` has no fixture case.
+
+## Environment facts worth not rediscovering
+
+- **`cargo` is not on `PATH`** in this shell, interactive or not. Prefix everything with
+  `export PATH="$HOME/.cargo/bin:$PATH"`. Node/npm *are* on `PATH` via nvm.
+- **A cold `cargo test --workspace` takes ~10 minutes**, and it is macOS **linking ~48 test
+  binaries**, not test runtime — the slowest suite is `gitobj_bomb` at ~15s. This exceeds the
+  10-minute foreground command cap, so run the full gate backgrounded or it will look like a hang.
+- **Narrow-width browser QA is solved, and the obvious approach is a trap.** Chrome clamps a
+  headless window to a platform minimum (~500 CSS px), so `--window-size=380,700` renders the page
+  at **500px** and merely crops the screenshot to 380 — `window.innerWidth` reports 500. That is the
+  same failure as the extension's `resize_window` that row 7a-ii recorded, with a new tool. The
+  working mechanism is CDP `Emulation.setDeviceMetricsOverride` with `mobile: false`, driven over
+  Node 22+'s **built-in** `WebSocket` against `--remote-debugging-port`: no new dependency, no
+  network, no install. It reports `innerWidth: 380, viewportHonoured: true` and *asserts* that
+  rather than assuming it, and it also collects console messages, exceptions and
+  `scrollWidth > clientWidth` overflow. Promote the driver to `scripts/` when the UI parity pass
+  uses it.
+- **Delegation hit a session limit** mid-12c-ii Pass B, after the agent had delivered its report.
+  Recorded as a process deviation; the orchestrator verified and continued directly. Delegation
+  recovered afterwards.
+
 ## Slice 12c-i-a — the derived queries, the wording hoist, and a defect in the plan itself
 
 **Delegation is available again.** A cheap read-only dispatch succeeded on 2026-08-04, and a full
