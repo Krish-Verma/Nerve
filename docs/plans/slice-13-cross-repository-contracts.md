@@ -137,6 +137,54 @@ contract_link(
 `.nerve/nerve.db`, which `.gitignore:2` already covers, and §9 makes that a tested property rather
 than a convention.
 
+> ### Corrected 2026-08-08 — the columns a link needs to outlive its target
+>
+> The sketch above cannot answer its own §6 states. Two structural gaps:
+>
+> **It records no snapshot of the target.** `target_entity_ref` is a pointer into a database Nerve
+> does not own and cannot hold still. When B's file is renamed or deleted, the link degrades to a
+> dangling reference with nothing left to *name* what it used to point at, so
+> `contract_deleted`, `target_changed` and `contract_file_missing` become indistinguishable —
+> the failure 12b's `changes_enumerated` exists to prevent, one row over.
+>
+> **It has one `contract_version`** where §6 requires `contract_version_mismatch`, which is by
+> definition a disagreement between two numbers.
+>
+> Corrected shape (names indicative, the requirement is the content):
+>
+> ```
+> contract_link(
+>   -- source: all local, all verifiable
+>   repo_id, source_repository_id, source_state_at_resolution,
+>   source_entity_id, source_kind_snapshot, source_path, source_span,
+>
+>   -- target: a SNAPSHOT, because the target may move, change kind, or vanish
+>   registry_entry_id, expected_target_repository_id, target_state_at_resolution,
+>   target_entity_id, target_kind_snapshot, target_name_snapshot,
+>   target_path_snapshot, target_span_snapshot,
+>
+>   -- the contract itself
+>   relation_semantics, contract_kind, contract_identity,
+>   expected_contract_version, observed_contract_version,
+>
+>   -- how it was resolved, and what could not be
+>   resolution_method,           -- closed vocabulary, §4.3 as corrected
+>   extractor_id, extractor_version, evidence_details,
+>   ambiguity, unsupported_reason,
+>
+>   -- lifecycle
+>   first_seen_at, last_seen_at, withdrawn_at, status
+> )
+> ```
+>
+> `expected_target_repository_id` is the identity check §6 relies on: a registry entry is
+> re-validated against the **recorded `repo_id`** rather than its path, which is what makes
+> `target_repository_moved` detectable at all.
+>
+> `withdrawn_at` + `status` rather than deletion, for the same reason the evidence model withdraws
+> assertions instead of dropping them: a link that vanished from the table cannot be reported as
+> having ended.
+
 ### 4.3 No new `Relation`, and C2 is the exception that proves it
 
 C1 and C3 emit **no** `Relation` and no `assertion` row: a repository-to-repository dependency has no
@@ -154,6 +202,55 @@ stored: `CONTINUATION.md:504`).
 
 **Appending is load-bearing and is asserted, not assumed.** All twelve existing source types are
 individually pinned, so an insertion fails where it is written.
+
+> ### Corrected 2026-08-08 — C2 cannot be a local assertion, and the schema settles it
+>
+> **The two paragraphs above are wrong in their mechanism**, and v1's DDL refutes them without
+> needing an opinion:
+>
+> ```sql
+> CREATE TABLE assertion (
+>     assertion_id      TEXT PRIMARY KEY,
+>     repo_id           TEXT NOT NULL REFERENCES repository(repo_id),
+>     source_entity_id  TEXT NOT NULL REFERENCES entity(entity_id),
+>     relation          TEXT NOT NULL,
+>     target_entity_id  TEXT NOT NULL REFERENCES entity(entity_id)
+> );                                            -- schema.rs:92-98, immutable since v1
+> ```
+>
+> `target_entity_id` is a **hard foreign key into the local `entity` table**, and
+> `PRAGMA foreign_keys=ON` is set on every connection (`db.rs:37`). C2's target is a file entity in
+> repository **B**, which by construction has no row in **A**'s `entity` table. So an ordinary local
+> `REFERENCES` assertion for C2 is not merely undesirable — **it cannot be inserted.** The only ways
+> to force it are to create a proxy entity for B's file inside A (inventing a local entity for
+> something A never indexed) or to drop the foreign key (removing the guarantee that every assertion
+> endpoint is a thing Nerve actually saw). Both are refused.
+>
+> **A cross-repository link therefore lives in `contract_link` and nowhere else**, exactly as C1 and
+> C3 already do. The distinction §4.3 drew between C1/C3 and C2 was the wrong distinction: it is not
+> *"does this have entities on both ends"* but *"are both ends in this database"*, and for every
+> contract in this row the answer is no.
+>
+> A response may still describe the semantic relation as `REFERENCES` — that is the honest name for
+> what the manifest declares. It is **not** a row in the local assertion graph, and the difference is
+> load-bearing: ordinary `path` and `impact` queries must **not** traverse contract links, because a
+> traversal that silently crossed repositories would answer a question about A with facts about B
+> whose freshness A cannot vouch for. Crossing is opt-in at the contract surface.
+>
+> **The new `EvidenceSourceType` is withdrawn.** `EvidenceSourceType` is a property of an
+> `observation`, and `observation.assertion_id` is `NOT NULL REFERENCES assertion(assertion_id)`
+> (`schema.rs:115`) — no assertion, no observation, no consumer. Adding a global vocabulary value
+> that no observation can ever carry would put a member in `ALL`, in the mask layout and in every
+> gloss table for a row that does not exist. Instead C2 uses a **contract-specific closed
+> vocabulary** stored in `contract_link.resolution_method`:
+>
+> ```
+> MANIFEST_DECLARED · WORKSPACE_DECLARED · PATH_DEPENDENCY_RESOLVED · EXPORT_MAP_RESOLVED
+> ```
+>
+> A global `EvidenceSourceType` is added only when real code demonstrates a valid observation
+> consumer for it. That is the same admission test Slice 8 applies to MCP tools, and 12c-iii-b's
+> "seven tools would have been seven names over one contract" is the precedent.
 
 ---
 
@@ -192,6 +289,45 @@ Two of them are the ones a first draft collapses:
 - **`target_partially_indexed` is not `target_changed`.** This is Slice 7c-i's `Stale` / `Unverified`
   distinction, third instance: nothing was *observed* to change, part of the target was never looked
   at. Reporting "unknown" as "current" is how a truncated sweep becomes a clean bill.
+
+> ### Corrected 2026-08-08 — the count is wrong and one state is unreachable
+>
+> **The section says "twelve situations" and then lists thirteen.** §9.3 says "All thirteen". Counted
+> from the list above: `source_changed`, `target_changed`, `both_changed`,
+> `contract_version_mismatch`, `generated_client_stale`, `target_repository_missing`,
+> `target_repository_moved`, `contract_file_missing`, `duplicate_contract_identity`,
+> `conflicting_definitions`, `target_partially_indexed`, `contract_deleted`,
+> `registry_entry_removed` — **thirteen**. A plan that cannot count its own required states would
+> have shipped an acceptance criterion nobody could satisfy exactly.
+>
+> **`generated_client_stale` is removed, and this plan already refused it.** §2.1 lists
+> *"deployment manifests, shared database schemas, generated-client metadata"* under **Refused for
+> row 13**. A required state whose evidence the same document refuses is unreachable by
+> construction, and requiring it would force either a fabricated state or a permanently failing
+> criterion. It returns only if generated-client metadata is actually implemented, with its own
+> evidence and its own gate.
+>
+> The required set for row 13 is therefore **twelve**, matching the sentence rather than the list:
+>
+> `source_changed` · `target_changed` · `both_changed` · `contract_version_mismatch` ·
+> `target_repository_missing` · `target_repository_moved` · `contract_file_missing` ·
+> `duplicate_contract_identity` · `conflicting_definitions` · `target_partially_indexed` ·
+> `contract_deleted` · `registry_entry_removed`
+>
+> Each must be **producible from a fixture** before it is required. A state that cannot be reached
+> cannot be tested, which is the correction 12c-i-b already had to make when `WalkBudgetExhausted`
+> turned out to be unreachable with only `--limit`.
+>
+> ### Registry lifecycle — why `registry_entry_removed` needs a tombstone
+>
+> `registry_entry_removed` is only reportable if removing an entry does not destroy its identity.
+> `nerve repo remove` therefore **tombstones**: the row is marked inactive with a timestamp, its
+> `registry_id` and recorded `repo_id` are retained, and its links move to `withdrawn`. Hard deletion
+> is a separate, explicit purge.
+>
+> Relocation (`nerve repo relocate`) **must verify that the new path contains the expected
+> `repo_id`** before accepting it. Without that check, relocation is precisely the silent
+> re-pointing §6 calls the dangerous case, performed by Nerve itself on request.
 
 ---
 
@@ -241,8 +377,20 @@ does not fit inside T2's path safety, which is about paths *within* one reposito
    its form named**, never silently dropped. Asserted by a tally, not by inspection.
 2. Precision measured **per rule** (C1, C2, C3), ground truth written first, FP = 0, recall reported.
    No combined number exists anywhere in the output or the docs.
-3. All thirteen freshness situations in §6 are producible and individually pinned, with
-   `target_repository_moved` and `target_partially_indexed` each distinguished from its neighbour.
+3. All **twelve** freshness situations in §6 as corrected are producible **from a fixture** and
+   individually pinned, with `target_repository_moved` and `target_partially_indexed` each
+   distinguished from its neighbour. `generated_client_stale` is **not** required — §2.1 refuses the
+   evidence it would rest on. A state that cannot be produced is not required; a state that is
+   required and cannot be produced is a plan defect, not a test to skip.
+3b. **No cross-repository link is reachable from a local graph query.** Asserted negatively: a
+   `path` and an `impact` query over a repository with contract links returns the same result as the
+   same query with the links deleted. Crossing repositories is opt-in at the contract surface, never
+   a side effect of an ordinary traversal.
+3c. **No proxy entity exists for a foreign target.** Asserted by a scan: every `entity` row belongs
+   to the local repository, and `contract_link.target_entity_id` never appears in `entity`.
+3d. Each of C1, C2 and C3 has a **positive, negative, ambiguous, unsupported, stale and
+   missing-target fixture**, and each rule's precision is measured on its own table with FP = 0 and
+   recall reported. No combined number exists.
 4. Registration is explicit; no sibling directory is ever auto-registered — asserted by a negative
    test with a sibling checkout present.
 5. The target database is byte-identical after every read, verified by hash.
@@ -282,4 +430,25 @@ does not fit inside T2's path safety, which is about paths *within* one reposito
 6. **`target_repository_missing` and `target_repository_moved` were one state.** The second is the
    dangerous one, and collapsing them means a registry entry re-pointed at a different checkout makes
    every link describe the wrong repository. §6.
+
+### Refutations of the corrected draft, found 2026-08-08 before implementation
+
+7. **C2 was drafted as a local `REFERENCES` assertion with a new `EvidenceSourceType`.** It cannot be
+   inserted: `assertion.target_entity_id` is `NOT NULL REFERENCES entity(entity_id)` (`schema.rs:97`)
+   with `foreign_keys=ON` (`db.rs:37`), and C2's target has no row in the local `entity` table. The
+   distinction the plan drew — *does this have entities on both ends* — was the wrong one; the
+   question is *are both ends in this database*, and for every contract in this row the answer is no.
+   The `EvidenceSourceType` went with it, because `observation.assertion_id` is `NOT NULL`
+   (`schema.rs:115`) so no observation could ever carry it. §4.3.
+8. **`contract_link` recorded no target snapshot**, so a renamed or deleted target made
+   `contract_deleted`, `target_changed` and `contract_file_missing` indistinguishable; and it had a
+   single `contract_version` where `contract_version_mismatch` needs two numbers to disagree. §4.2.
+9. **§6 said twelve situations and listed thirteen**, while §9 required "all thirteen" — the plan
+   could not count its own required states. §6.
+10. **`generated_client_stale` was required and is unreachable**, because §2.1 of the same document
+    refuses generated-client metadata. A required state whose evidence the plan refuses forces either
+    a fabricated state or a permanently failing criterion. §6.
+11. **Removing a registry entry destroyed the identity `registry_entry_removed` needs to report it.**
+    Tombstone, do not delete; and verify the recorded `repo_id` on relocate, or relocation *is* the
+    silent re-pointing §6 calls the dangerous case. §6.
 </content>
