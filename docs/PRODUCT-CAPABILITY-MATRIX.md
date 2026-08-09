@@ -157,7 +157,15 @@ These are **gaps, not refusals**, and they are the functional UI parity phase's 
 2. **Selector alternatives** are not rendered when a selector is ambiguous.
 3. **Trace / test-observed-call evidence** has no dedicated UI surface.
 4. **`check`'s trust verdict** is not on HTTP, MCP or the UI.
-5. **Keyboard navigation** has never been systematically tested on any view.
+5. **Keyboard navigation** — tested 2026-08-08 with `scripts/viewport_qa.mjs`'s sibling keyboard
+   probe (real `Input.dispatchKeyEvent` Tab presses, so what is recorded is what a keyboard user
+   gets, not a model of focus order). Mostly clean: **no positive `tabindex`**, no unnamed buttons,
+   no images without `alt`, no offscreen focus stops, and a logical order — logo → search → rail →
+   tabs → path field → content. **One measured defect:** the two text inputs have no focus ring.
+   `:focus-visible` sets `outline: 1px solid var(--bone)` globally, but `.field > input` sets
+   `outline: none` (`nerve.css:382`), leaving only `.field:focus-within`'s border-colour change —
+   measured `rgb(46,40,34)` → `rgb(87,79,72)`, a **1.81:1** contrast between states against
+   WCAG 2.4.11's **3:1** minimum. Fix: `.field > input:focus-visible` restoring the global outline.
 6. **Corrupt-history UI** (a deliberately damaged object store) has never been exercised in a
    browser; the server-side behaviour is covered by tests.
 7. Rows 13 and 14 are unbuilt in their entirety.
