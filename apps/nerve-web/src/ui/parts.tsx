@@ -23,15 +23,29 @@ import { entityHref } from '../routing';
 export function Chip({
   tone = 'plain',
   title,
+  prose = false,
   children,
 }: {
   tone?: Tone;
   title?: string;
+  /**
+   * This chip carries a **sentence** rather than a token, so it may wrap.
+   *
+   * `.chip` is `white-space: nowrap`, which is right for `similar_content` or `many_from` — a
+   * stored value broken across two lines reads as two values. It is wrong for a chip whose content
+   * is a clause: at a 380px viewport a 49-character sentence is wider than the panel that holds it,
+   * and because `.row--wrap` wraps between chips rather than inside one, the chip overflowed its
+   * container. Measured at 380px: `div.row--wrap` `scrollWidth` 379 against `clientWidth` 304.
+   *
+   * A modifier rather than a change to `.chip`, because the tokens must keep not wrapping.
+   */
+  prose?: boolean;
   children: ReactNode;
 }) {
   const suffix = tone === 'plain' ? '' : ` chip--${tone}`;
+  const wrap = prose ? ' chip--prose' : '';
   return (
-    <span className={`chip${suffix}`} title={title}>
+    <span className={`chip${suffix}${wrap}`} title={title}>
       {children}
     </span>
   );

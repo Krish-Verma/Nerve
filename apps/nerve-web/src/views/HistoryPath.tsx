@@ -224,10 +224,10 @@ function PathAnswer({ report }: { report: HistoryPathReport }) {
             to describes a run that never happened.
           */}
           <div className="row row--wrap">
-            <Chip tone="quiet" title="Two kinds of evidence, kept apart. One says two paths named the same bytes; the other says a named method measured how much two different blobs share. They are never blended, summed, or ranked against each other.">
+            <Chip prose tone="quiet" title="Two kinds of evidence, kept apart. One says two paths named the same bytes; the other says a named method measured how much two different blobs share. They are never blended, summed, or ranked against each other.">
               exact content and similar content are separate claims
             </Chip>
-            <Chip tone="quiet" title="The primary key of the analysis table admits several matchers per commit, so the completeness shown on a row belongs to this matcher's run and to no other.">
+            <Chip prose tone="quiet" title="The primary key of the analysis table admits several matchers per commit, so the completeness shown on a row belongs to this matcher's run and to no other.">
               similarity analysed by {report.rename_analysis_matcher_id}
             </Chip>
           </div>

@@ -247,6 +247,17 @@ body {
   white-space: nowrap;
 }
 
+/*
+  A chip carrying a sentence, which may wrap. `.chip`'s `nowrap` is right for a stored value —
+  `similar_content` split across two lines reads as two values — and wrong for a clause: at 380px a
+  49-character sentence is wider than its panel, and `.row--wrap` wraps *between* chips, never
+  inside one, so the chip overflowed. Found by viewport-controlled QA, not by eye.
+*/
+.chip--prose {
+  white-space: normal;
+  max-width: 100%;
+}
+
 .chip__dot {
   width: 6px;
   height: 6px;

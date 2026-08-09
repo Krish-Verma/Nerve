@@ -527,7 +527,7 @@ export function RenameList({ renames }: { renames: HistoryRename[] }) {
           style={{ gap: 5 }}
         >
           <div className="row row--wrap">
-            <Chip tone="unknown" title="Git records no rename. This is a proposal drawn from content, and there is no score to sort it by.">
+            <Chip prose tone="unknown" title="Git records no rename. This is a proposal drawn from content, and there is no score to sort it by.">
               hypothesis — Git recorded no rename
             </Chip>
             <Chip
