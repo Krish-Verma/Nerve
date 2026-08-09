@@ -441,6 +441,116 @@ export function historyFreshnessGloss(value: string): string {
   return HISTORY_FRESHNESS[value] ?? 'This build has no description for that history freshness.';
 }
 
+/*
+ * ---- Slice 13a-i: the cross-repository vocabularies ------------------------------------------
+ *
+ * Four tables, declared here one slice before any view imports them. Nothing renders them yet, so
+ * each is on `DECLARED_NOT_RENDERED` in `crates/nerve-server/tests/ui_vocabulary.rs` rather than on
+ * `GLOSS_TABLES`, and that test proves the claim by asserting this prose is *absent* from the
+ * shipped bundle. Declaring the gloss beside the vocabulary rather than waiting for the view is
+ * what Slice 12c-ii's Pass A did, and the reason is the same: a vocabulary that reaches a surface
+ * before its gloss does renders "this build has no description" to a real reader.
+ */
+
+/**
+ * Whether a registered neighbour still counts.
+ *
+ * A removed entry is kept rather than deleted, and that is not tidiness: a link that resolved
+ * through the entry has to be able to say which entry went away. A row that had been deleted could
+ * not have reported its own ending.
+ */
+const REGISTRY_ENTRY_STATUS: Record<string, string> = {
+  active:
+    'This repository is registered as a neighbour and the entry still counts. Links resolved through it are current claims.',
+  tombstoned:
+    'The entry was removed and kept rather than deleted, so anything that rested on it can still say which neighbour went away, and when.',
+};
+
+export function registryEntryStatusGloss(value: string): string {
+  return (
+    REGISTRY_ENTRY_STATUS[value] ?? 'This build has no description for that registry entry status.'
+  );
+}
+
+/**
+ * Which stated declaration a cross-repository link was read out of.
+ *
+ * Every value names a file that says so. There is no value for a similar name, a matching endpoint
+ * string, a nearby directory or a resemblance of any kind, because none of those is a declaration
+ * and a link here is only ever quoted from one.
+ */
+const CONTRACT_RESOLUTION_METHOD: Record<string, string> = {
+  manifest_declared:
+    'A package manifest in this repository names the target directly. The link is quoted from that line, not inferred from a resemblance.',
+  workspace_declared:
+    'A workspace declaration lists the target as a member, so the two are stated to belong to one build rather than found beside each other on disk.',
+  path_dependency_resolved:
+    'A declared path dependency was followed to the directory it names, and the manifest in that directory was read. Both ends are stated in a file.',
+  export_map_resolved:
+    'An import specifier was resolved through the export map the target package declares, so the file at the far end is the one that package says the specifier means.',
+};
+
+export function contractResolutionMethodGloss(value: string): string {
+  return (
+    CONTRACT_RESOLUTION_METHOD[value] ??
+    'This build has no description for that resolution method.'
+  );
+}
+
+/**
+ * Whether a recorded cross-repository link is still claimed.
+ *
+ * The same keep-rather-than-delete rule as a registry entry, one table over and for the same reason.
+ */
+const CONTRACT_LINK_STATUS: Record<string, string> = {
+  active:
+    'The declaration this link was drawn from was still in the file the last time this repository was read. That says nothing on its own about the state of the repository at the far end.',
+  withdrawn:
+    'The declaration is gone, or the registry entry it pointed through was removed. The record is kept so the ending can be shown at all.',
+};
+
+export function contractLinkStatusGloss(value: string): string {
+  return CONTRACT_LINK_STATUS[value] ?? 'This build has no description for that link status.';
+}
+
+/**
+ * The twelve ways a cross-repository link can have stopped describing the world.
+ *
+ * Twelve rather than one "stale", because a link has two repositories behind it and only one of
+ * them is the repository being asked. Two pairs must not be read as one: a path that no longer
+ * exists is not a path that now holds a different repository, and a part of the far side that was
+ * never indexed is not a part that changed.
+ */
+const CONTRACT_FRESHNESS: Record<string, string> = {
+  source_changed:
+    'This repository has moved on since the link was worked out, so the declaration may no longer read the way it did. A remark about this end only.',
+  target_changed:
+    'The repository at the far end has moved on since the link was worked out, so what the recorded snapshot names may not be what is there now.',
+  both_changed: 'Both repositories have moved on, so neither end of the link has been re-checked.',
+  contract_version_mismatch:
+    'The version this repository asks for and the version the other one declares are different numbers. Two recorded values that disagree, with no judgement about which is right.',
+  target_repository_missing:
+    'Nothing is at the registered path any more. This is the ordinary broken link, and it is a different situation from a path that now holds some other repository.',
+  target_repository_moved:
+    'Something is at the registered path and it is a different repository from the one registered. This is the dangerous one: every link through the entry would otherwise describe the wrong project.',
+  contract_file_missing:
+    'The manifest this link was quoted from is no longer in this repository, so there is nothing left to re-read the declaration out of.',
+  duplicate_contract_identity:
+    'More than one registered repository declares this contract under the same name, so which one is meant has not been established. Every candidate is shown and none is picked.',
+  conflicting_definitions:
+    'The contract is declared more than once and the declarations disagree, so there is no single stated fact to quote.',
+  target_partially_indexed:
+    'The other repository is readable, and the part this link names was never indexed there. Nothing was seen to change: this is unknown rather than out of date.',
+  contract_deleted:
+    'The declaration this link came from is gone from the manifest. The link is a record of something that used to be stated.',
+  registry_entry_removed:
+    'The registry entry this link went through was removed. The entry is kept as a marker precisely so this can be said.',
+};
+
+export function contractFreshnessGloss(value: string): string {
+  return CONTRACT_FRESHNESS[value] ?? 'This build has no description for that contract freshness.';
+}
+
 /**
  * A reading for a key/value pair inside an extractor's `details` blob, where one exists.
  *

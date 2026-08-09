@@ -1,5 +1,5 @@
 //! Schema v1 (ADR-0003), v2 (Slice 3), v3 (Slice 3b), v4 (Slice 5d-i), v5 (Slice 10a),
-//! v6 (Slice 12b), v7 (Slice 12c-ii), and migrations.
+//! v6 (Slice 12b), v7 (Slice 12c-ii), v8 (Slice 13a-i), and migrations.
 //!
 //! Migrations are append-only. `V1` is immutable: a database written by an older build must be
 //! upgradable by replaying the later steps, so editing an already-shipped step in place would
@@ -12,7 +12,7 @@ use nerve_core::ids;
 use crate::error::{Result, StoreError};
 
 /// The schema version this build writes and understands.
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 /// Human-readable description recorded in `schema_version`.
 pub const SCHEMA_V1_DESCRIPTION: &str =
@@ -47,6 +47,11 @@ pub const SCHEMA_V7_DESCRIPTION: &str =
     "Slice 12c-ii: git_rename_hypothesis rebuilt with two blob oids, a named matcher and an \
      integer measurement; git_rename_analysis for per-commit candidate-set completeness; \
      git_commit.summary_truncation, defaulting to 'unknown' because v6 rows cannot be backfilled";
+
+/// Human-readable description recorded in `schema_version` for the Slice 13a-i upgrade.
+pub const SCHEMA_V8_DESCRIPTION: &str =
+    "Slice 13a-i: repo_registry and contract_link — one repository's stated view of its \
+     neighbours, with the target recorded as a snapshot because it lives in another database";
 
 const V1: &str = r#"
 CREATE TABLE repository (
@@ -517,6 +522,189 @@ CREATE TABLE git_rename_analysis (
 );
 "#;
 
+/// Schema v8 — Slice 13a-i. Two new tables, no `ALTER` of any existing one.
+///
+/// # Where a cross-repository link lives, when there are two databases
+///
+/// Nerve's database is per repository. A cross-repository link has one end in each of two of them,
+/// and the placement that looks natural is wrong twice over: writing the link into **both**
+/// databases makes two writable copies of one fact and means indexing B writes into A, which Nerve
+/// has never done; a **separate global** registry database puts a new writable location outside
+/// every repository, for a product whose whole storage story is one gitignored directory.
+///
+/// So both tables live in the database of the repository the command was run from, and they are
+/// **that repository's stated view of its neighbours**. The consequence is stated rather than
+/// hidden: a link is directional and one-sided. A's database knows A depends on B; B's database
+/// does not know it is depended upon until B registers A.
+///
+/// # `contract_link.target_entity_id` is deliberately **not** a foreign key
+///
+/// Contrast `assertion.target_entity_id` at [`V1`] (`schema.rs:97`), which is
+/// `NOT NULL REFERENCES entity(entity_id)` and enforced — `PRAGMA foreign_keys=ON` is set on every
+/// connection (`db.rs:37`). That constraint is the guarantee that every endpoint of every assertion
+/// is a thing Nerve actually saw in *this* repository.
+///
+/// A contract link's target is by construction **not** in this repository, so the same constraint
+/// cannot hold and must not be faked. The only two ways to force one are to create a proxy entity
+/// for the foreign file inside this database — inventing a local entity for something never indexed
+/// here — or to drop the foreign key from `assertion`, removing the guarantee for everything else.
+/// Both are refused, so a cross-repository link lives here and in no other table, and no ordinary
+/// `path` or `impact` traversal may reach it: a traversal that silently crossed repositories would
+/// answer a question about A with facts about B whose freshness A cannot vouch for.
+///
+/// The same reasoning applies to every `*_snapshot` column and to `target_state_at_resolution`:
+/// they name rows in a database this one does not own. The **source** side is the opposite and its
+/// columns say so — `source_entity_id` and `source_state_at_resolution` *are* foreign keys, because
+/// that end is local and verifiable. The asymmetry in the DDL is the point of the table.
+///
+/// # Why the target is a snapshot rather than a pointer
+///
+/// A bare `target_entity_id` is a pointer into a database Nerve cannot hold still. When B renames or
+/// deletes the file, the link degrades to a dangling reference with nothing left to *name* what it
+/// used to point at, and `contract_deleted`, `target_changed` and `contract_file_missing` become
+/// indistinguishable — the failure `git_commit.changes_enumerated` exists to prevent, one row over.
+/// So the kind, name, path and span the target had at resolution are copied in, and
+/// `expected_target_repository_id` is the identity a re-validation is checked against, because
+/// checking the *path* is what makes `target_repository_moved` undetectable.
+///
+/// Two version columns rather than one, because `contract_version_mismatch` is by definition a
+/// disagreement between two numbers and one column cannot hold a disagreement.
+///
+/// # `withdrawn_at` + `status` rather than deletion
+///
+/// Both tables retire a row instead of removing it, for the reason the evidence model withdraws an
+/// assertion rather than dropping it: **a row that vanished from the table cannot be reported as
+/// having ended.** `registry_entry_removed` and `contract_deleted` are two of the twelve situations
+/// row 13 must keep distinguishable, and both are reports made *from* the kept row. Hard deletion
+/// is a separate, explicit purge. The `CHECK` on each table is what stops a status and a timestamp
+/// from disagreeing — an active row with a withdrawal date, or a retired row without one, is
+/// refused rather than reviewed later, in the manner of v7's `git_rename_hypothesis` CHECK.
+///
+/// `local_path` is the one field that is user-specific and absolute. It lives only in
+/// `.nerve/nerve.db`, which `.gitignore` already covers.
+///
+/// No `IF NOT EXISTS`: no permanent table in this schema has it, and a migration that tolerated
+/// re-application would hide a real double-apply.
+const V8: &str = r#"
+CREATE TABLE repo_registry (
+    repo_id                 TEXT NOT NULL REFERENCES repository(repo_id),
+    registry_id             TEXT NOT NULL,   -- stable local id for this entry
+    expected_repository_id  TEXT NOT NULL,   -- the target's own repo_id, recorded at registration
+    display_name            TEXT NOT NULL,   -- untrusted repository content (T7)
+    local_path              TEXT NOT NULL,   -- user-specific and absolute; never tracked by git
+    added_at                TEXT NOT NULL,
+    last_seen_state         TEXT,
+    last_seen_at            TEXT,
+    availability_checked_at TEXT,
+    status                  TEXT NOT NULL,   -- closed vocabulary: RegistryEntryStatus
+    withdrawn_at            TEXT,            -- set when tombstoned; NULL while active
+    PRIMARY KEY (repo_id, registry_id),
+    -- A tombstone is a status and a moment. Either alone is half a fact.
+    CHECK (
+        (status = 'active'     AND withdrawn_at IS NULL)
+     OR (status = 'tombstoned' AND withdrawn_at IS NOT NULL)
+    ),
+    -- A state observed at no time, or a time with no state, cannot be compared against anything.
+    CHECK (
+        (last_seen_state IS NULL     AND last_seen_at IS NULL)
+     OR (last_seen_state IS NOT NULL AND last_seen_at IS NOT NULL)
+    ),
+    -- An empty identity or an empty path is a row that names nothing.
+    CHECK (registry_id <> '' AND expected_repository_id <> '' AND local_path <> '')
+);
+
+CREATE INDEX idx_repo_registry_status ON repo_registry(repo_id, status);
+
+CREATE TABLE contract_link (
+    -- Surrogate key, in the manner of `observation`: the logical identity is the unique index
+    -- below, and a link has no content-derived id of its own.
+    link_id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id                       TEXT NOT NULL REFERENCES repository(repo_id),
+
+    -- Source. All local, all verifiable, and the foreign keys say so.
+    source_repository_id          TEXT NOT NULL,
+    source_state_at_resolution    TEXT NOT NULL REFERENCES repository_state(state_id),
+    source_entity_id              TEXT REFERENCES entity(entity_id),  -- NULL when repo-to-repo
+    source_kind_snapshot          TEXT,
+    source_path                   TEXT NOT NULL,
+    source_span                   TEXT NOT NULL,
+
+    -- Target. A SNAPSHOT, because the target lives in another database and may move, change
+    -- kind, or vanish. NONE of these is a foreign key, and that is the point of this table —
+    -- contrast assertion.target_entity_id at schema.rs:97, which IS one.
+    registry_entry_id             TEXT NOT NULL,
+    expected_target_repository_id TEXT NOT NULL,
+    target_state_at_resolution    TEXT,
+    target_entity_id              TEXT,
+    target_kind_snapshot          TEXT,
+    target_name_snapshot          TEXT,
+    target_path_snapshot          TEXT,
+    target_span_snapshot          TEXT,
+
+    -- The contract itself. Two version columns, because a mismatch needs two numbers.
+    relation_semantics            TEXT NOT NULL,
+    contract_kind                 TEXT NOT NULL,
+    contract_identity             TEXT NOT NULL,   -- untrusted repository content (T7)
+    expected_contract_version     TEXT,
+    observed_contract_version     TEXT,
+
+    -- How it was resolved, and what could not be.
+    resolution_method             TEXT NOT NULL,   -- closed vocabulary: ContractResolutionMethod
+    extractor_id                  TEXT NOT NULL,
+    extractor_version             TEXT NOT NULL,
+    evidence_details              TEXT,            -- JSON object, or NULL
+    ambiguity                     TEXT,
+    unsupported_reason            TEXT,            -- the form named, never silently dropped
+
+    -- Lifecycle.
+    first_seen_at                 TEXT NOT NULL,
+    last_seen_at                  TEXT NOT NULL,
+    withdrawn_at                  TEXT,
+    status                        TEXT NOT NULL,   -- closed vocabulary: ContractLinkStatus
+
+    FOREIGN KEY (repo_id, registry_entry_id) REFERENCES repo_registry(repo_id, registry_id),
+
+    -- A withdrawal is a status and a moment, exactly as in repo_registry.
+    CHECK (
+        (status = 'active'    AND withdrawn_at IS NULL)
+     OR (status = 'withdrawn' AND withdrawn_at IS NOT NULL)
+    ),
+    -- A target id with no snapshot is the dangling pointer this table exists to prevent: there
+    -- would be nothing left to name what the link used to point at.
+    CHECK (
+        target_entity_id IS NULL
+     OR (target_kind_snapshot IS NOT NULL
+            AND target_name_snapshot IS NOT NULL
+            AND target_path_snapshot IS NOT NULL)
+    ),
+    -- A form recorded as unsupported cannot also have been resolved.
+    CHECK (
+        unsupported_reason IS NULL
+     OR (target_entity_id IS NULL AND target_path_snapshot IS NULL)
+    ),
+    -- Last seen before first seen is not a lifecycle. Timestamps are ISO-8601 UTC, so text
+    -- comparison is chronological.
+    CHECK (last_seen_at >= first_seen_at),
+    CHECK (
+        source_repository_id <> '' AND source_path <> '' AND source_span <> ''
+        AND registry_entry_id <> '' AND expected_target_repository_id <> ''
+        AND relation_semantics <> '' AND contract_kind <> '' AND contract_identity <> ''
+        AND extractor_id <> '' AND extractor_version <> ''
+    )
+);
+
+-- Logical uniqueness, for the reason v1 gives for observation: the surrogate key is an
+-- autoincrement integer, so without this a re-index of an unchanged tree would append a duplicate
+-- link on every run. `contract_identity` is deliberately NOT unique on its own — two repositories
+-- declaring one identity is `duplicate_contract_identity`, a fact to report rather than to refuse.
+CREATE UNIQUE INDEX idx_contract_link_identity ON contract_link(
+    repo_id, registry_entry_id, contract_kind, contract_identity,
+    source_path, source_span, resolution_method
+);
+
+CREATE INDEX idx_contract_link_registry ON contract_link(repo_id, registry_entry_id, status);
+"#;
+
 /// One migration step. Almost all of them are SQL; v3 is not, because it must recompute a
 /// BLAKE3 digest and SQLite has no such function.
 enum Step {
@@ -529,7 +717,7 @@ enum Step {
 /// Migration steps, in application order: `(version, description, step)`.
 ///
 /// Appending to this list is how the schema evolves. Editing an existing entry is prohibited.
-const MIGRATIONS: [(i64, &str, Step); 7] = [
+const MIGRATIONS: [(i64, &str, Step); 8] = [
     (1, SCHEMA_V1_DESCRIPTION, Step::Sql(V1)),
     (2, SCHEMA_V2_DESCRIPTION, Step::Sql(V2)),
     (3, SCHEMA_V3_DESCRIPTION, Step::Rust(migrate_v3)),
@@ -537,6 +725,7 @@ const MIGRATIONS: [(i64, &str, Step); 7] = [
     (5, SCHEMA_V5_DESCRIPTION, Step::Sql(V5)),
     (6, SCHEMA_V6_DESCRIPTION, Step::Sql(V6)),
     (7, SCHEMA_V7_DESCRIPTION, Step::Sql(V7)),
+    (8, SCHEMA_V8_DESCRIPTION, Step::Sql(V8)),
 ];
 
 /// Apply [`V3`], then restate every `occurrence_id` under the ADR-0006 tuple.

@@ -11,6 +11,13 @@
 //! Graph reads — selector resolution, bounded path traversal, evidence assembly — live in
 //! [`select`] and [`graph`] rather than in a surface crate, so the CLI, the Slice 4 server and
 //! the Slice 8 MCP tools all answer the same question the same way.
+//!
+//! Two modules hold facts that are deliberately **outside** the evidence graph and outside the
+//! canonical dump, each for a reason recorded beside it: [`history`], because a tree diff is a
+//! primary-source fact and routing a certainty through an evidence profile costs three rows to
+//! express doubt that does not exist; and [`registry`], because a cross-repository link has one end
+//! in a database this one does not own, so it cannot be an `assertion` — both of an assertion's
+//! endpoints are hard foreign keys into the local `entity` table.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -28,6 +35,7 @@ pub mod history;
 pub mod impact;
 pub mod prune;
 pub mod query;
+pub mod registry;
 pub mod schema;
 pub mod select;
 pub mod write;
@@ -73,6 +81,12 @@ pub use query::{
     search_entities, status, symbol_spans_in_file, unresolved_entities, EntityRelationCounts,
     ExtractorRunSummary, ObservationKey, ObservationPayload, OccurrenceRow, RepositoryInfo,
     SearchHit, StatusReport, SymbolSpanRow, UnresolvedEntity,
+};
+pub use registry::{
+    contract_links_for_registry_entry, insert_contract_link, insert_registry_entry,
+    list_contract_links, list_registry_entries, registry_entry, relocate_registry_entry,
+    tombstone_registry_entry, withdraw_contract_link, withdraw_links_for_registry_entry,
+    ContractLinkRow, RegistryEntryRow,
 };
 pub use schema::{migrate, schema_version, SCHEMA_VERSION};
 pub use select::{

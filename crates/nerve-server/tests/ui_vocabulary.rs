@@ -26,8 +26,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use nerve_core::vocab::{
-    AssertionStatus, ChangeKind, ChangesEnumerated, Directness, EntityKind, EvidenceSourceType,
-    FirstObservedKind, HistoryFreshness, ParentCompleteness, Relation, RenameAmbiguity,
+    AssertionStatus, ChangeKind, ChangesEnumerated, ContractFreshness, ContractLinkStatus,
+    ContractResolutionMethod, Directness, EntityKind, EvidenceSourceType, FirstObservedKind,
+    HistoryFreshness, ParentCompleteness, RegistryEntryStatus, Relation, RenameAmbiguity,
     RenameAnalysisCompleteness, RenameEvidence, SimilarityUnmeasured, SummaryTruncation,
     UnresolvedCategory, WalkTermination,
 };
@@ -102,17 +103,26 @@ const GLOSS_TABLES: [(&str, &str); 22] = [
 
 /// Gloss tables the interface **declares and does not yet render**.
 ///
-/// Empty, and deliberately kept rather than deleted. Slice 12c-ii Pass A declared three tables one
-/// pass before anything imported them; Pass C moved all three into [`GLOSS_TABLES`], so there is
-/// nothing deferred today. The list stays because
+/// Slice 12c-ii Pass A declared three tables one pass before anything imported them; Pass C moved
+/// all three into [`GLOSS_TABLES`]. The list exists because
 /// [`every_gloss_table_the_source_declares_is_on_exactly_one_list`] is what makes a *new* table
 /// choose a side — a table on neither list fails by name — and because the honest way to declare a
 /// gloss ahead of the view that renders it is to record the gap as data rather than to omit it.
 ///
+/// **Slice 13a-i's four cross-repository vocabularies are here.** 13a-i is storage and vocabulary
+/// only: there is no CLI, no HTTP route, no MCP tool and no view for a registry yet, so nothing
+/// imports these tables and their prose is not in the bundle. They move to [`GLOSS_TABLES`] in the
+/// same change that makes a view render one, which is 13d.
+///
 /// A table listed here must be genuinely unrendered: the test proves it by asserting its prose is
 /// **absent** from the shipped bundle, which is what stops this becoming a way to opt out of the
 /// staleness check.
-const DECLARED_NOT_RENDERED: [(&str, &str); 0] = [];
+const DECLARED_NOT_RENDERED: [(&str, &str); 4] = [
+    ("vocab.ts", "REGISTRY_ENTRY_STATUS"),
+    ("vocab.ts", "CONTRACT_RESOLUTION_METHOD"),
+    ("vocab.ts", "CONTRACT_LINK_STATUS"),
+    ("vocab.ts", "CONTRACT_FRESHNESS"),
+];
 
 /// Every `const NAME: Record<…>` a gloss source declares, in declaration order.
 ///
@@ -965,6 +975,130 @@ fn every_history_freshness_verdict_is_glossed() {
     );
 }
 
+// ---- the cross-repository vocabularies ---------------------------------------------------------
+//
+// Four of them, added by Slice 13a-i and glossed in the same change, which is the point. Every
+// vocabulary before these was declared in Rust first and mirrored in TypeScript some slices later,
+// and Slice 5d-iii found 120 sites rendering fallback text as a result. These four are on
+// `DECLARED_NOT_RENDERED` rather than `GLOSS_TABLES` because 13a-i ships no surface — the guard
+// above proves that claim by checking their prose is absent from the bundle — but the per-value
+// coverage below is asserted now, so a thirteenth freshness situation cannot be added in 13b
+// without the sentence a reader would need for it.
+
+#[test]
+fn every_registry_entry_status_is_glossed() {
+    let expected: Vec<String> = RegistryEntryStatus::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    covers(
+        "RegistryEntryStatus::ALL",
+        "REGISTRY_ENTRY_STATUS (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "REGISTRY_ENTRY_STATUS"),
+    );
+}
+
+#[test]
+fn every_contract_resolution_method_is_glossed() {
+    let expected: Vec<String> = ContractResolutionMethod::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    covers(
+        "ContractResolutionMethod::ALL",
+        "CONTRACT_RESOLUTION_METHOD (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "CONTRACT_RESOLUTION_METHOD"),
+    );
+}
+
+#[test]
+fn every_contract_link_status_is_glossed() {
+    let expected: Vec<String> = ContractLinkStatus::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    covers(
+        "ContractLinkStatus::ALL",
+        "CONTRACT_LINK_STATUS (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "CONTRACT_LINK_STATUS"),
+    );
+}
+
+/// All twelve freshness situations, and the two pairs that must not read as one.
+///
+/// A missing gloss here would be worse than elsewhere for the same reason a missing
+/// `FIRST_OBSERVED_KIND` gloss is: the values a happy-path draft omits are exactly the ones that
+/// describe a broken or unverifiable link, and falling back to "this build has no description" for
+/// them would be silent in precisely the cases where saying nothing reads as "this link is fine".
+///
+/// The count is asserted alongside the coverage, because `generated_client_stale` was a required
+/// state in row 13's first draft and is unreachable — the same document refuses the evidence it
+/// would rest on. A gloss for it would be a sentence for a verdict nothing can produce.
+#[test]
+fn every_contract_freshness_situation_is_glossed_and_none_is_generated_client_stale() {
+    let expected: Vec<String> = ContractFreshness::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    assert_eq!(expected.len(), 12);
+    covers(
+        "ContractFreshness::ALL",
+        "CONTRACT_FRESHNESS (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "CONTRACT_FRESHNESS"),
+    );
+
+    let keys = object_keys(&vocab_ts(), "CONTRACT_FRESHNESS");
+    assert!(
+        !keys.iter().any(|key| key == "generated_client_stale"),
+        "`generated_client_stale` is glossed and is not a member of any vocabulary: row 13 refuses \
+         the generated-client metadata it would rest on, so nothing can ever produce it"
+    );
+
+    // The two pairs that must not collapse have distinct sentences, not one shared one. A gloss
+    // that read the same for both would merge the states where the reader is.
+    let source = vocab_ts();
+    for (left, right) in [
+        (
+            ContractFreshness::TargetRepositoryMissing,
+            ContractFreshness::TargetRepositoryMoved,
+        ),
+        (
+            ContractFreshness::TargetPartiallyIndexed,
+            ContractFreshness::TargetChanged,
+        ),
+    ] {
+        let one = gloss_for(&source, "CONTRACT_FRESHNESS", left.as_str());
+        let other = gloss_for(&source, "CONTRACT_FRESHNESS", right.as_str());
+        assert_ne!(
+            one, other,
+            "{left} and {right} share a gloss, which collapses two situations into one"
+        );
+    }
+}
+
+/// The prose a flat gloss table gives one key.
+///
+/// A small reader rather than a JSON parse, in the manner of the rest of this file: the table is a
+/// hand-written `Record<string, string>` and the value is the first quoted string after the key.
+fn gloss_for(source: &str, table: &str, key: &str) -> String {
+    let start = body_start(source, table, "{");
+    let body = &source[start..];
+    let at = body
+        .find(&format!("\n  {key}:"))
+        .unwrap_or_else(|| panic!("`{table}` has no entry for `{key}`"));
+    let after = &body[at + key.len() + 4..];
+    let open = after
+        .find('\'')
+        .unwrap_or_else(|| panic!("`{table}.{key}` has no quoted gloss"));
+    let rest = &after[open + 1..];
+    let close = rest.find('\'').expect("an unterminated gloss");
+    rest[..close].to_string()
+}
+
 /// The two vocabularies the interface mirrors as data, not as prose.
 ///
 /// `ENTITY_KINDS` drives the search filter and `RELATIONS` the graph filter, so a missing member
@@ -1016,6 +1150,10 @@ fn no_gloss_is_empty_or_the_fallback_sentence() {
         (vocab_ts(), "RENAME_ANALYSIS_COMPLETENESS"),
         (vocab_ts(), "SUMMARY_TRUNCATION"),
         (vocab_ts(), "SIMILARITY_UNMEASURED"),
+        (vocab_ts(), "REGISTRY_ENTRY_STATUS"),
+        (vocab_ts(), "CONTRACT_RESOLUTION_METHOD"),
+        (vocab_ts(), "CONTRACT_LINK_STATUS"),
+        (vocab_ts(), "CONTRACT_FRESHNESS"),
         (format_ts(), "SOURCE_TYPES"),
         (format_ts(), "DIRECTNESS"),
         (format_ts(), "STATUS_GLOSS"),

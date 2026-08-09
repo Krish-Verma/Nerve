@@ -199,6 +199,74 @@ INSERT INTO schema_version (version, applied_at, description)
 /// The table v7 adds and the column it adds to `git_commit`.
 const V7_TABLE: &str = "git_rename_analysis";
 
+/// The two tables schema v8 adds, in the order the migration creates them.
+const V8_TABLES: [&str; 2] = ["repo_registry", "contract_link"];
+
+/// What v7 added on top of v6, exactly as the Slice 12c-ii build shipped it.
+///
+/// Written out rather than reached by calling `migrate` part of the way, for the same reason
+/// [`V1_ONLY`] and [`V6_ONLY`] are: "a v7 database" has to mean what v7 actually left behind, which
+/// is the starting point every real database takes to v8.
+const V7_ONLY: &str = r#"
+ALTER TABLE git_commit ADD COLUMN summary_truncation TEXT NOT NULL DEFAULT 'unknown';
+CREATE TABLE git_rename_hypothesis_v7 (
+    repo_id           TEXT    NOT NULL REFERENCES repository(repo_id),
+    commit_oid        TEXT    NOT NULL,
+    from_path         TEXT    NOT NULL,
+    to_path           TEXT    NOT NULL,
+    evidence          TEXT    NOT NULL,
+    from_blob_oid     TEXT    NOT NULL,
+    to_blob_oid       TEXT    NOT NULL,
+    matcher_id        TEXT    NOT NULL,
+    matcher_version   TEXT    NOT NULL,
+    match_numerator   INTEGER,
+    match_denominator INTEGER,
+    ambiguity         TEXT    NOT NULL,
+    PRIMARY KEY (repo_id, commit_oid, from_path, to_path),
+    FOREIGN KEY (repo_id, commit_oid) REFERENCES git_commit(repo_id, commit_oid),
+    CHECK (
+        (evidence = 'exact_content'
+            AND from_blob_oid = to_blob_oid
+            AND match_numerator IS NULL AND match_denominator IS NULL)
+     OR (evidence = 'similar_content'
+            AND from_blob_oid <> to_blob_oid
+            AND match_numerator IS NOT NULL AND match_denominator IS NOT NULL
+            AND match_denominator > 0
+            AND match_numerator >= 0
+            AND match_numerator <= match_denominator)
+    )
+);
+INSERT INTO git_rename_hypothesis_v7
+    (repo_id, commit_oid, from_path, to_path, evidence,
+     from_blob_oid, to_blob_oid, matcher_id, matcher_version,
+     match_numerator, match_denominator, ambiguity)
+SELECT repo_id, commit_oid, from_path, to_path, evidence,
+       blob_oid, blob_oid, 'git-blob-oid', '1',
+       NULL, NULL, ambiguity
+  FROM git_rename_hypothesis;
+DROP TABLE git_rename_hypothesis;
+ALTER TABLE git_rename_hypothesis_v7 RENAME TO git_rename_hypothesis;
+CREATE TABLE git_rename_analysis (
+    repo_id               TEXT    NOT NULL REFERENCES repository(repo_id),
+    commit_oid            TEXT    NOT NULL,
+    matcher_id            TEXT    NOT NULL,
+    matcher_version       TEXT    NOT NULL,
+    threshold_numerator   INTEGER NOT NULL,
+    threshold_denominator INTEGER NOT NULL,
+    deletions_considered  INTEGER NOT NULL,
+    additions_considered  INTEGER NOT NULL,
+    pairs_considered      INTEGER NOT NULL,
+    pairs_measured        INTEGER NOT NULL,
+    completeness          TEXT    NOT NULL,
+    unmeasured            TEXT    NOT NULL,
+    PRIMARY KEY (repo_id, commit_oid, matcher_id),
+    FOREIGN KEY (repo_id, commit_oid) REFERENCES git_commit(repo_id, commit_oid),
+    CHECK (threshold_denominator > 0 AND pairs_measured <= pairs_considered)
+);
+INSERT INTO schema_version (version, applied_at, description)
+    VALUES (7, '2026-01-01T00:00:00.000Z', 'Slice 12c-ii');
+"#;
+
 /// A v7 `git_commit` row, named by column rather than by position.
 ///
 /// Positional `VALUES` is what v7 broke: `ALTER TABLE … ADD COLUMN` appends `summary_truncation`
@@ -484,7 +552,7 @@ fn fresh_database_reaches_the_current_schema_version() {
     assert_eq!(schema_version(&conn).unwrap(), None);
     migrate(&conn).unwrap();
     assert_eq!(schema_version(&conn).unwrap(), Some(SCHEMA_VERSION));
-    assert_eq!(SCHEMA_VERSION, 7);
+    assert_eq!(SCHEMA_VERSION, 8);
     // A fresh database reaches v6 directly, without a v1, v2, v3, v4 or v5 database ever existing.
     // v5's column is present from the start, with the default that makes a *migrated* row miss the
     // framework cache. On a fresh database nothing has been cached yet, so the default is inert
@@ -528,6 +596,16 @@ fn fresh_database_reaches_the_current_schema_version() {
         !column_names(&conn, "git_rename_hypothesis").contains(&"blob_oid".to_string()),
         "v6's single blob column survived the rebuild"
     );
+    // v8's two tables, present and empty. Empty is the correct state: a registry is created by an
+    // explicit command and never by discovery, so a fresh database knowing about a neighbour would
+    // be the auto-registration row 13 refuses.
+    for table in V8_TABLES {
+        assert!(
+            table_names(&conn).contains(&table.to_string()),
+            "v8 table {table} is missing from a fresh database"
+        );
+        assert_eq!(scalar(&conn, &format!("SELECT count(*) FROM {table}")), 0);
+    }
     for (table, column) in [
         ("occurrence", "state_id"),
         ("observation", "state_id"),
@@ -1209,13 +1287,14 @@ fn a_v6_database_upgrades_to_v7_and_every_rename_row_survives() {
     );
 }
 
-/// The oldest database Nerve can still read reaches v7, end to end.
+/// The oldest database Nerve can still read reaches the current version, end to end.
 ///
 /// v1 is the interesting starting point rather than a redundant one: it is the only route on which
-/// v3's identity restatement, v4's re-attribution, v5's column, v6's tables and v7's rebuild all
-/// run in one call, so a step that displaced an earlier one shows up here and nowhere else.
+/// v3's identity restatement, v4's re-attribution, v5's column, v6's tables, v7's rebuild and v8's
+/// registry all run in one call, so a step that displaced an earlier one shows up here and nowhere
+/// else.
 #[test]
-fn a_v1_database_reaches_v7_with_every_earlier_step_still_done() {
+fn a_v1_database_reaches_v8_with_every_earlier_step_still_done() {
     let conn = database_with_filesystem_rows(1);
     assert!(!table_names(&conn).contains(&"git_rename_hypothesis".to_string()));
 
@@ -1235,6 +1314,13 @@ fn a_v1_database_reaches_v7_with_every_earlier_step_still_done() {
     assert!(table_names(&conn).contains(&V7_TABLE.to_string()));
     assert!(column_names(&conn, "git_commit").contains(&"summary_truncation".to_string()));
     assert!(column_names(&conn, "git_rename_hypothesis").contains(&"to_blob_oid".to_string()));
+    for table in V8_TABLES {
+        assert!(
+            table_names(&conn).contains(&table.to_string()),
+            "v1 → v8 did not create {table}"
+        );
+        assert_eq!(scalar(&conn, &format!("SELECT count(*) FROM {table}")), 0);
+    }
 }
 
 /// Re-migrating a v7 database changes nothing: no version row, no table, no row.
@@ -1468,6 +1554,566 @@ fn the_rename_check_refuses_every_blend_of_the_two_evidence_kinds() {
         scalar(&conn, "SELECT count(*) FROM git_rename_hypothesis"),
         2,
         "a refused row landed anyway"
+    );
+}
+
+// ---- v8: the cross-repository registry and its contract links ----------------------------------
+
+/// A registry entry, named by column. The insert every v8 test below builds on.
+const REGISTRY_INSERT: &str = "INSERT INTO repo_registry
+     (repo_id, registry_id, expected_repository_id, display_name, local_path, added_at,
+      last_seen_state, last_seen_at, availability_checked_at, status, withdrawn_at)
+ VALUES ('r', ?1, ?2, 'Neighbour', '/somewhere/else', '2026-01-01T00:00:00.000Z',
+         NULL, NULL, NULL, ?3, ?4)";
+
+/// A contract link naming a target that exists in no local table, which is the whole point.
+///
+/// Every column is named. `contract_link` is the widest table in the schema and a positional
+/// `VALUES` would be unreadable and one column-order change away from writing a path into a status.
+const LINK_INSERT: &str = "INSERT INTO contract_link
+     (repo_id, source_repository_id, source_state_at_resolution, source_entity_id,
+      source_kind_snapshot, source_path, source_span, registry_entry_id,
+      expected_target_repository_id, target_state_at_resolution, target_entity_id,
+      target_kind_snapshot, target_name_snapshot, target_path_snapshot, target_span_snapshot,
+      relation_semantics, contract_kind, contract_identity, expected_contract_version,
+      observed_contract_version, resolution_method, extractor_id, extractor_version,
+      evidence_details, ambiguity, unsupported_reason, first_seen_at, last_seen_at,
+      withdrawn_at, status)
+ VALUES ('r', 'r', 's', ?1, ?2, 'package.json', '3:3', ?3, ?4,
+         ?5, ?6, ?7, ?8, ?9, ?10,
+         'REFERENCES', 'npm_package_export', 'pkg-b/sub', '^1.0.0', '1.2.0',
+         ?11, 'ts-contract', '1.0.0', NULL, NULL, ?12,
+         '2026-01-01T00:00:00.000Z', ?13, ?14, ?15)";
+
+/// A v8 database with one registry entry and one contract link, both active.
+///
+/// The link's target names an `entity_id` and a `state_id` that exist in **no** local table. That is
+/// not sloppiness in the fixture — it is the shape every real cross-repository link has, and a test
+/// that used a local entity id would prove the opposite of what this table is for.
+fn v8_database_with_a_link() -> nerve_store::Connection {
+    let conn = open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+    conn.execute_batch(
+        "INSERT INTO repository VALUES ('r','p','/tmp','t');
+         INSERT INTO repository_state VALUES ('s','r','content',NULL,'m','t');
+         INSERT INTO entity VALUES ('local1','r','file','app.ts','src','typescript',NULL);",
+    )
+    .unwrap();
+    conn.execute(
+        REGISTRY_INSERT,
+        rusqlite::params!["reg1", "repo-b", "active", None::<String>],
+    )
+    .unwrap();
+    conn.execute(
+        LINK_INSERT,
+        rusqlite::params![
+            "local1",
+            "file",
+            "reg1",
+            "repo-b",
+            "b-state-77",
+            "b-entity-42",
+            "file",
+            "sub.ts",
+            "src/sub.ts",
+            "1:40",
+            "export_map_resolved",
+            None::<String>,
+            "2026-01-02T00:00:00.000Z",
+            None::<String>,
+            "active"
+        ],
+    )
+    .unwrap();
+    conn
+}
+
+/// Build a database as the Slice 12c-ii (v7) build would have left it, with history rows in it.
+///
+/// **This is the upgrade path every existing database now takes.** Assembled from the written-out
+/// steps rather than by migrating to 7 and stopping, so "a v7 database" means what v7 shipped and
+/// not what today's chain happens to produce on the way past.
+fn v7_database_with_history() -> nerve_store::Connection {
+    let conn = v6_database_with_history();
+    conn.execute_batch(V7_ONLY).unwrap();
+    // One analysis row, so v8 is asserted against a v7 database that used all of v7 rather than
+    // one that merely reached it.
+    let c1 = "1".repeat(40);
+    conn.execute_batch(&format!(
+        "INSERT INTO git_rename_analysis VALUES
+             ('r','{c1}','nerve-line-multiset','1',1,2,1,1,1,1,'complete','{{}}');"
+    ))
+    .unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), Some(7));
+    conn
+}
+
+/// **The upgrade path every existing database takes, and it must lose nothing.**
+///
+/// v8 adds two tables and touches no row, so the assertion is symmetric: the registry appears empty,
+/// and every history row a v7 database was holding is still there and still readable through the v7
+/// shape. Empty is the correct state for a new registry — an entry that appeared without an explicit
+/// command would be the auto-registration row 13 refuses.
+#[test]
+fn a_v7_database_upgrades_to_v8_and_every_history_row_survives() {
+    let conn = v7_database_with_history();
+    for table in V8_TABLES {
+        assert!(
+            !table_names(&conn).contains(&table.to_string()),
+            "{table} exists before v8; the test would prove nothing"
+        );
+    }
+    let renames_before = rename_labels(&conn);
+    assert_eq!(renames_before.len(), 3, "or the count proves nothing");
+
+    migrate(&conn).unwrap();
+
+    assert_eq!(schema_version(&conn).unwrap(), Some(SCHEMA_VERSION));
+    for table in V8_TABLES {
+        assert!(
+            table_names(&conn).contains(&table.to_string()),
+            "v8 did not create {table}"
+        );
+        assert_eq!(scalar(&conn, &format!("SELECT count(*) FROM {table}")), 0);
+    }
+
+    // Every pre-existing row, still where it was. The rename labels are read through the v7 column
+    // names, so this also proves v8 did not disturb the shape v7 built.
+    assert_eq!(rename_labels(&conn), renames_before);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM git_commit"), 2);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM git_change"), 4);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM git_history_ingest"), 1);
+    assert_eq!(
+        scalar(&conn, &format!("SELECT count(*) FROM {V7_TABLE}")),
+        1,
+        "v7's analysis row was lost"
+    );
+    assert_eq!(
+        scalar(
+            &conn,
+            "SELECT count(*) FROM git_commit WHERE summary_truncation = 'unknown'"
+        ),
+        2
+    );
+    assert_row_counts(&conn, &V5_ROW_COUNTS);
+    assert_eq!(
+        conn.query_row("SELECT framework_version FROM module_facts", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .unwrap(),
+        "2.0.0"
+    );
+}
+
+/// Re-migrating a v8 database changes nothing: no version row, no table, no row.
+#[test]
+fn re_migrating_a_v8_database_changes_nothing_and_appends_no_version_row() {
+    let conn = v8_database_with_a_link();
+    let tables_before = table_names(&conn);
+    let versions_before = scalar(&conn, "SELECT count(*) FROM schema_version");
+    assert_eq!(versions_before, SCHEMA_VERSION);
+
+    migrate(&conn).unwrap();
+    migrate(&conn).unwrap();
+
+    assert_eq!(table_names(&conn), tables_before);
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM schema_version"),
+        versions_before,
+        "re-migrating must not append a version row"
+    );
+    assert_eq!(schema_version(&conn).unwrap(), Some(SCHEMA_VERSION));
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM repo_registry"), 1);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM contract_link"), 1);
+}
+
+/// **A failing v8 step commits nothing — including the table that was created first.**
+///
+/// The sabotage is on the migration's **last** object, `idx_contract_link_registry`, which runs
+/// after both `CREATE TABLE`s, after the registry index and after the uniqueness index. Without a
+/// transaction the database would sit at v7 with both tables and two of the three indexes already
+/// in it — a state no migration path could repair, because step 8 would never run again to finish
+/// the job and replaying it would collide on `CREATE TABLE repo_registry`.
+#[test]
+fn an_interrupted_v8_migration_commits_nothing() {
+    let conn = v7_database_with_history();
+    conn.execute_batch("CREATE TABLE idx_contract_link_registry (sabotage TEXT);")
+        .unwrap();
+
+    let err = migrate(&conn).unwrap_err();
+    assert!(
+        matches!(err, nerve_store::StoreError::Sqlite(_)),
+        "expected the CREATE INDEX to fail, got {err}"
+    );
+
+    assert_eq!(
+        schema_version(&conn).unwrap(),
+        Some(7),
+        "a failed step must not record its version"
+    );
+    for table in V8_TABLES {
+        assert!(
+            !table_names(&conn).contains(&table.to_string()),
+            "{table} survived a failed migration; step 8 is not transactional"
+        );
+    }
+    for index in ["idx_repo_registry_status", "idx_contract_link_identity"] {
+        assert_eq!(
+            scalar(
+                &conn,
+                &format!("SELECT count(*) FROM sqlite_master WHERE name = '{index}'")
+            ),
+            0,
+            "{index} survived a failed migration"
+        );
+    }
+    // Nothing else moved, and the sabotaged name is exactly as it was.
+    assert_eq!(rename_labels(&conn).len(), 3);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM git_commit"), 2);
+    assert_row_counts(&conn, &V5_ROW_COUNTS);
+    assert_eq!(
+        column_names(&conn, "idx_contract_link_registry"),
+        vec!["sabotage".to_string()]
+    );
+
+    // The control: the identical fixture without the sabotage reaches v8. Without this the test
+    // would pass just as well against a migration that could never succeed.
+    let clean = v7_database_with_history();
+    migrate(&clean).unwrap();
+    assert_eq!(schema_version(&clean).unwrap(), Some(SCHEMA_VERSION));
+    for table in V8_TABLES {
+        assert!(table_names(&clean).contains(&table.to_string()));
+    }
+}
+
+/// **A tombstone is a status and a moment, and neither may travel without the other.**
+///
+/// Two refusals per table, each with a control that lands. An active row carrying a withdrawal date
+/// says it ended while claiming it has not; a retired row without one cannot say *when* the entry
+/// stopped counting, which is exactly the fact `registry_entry_removed` reports.
+#[test]
+fn the_lifecycle_checks_refuse_a_status_that_disagrees_with_its_timestamp() {
+    let conn = v8_database_with_a_link();
+    let when = "2026-02-01T00:00:00.000Z";
+
+    // The controls: both well-formed shapes land, so every refusal below is the constraint.
+    conn.execute(
+        REGISTRY_INSERT,
+        rusqlite::params!["reg2", "repo-c", "tombstoned", Some(when)],
+    )
+    .unwrap();
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM repo_registry"), 2);
+
+    // 1. An active registry entry that carries a withdrawal date.
+    let err = conn
+        .execute(
+            REGISTRY_INSERT,
+            rusqlite::params!["reg3", "repo-d", "active", Some(when)],
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("constraint"),
+        "an active entry carried a withdrawal date: {err}"
+    );
+
+    // 2. A tombstoned registry entry that does not say when.
+    let err = conn
+        .execute(
+            REGISTRY_INSERT,
+            rusqlite::params!["reg4", "repo-e", "tombstoned", None::<String>],
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("constraint"),
+        "a tombstone omitted its moment: {err}"
+    );
+
+    // 3. An active link that carries a withdrawal date, and 4. a withdrawn one that does not.
+    let link = |identity: &str, withdrawn: Option<&str>, status: &str| {
+        conn.execute(
+            &LINK_INSERT.replace("'pkg-b/sub'", &format!("'{identity}'")),
+            rusqlite::params![
+                None::<String>,
+                None::<String>,
+                "reg1",
+                "repo-b",
+                None::<String>,
+                None::<String>,
+                None::<String>,
+                None::<String>,
+                None::<String>,
+                None::<String>,
+                "manifest_declared",
+                None::<String>,
+                "2026-01-02T00:00:00.000Z",
+                withdrawn,
+                status
+            ],
+        )
+    };
+    link("pkg-b", None, "active").expect("the well-formed active link must land");
+    link("pkg-c", Some(when), "withdrawn").expect("the well-formed withdrawn link must land");
+
+    let err = link("pkg-d", Some(when), "active").unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("constraint"),
+        "an active link carried a withdrawal date: {err}"
+    );
+    let err = link("pkg-e", None, "withdrawn").unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("constraint"),
+        "a withdrawn link omitted its moment: {err}"
+    );
+
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM repo_registry"),
+        2,
+        "a refused entry landed anyway"
+    );
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM contract_link"),
+        3,
+        "a refused link landed anyway"
+    );
+}
+
+/// **A target id with no snapshot is the dangling pointer this table exists to prevent.**
+///
+/// The correction row 13 was rewritten for: a bare `target_entity_id` points into a database Nerve
+/// cannot hold still, so when the target is renamed or deleted there is nothing left to *name* what
+/// the link used to point at and `contract_deleted`, `target_changed` and `contract_file_missing`
+/// become one indistinguishable failure. Two further refusals here: a form recorded as unsupported
+/// cannot also have been resolved, and a link last seen before it was first seen is not a lifecycle.
+#[test]
+fn the_snapshot_checks_refuse_a_target_that_cannot_be_named() {
+    let conn = v8_database_with_a_link();
+    let insert = |identity: &str,
+                  target_entity: Option<&str>,
+                  kind: Option<&str>,
+                  name: Option<&str>,
+                  path: Option<&str>,
+                  unsupported: Option<&str>,
+                  last_seen: &str| {
+        conn.execute(
+            &LINK_INSERT.replace("'pkg-b/sub'", &format!("'{identity}'")),
+            rusqlite::params![
+                None::<String>,
+                None::<String>,
+                "reg1",
+                "repo-b",
+                None::<String>,
+                target_entity,
+                kind,
+                name,
+                path,
+                None::<String>,
+                "manifest_declared",
+                unsupported,
+                last_seen,
+                None::<String>,
+                "active"
+            ],
+        )
+    };
+
+    // The control: a full snapshot lands, so every refusal below is the constraint doing its job.
+    insert(
+        "ok",
+        Some("b-entity-1"),
+        Some("file"),
+        Some("index.ts"),
+        Some("src/index.ts"),
+        None,
+        "2026-01-02T00:00:00.000Z",
+    )
+    .expect("a fully snapshotted target must land");
+
+    // 1. A target id with no snapshot at all.
+    let err = insert(
+        "bare",
+        Some("b-entity-2"),
+        None,
+        None,
+        None,
+        None,
+        "2026-01-02T00:00:00.000Z",
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("constraint"),
+        "a target id was recorded with nothing to name it: {err}"
+    );
+
+    // 2. A partial snapshot — a path but no kind or name — is still unnameable when it moves.
+    let err = insert(
+        "partial",
+        Some("b-entity-3"),
+        None,
+        None,
+        Some("src/index.ts"),
+        None,
+        "2026-01-02T00:00:00.000Z",
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("constraint"),
+        "a half-recorded snapshot was accepted: {err}"
+    );
+
+    // 3. A form recorded as unsupported that nonetheless claims a resolved target.
+    let err = insert(
+        "unsupported",
+        Some("b-entity-4"),
+        Some("file"),
+        Some("index.ts"),
+        Some("src/index.ts"),
+        Some("registry-version-range"),
+        "2026-01-02T00:00:00.000Z",
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("constraint"),
+        "a form recorded as unsupported also claimed a target: {err}"
+    );
+    // The control for it: the same unsupported form with no target lands.
+    insert(
+        "unsupported-ok",
+        None,
+        None,
+        None,
+        None,
+        Some("registry-version-range"),
+        "2026-01-02T00:00:00.000Z",
+    )
+    .expect("an unsupported form must be recordable, never silently dropped");
+
+    // 4. Last seen before first seen.
+    let err = insert(
+        "backwards",
+        None,
+        None,
+        None,
+        None,
+        None,
+        "2025-12-31T00:00:00.000Z",
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("constraint"),
+        "a link was last seen before it was first seen: {err}"
+    );
+
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM contract_link"),
+        3,
+        "a refused link landed anyway"
+    );
+}
+
+/// A contract link for a registry entry that was never registered is **refused**, not orphaned.
+///
+/// The one foreign key `contract_link` does have, and it is deliberate: the registry entry is in
+/// *this* database, so it can be enforced, and a link resolved through an entry nobody registered
+/// would be a link Nerve drew without being asked to look at anything. The contrast with the target
+/// side — where no foreign key is possible and none is faked — is the shape of the whole table.
+#[test]
+fn a_contract_link_through_an_unregistered_entry_is_refused() {
+    let conn = v8_database_with_a_link();
+
+    let err = conn
+        .execute(
+            &LINK_INSERT.replace("'pkg-b/sub'", "'pkg-z'"),
+            rusqlite::params![
+                None::<String>,
+                None::<String>,
+                "never-registered",
+                "repo-z",
+                None::<String>,
+                None::<String>,
+                None::<String>,
+                None::<String>,
+                None::<String>,
+                None::<String>,
+                "manifest_declared",
+                None::<String>,
+                "2026-01-02T00:00:00.000Z",
+                None::<String>,
+                "active"
+            ],
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("foreign key"),
+        "expected a foreign-key refusal, got {err}"
+    );
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM contract_link"),
+        1,
+        "the refused row must not have landed"
+    );
+}
+
+/// The same declaration recorded twice is one link, not two.
+///
+/// `link_id` is an autoincrement surrogate, so without the uniqueness index a re-index of an
+/// unchanged tree would append a duplicate link on every run — the failure v1's comment on
+/// `idx_observation_identity` records. `contract_identity` is deliberately **not** unique on its
+/// own: two registered repositories declaring one identity is `duplicate_contract_identity`, a fact
+/// to report rather than a row to refuse, and the control below proves it still lands.
+#[test]
+fn the_same_declaration_recorded_twice_is_one_link() {
+    let conn = v8_database_with_a_link();
+    let insert = |registry: &str, source_path_span: &str| {
+        conn.execute(
+            &LINK_INSERT.replace("'package.json', '3:3'", source_path_span),
+            rusqlite::params![
+                None::<String>,
+                None::<String>,
+                registry,
+                "repo-b",
+                None::<String>,
+                None::<String>,
+                None::<String>,
+                None::<String>,
+                None::<String>,
+                None::<String>,
+                "manifest_declared",
+                None::<String>,
+                "2026-01-02T00:00:00.000Z",
+                None::<String>,
+                "active"
+            ],
+        )
+    };
+
+    insert("reg1", "'package.json', '3:3'").expect("the first recording must land");
+    let err = insert("reg1", "'package.json', '3:3'").unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("unique"),
+        "the same declaration was recorded twice: {err}"
+    );
+
+    // A different line in the same manifest is a different declaration.
+    insert("reg1", "'package.json', '9:9'").expect("a second declaration must land");
+
+    // And the same contract identity through a *different* registry entry is
+    // `duplicate_contract_identity` — two facts to report, not one row to refuse.
+    conn.execute(
+        REGISTRY_INSERT,
+        rusqlite::params!["reg2", "repo-c", "active", None::<String>],
+    )
+    .unwrap();
+    insert("reg2", "'package.json', '3:3'")
+        .expect("two repositories may declare one identity; that is a fact, not a conflict");
+
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM contract_link"), 4);
+    assert_eq!(
+        scalar(
+            &conn,
+            "SELECT count(*) FROM contract_link WHERE contract_identity = 'pkg-b/sub'"
+        ),
+        4,
+        "one identity, four recordings, none of them refused for sharing the name"
     );
 }
 

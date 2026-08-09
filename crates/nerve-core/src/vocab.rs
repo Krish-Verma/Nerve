@@ -1722,6 +1722,420 @@ impl FromStr for HistoryFreshness {
     }
 }
 
+// ---- Slice 13a-i: the cross-repository registry and its contract links -------------------------
+//
+// Four vocabularies, all stored in schema v8 and none of them rendered by any surface yet. They are
+// declared here rather than in `nerve-store` for the same reason every other stored vocabulary is:
+// a value that reaches a response has to be parseable by whoever reads it, and the parse lives with
+// the declaration.
+//
+// **There is deliberately no new `EvidenceSourceType` among them.** The first draft of row 13 added
+// one for "a package manifest in another repository states this", and it cannot exist: an
+// `EvidenceSourceType` is a property of an `observation`, `observation.assertion_id` is
+// `NOT NULL REFERENCES assertion(assertion_id)`, and an assertion's two endpoints are both hard
+// foreign keys into the local `entity` table. A cross-repository target has no local entity row, so
+// no assertion can hold it, so no observation can carry the source type — the value would sit in
+// `ALL`, in the mask layout and in every gloss table for a row that cannot be written.
+// [`ContractResolutionMethod`] is the contract-local replacement, stored in
+// `contract_link.resolution_method` where it has an actual consumer.
+
+/// Whether a registry entry is still in force, or has been retired without being destroyed.
+///
+/// **Two values, and the second is why removal is not a `DELETE`.** `registry_entry_removed` is one
+/// of the twelve freshness situations a contract link must be reportable in, and it is only
+/// reportable if removing the entry leaves something behind to report *about*: the `registry_id`,
+/// the recorded `expected_repository_id` and the moment it stopped counting. A row deleted from the
+/// table cannot say it ended, which is the same reason the evidence model withdraws an assertion
+/// rather than dropping it.
+///
+/// Hard deletion is a separate, explicit purge and is not this vocabulary's business.
+///
+/// Added in Slice 13a-i. `repo_registry.status`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RegistryEntryStatus {
+    /// The entry counts. Links resolved against it are current claims.
+    Active,
+    /// The entry was removed by the user and kept as a tombstone. `withdrawn_at` says when.
+    Tombstoned,
+}
+
+impl RegistryEntryStatus {
+    /// Every value, in declaration order.
+    pub const ALL: [RegistryEntryStatus; 2] =
+        [RegistryEntryStatus::Active, RegistryEntryStatus::Tombstoned];
+
+    /// Canonical lower-case name, stored in `repo_registry.status`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RegistryEntryStatus::Active => "active",
+            RegistryEntryStatus::Tombstoned => "tombstoned",
+        }
+    }
+
+    /// What each status means, in words.
+    ///
+    /// [`RegistryEntryStatus::Tombstoned`]'s sentence says the row is still readable, because that
+    /// is the whole point of the value: a link whose registry entry was removed must be able to
+    /// name the entry it was removed from.
+    pub fn note(self) -> &'static str {
+        match self {
+            RegistryEntryStatus::Active => {
+                "this repository is registered as a neighbour and its entry still counts — a link \
+                 resolved against it is a current claim rather than a historical one"
+            }
+            RegistryEntryStatus::Tombstoned => {
+                "the entry was removed and kept rather than deleted, so its identity survives and \
+                 a link that rested on it can still say which entry went away and when — a deleted \
+                 row could not have reported its own ending"
+            }
+        }
+    }
+}
+
+impl fmt::Display for RegistryEntryStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for RegistryEntryStatus {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        RegistryEntryStatus::ALL
+            .into_iter()
+            .find(|v| v.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("RegistryEntryStatus", s))
+    }
+}
+
+/// Which stated declaration a cross-repository link was drawn from.
+///
+/// **A contract-local closed vocabulary, not an [`EvidenceSourceType`].** See the note above this
+/// block for the mechanical reason the global vocabulary cannot carry these values; the short form
+/// is that no observation can exist for a link whose target is in another database, so a global
+/// member would be a name with no row.
+///
+/// Every value names a *declaration in a file*, which is the rule row 13 is built around: a trusted
+/// link is created from an explicit stated declaration and from nothing else. There is no value for
+/// a similar name, a matching endpoint string, an embedding distance or a sibling directory,
+/// because none of those is a declaration and adding one would make the vocabulary the place the
+/// rule got quietly relaxed.
+///
+/// Added in Slice 13a-i. `contract_link.resolution_method`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ContractResolutionMethod {
+    /// A package manifest names the dependency directly — a `file:` specifier, a path dependency.
+    ManifestDeclared,
+    /// A workspace declaration lists the target as a member of the same workspace.
+    WorkspaceDeclared,
+    /// A path dependency was followed to the directory it names, and that directory's own manifest
+    /// was read.
+    PathDependencyResolved,
+    /// An import specifier was resolved through the target package's export map to a file.
+    ExportMapResolved,
+}
+
+impl ContractResolutionMethod {
+    /// Every value, in declaration order.
+    pub const ALL: [ContractResolutionMethod; 4] = [
+        ContractResolutionMethod::ManifestDeclared,
+        ContractResolutionMethod::WorkspaceDeclared,
+        ContractResolutionMethod::PathDependencyResolved,
+        ContractResolutionMethod::ExportMapResolved,
+    ];
+
+    /// Canonical lower-case name, stored in `contract_link.resolution_method`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ContractResolutionMethod::ManifestDeclared => "manifest_declared",
+            ContractResolutionMethod::WorkspaceDeclared => "workspace_declared",
+            ContractResolutionMethod::PathDependencyResolved => "path_dependency_resolved",
+            ContractResolutionMethod::ExportMapResolved => "export_map_resolved",
+        }
+    }
+
+    /// What was read to draw the link, in words.
+    ///
+    /// Each sentence names the file that stated it, because that is the only thing standing between
+    /// this vocabulary and a guess: a reader has to be able to go and look at the declaration.
+    pub fn note(self) -> &'static str {
+        match self {
+            ContractResolutionMethod::ManifestDeclared => {
+                "a package manifest in this repository names the target directly, so the link is \
+                 quoted from a declaration rather than inferred from a resemblance"
+            }
+            ContractResolutionMethod::WorkspaceDeclared => {
+                "a workspace declaration lists the target as a member, so the two are stated to \
+                 belong to one build rather than found beside each other on disk"
+            }
+            ContractResolutionMethod::PathDependencyResolved => {
+                "a declared path dependency was followed to the directory it names and that \
+                 directory's own manifest was read, so both ends of the link are stated in a file"
+            }
+            ContractResolutionMethod::ExportMapResolved => {
+                "an import specifier was resolved through the target package's declared export \
+                 map, so the file at the far end is the one the package says that specifier means"
+            }
+        }
+    }
+}
+
+impl fmt::Display for ContractResolutionMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ContractResolutionMethod {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ContractResolutionMethod::ALL
+            .into_iter()
+            .find(|v| v.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("ContractResolutionMethod", s))
+    }
+}
+
+/// Whether a recorded cross-repository link is still claimed, or has been retired.
+///
+/// The same tombstone discipline as [`RegistryEntryStatus`], one table over and for the same
+/// reason: a link that vanished from the table cannot be reported as having ended, and *"the
+/// contract is gone"* is one of the answers row 13 exists to give.
+///
+/// Added in Slice 13a-i. `contract_link.status`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ContractLinkStatus {
+    /// The declaration was present the last time this repository was read.
+    Active,
+    /// The declaration is gone, or its registry entry was tombstoned. `withdrawn_at` says when.
+    Withdrawn,
+}
+
+impl ContractLinkStatus {
+    /// Every value, in declaration order.
+    pub const ALL: [ContractLinkStatus; 2] =
+        [ContractLinkStatus::Active, ContractLinkStatus::Withdrawn];
+
+    /// Canonical lower-case name, stored in `contract_link.status`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ContractLinkStatus::Active => "active",
+            ContractLinkStatus::Withdrawn => "withdrawn",
+        }
+    }
+
+    /// What each status means, in words.
+    pub fn note(self) -> &'static str {
+        match self {
+            ContractLinkStatus::Active => {
+                "the declaration this link was drawn from was still in the file the last time this \
+                 repository was read — which says nothing on its own about the state of the \
+                 repository at the far end"
+            }
+            ContractLinkStatus::Withdrawn => {
+                "the declaration is gone, or the registry entry it pointed through was removed. \
+                 The row is kept so the ending can be reported; deleting it would leave the link \
+                 having silently never existed"
+            }
+        }
+    }
+}
+
+impl fmt::Display for ContractLinkStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ContractLinkStatus {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ContractLinkStatus::ALL
+            .into_iter()
+            .find(|v| v.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("ContractLinkStatus", s))
+    }
+}
+
+/// The ways a cross-repository link can have stopped describing the world.
+///
+/// **Twelve values, because a link has two repository states and either can move.** Every fact
+/// Nerve stored before row 13 was true of one repository at one state; a contract link is a claim
+/// about two, only one of which this database can vouch for. None of these twelve may be rendered
+/// as a current link.
+///
+/// Four of the twelve are pairs a first draft collapses, and each collapse loses the answer that
+/// matters:
+///
+/// - [`ContractFreshness::TargetRepositoryMissing`] is **not**
+///   [`ContractFreshness::TargetRepositoryMoved`]. A path that no longer exists and a path that now
+///   holds a *different* repository are different facts with different remedies, and the second is
+///   the dangerous one: an entry silently re-pointed at another checkout would make every link
+///   about the wrong repository. Which is why identity is checked against the recorded repository
+///   id and never against the path.
+/// - [`ContractFreshness::TargetPartiallyIndexed`] is **not**
+///   [`ContractFreshness::TargetChanged`]. Nothing was *observed* to change; part of the target was
+///   never looked at. This is Slice 7c-i's `Stale` / `Unverified` distinction in a third place, and
+///   reporting unknown as current is how a truncated sweep becomes a clean bill of health.
+///
+/// **There is no `generated_client_stale`, and its absence is a decision.** Row 13's own plan
+/// refuses generated-client metadata as a source of evidence (§2.1), so a state resting on it could
+/// never be produced from a fixture — it would be either a fabricated verdict or a permanently
+/// failing acceptance criterion. It returns only if generated-client metadata is implemented, with
+/// its own evidence and its own gate.
+///
+/// Added in Slice 13a-i. Derived, not stored: this vocabulary exists in responses only, which is
+/// why the twelve are qualifications on a stored link rather than a column of one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ContractFreshness {
+    /// The source repository moved on from the state the link was resolved at.
+    SourceChanged,
+    /// The target repository moved on from the state recorded in the link's snapshot.
+    TargetChanged,
+    /// Both ends moved.
+    BothChanged,
+    /// The version the source expects and the version the target declares disagree.
+    ContractVersionMismatch,
+    /// Nothing is at the registered path any more.
+    TargetRepositoryMissing,
+    /// Something is at the registered path, and it is a **different** repository.
+    TargetRepositoryMoved,
+    /// The manifest the link was quoted from is no longer in the source repository.
+    ContractFileMissing,
+    /// More than one registered repository declares this contract identity.
+    DuplicateContractIdentity,
+    /// The contract is declared more than once, with declarations that disagree.
+    ConflictingDefinitions,
+    /// The target repository is registered and readable, but the part this link names was never
+    /// indexed. **Not a change** — an absence of observation.
+    TargetPartiallyIndexed,
+    /// The declaration this link was drawn from is gone from the manifest.
+    ContractDeleted,
+    /// The registry entry the link resolved through was tombstoned.
+    RegistryEntryRemoved,
+}
+
+impl ContractFreshness {
+    /// Every value, in declaration order.
+    pub const ALL: [ContractFreshness; 12] = [
+        ContractFreshness::SourceChanged,
+        ContractFreshness::TargetChanged,
+        ContractFreshness::BothChanged,
+        ContractFreshness::ContractVersionMismatch,
+        ContractFreshness::TargetRepositoryMissing,
+        ContractFreshness::TargetRepositoryMoved,
+        ContractFreshness::ContractFileMissing,
+        ContractFreshness::DuplicateContractIdentity,
+        ContractFreshness::ConflictingDefinitions,
+        ContractFreshness::TargetPartiallyIndexed,
+        ContractFreshness::ContractDeleted,
+        ContractFreshness::RegistryEntryRemoved,
+    ];
+
+    /// Canonical lower-case name, carried on every response that reports a link's standing.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ContractFreshness::SourceChanged => "source_changed",
+            ContractFreshness::TargetChanged => "target_changed",
+            ContractFreshness::BothChanged => "both_changed",
+            ContractFreshness::ContractVersionMismatch => "contract_version_mismatch",
+            ContractFreshness::TargetRepositoryMissing => "target_repository_missing",
+            ContractFreshness::TargetRepositoryMoved => "target_repository_moved",
+            ContractFreshness::ContractFileMissing => "contract_file_missing",
+            ContractFreshness::DuplicateContractIdentity => "duplicate_contract_identity",
+            ContractFreshness::ConflictingDefinitions => "conflicting_definitions",
+            ContractFreshness::TargetPartiallyIndexed => "target_partially_indexed",
+            ContractFreshness::ContractDeleted => "contract_deleted",
+            ContractFreshness::RegistryEntryRemoved => "registry_entry_removed",
+        }
+    }
+
+    /// What each situation means, in words.
+    ///
+    /// The two pairs that must not collapse get the longest sentences, because they are the two a
+    /// reader is most likely to file under their neighbour.
+    pub fn note(self) -> &'static str {
+        match self {
+            ContractFreshness::SourceChanged => {
+                "this repository has moved on from the state the link was resolved at, so the \
+                 declaration may no longer read the way it did — a qualification about this end \
+                 only"
+            }
+            ContractFreshness::TargetChanged => {
+                "the repository at the far end has moved on from the state recorded in the link's \
+                 snapshot, so what the snapshot names may no longer be what is there"
+            }
+            ContractFreshness::BothChanged => {
+                "both repositories have moved on since the link was resolved, so neither end of it \
+                 has been re-checked"
+            }
+            ContractFreshness::ContractVersionMismatch => {
+                "the version this repository expects and the version the target declares are not \
+                 the same number — two recorded values that disagree, not a judgement about which \
+                 is right"
+            }
+            ContractFreshness::TargetRepositoryMissing => {
+                "nothing is at the registered path any more. This is the ordinary broken link, and \
+                 it is a different fact from a path that now holds some other repository"
+            }
+            ContractFreshness::TargetRepositoryMoved => {
+                "something is at the registered path and it is a different repository from the one \
+                 registered. This is the dangerous one: identity is checked against the recorded \
+                 repository id rather than the path, because an entry silently re-pointed at \
+                 another checkout would make every link through it describe the wrong repository"
+            }
+            ContractFreshness::ContractFileMissing => {
+                "the manifest this link was quoted from is no longer in this repository, so there \
+                 is nothing left to re-read the declaration out of"
+            }
+            ContractFreshness::DuplicateContractIdentity => {
+                "more than one registered repository declares this contract identity, so which one \
+                 the link means is not established — every candidate is reported and none is \
+                 promoted"
+            }
+            ContractFreshness::ConflictingDefinitions => {
+                "the contract is declared more than once and the declarations disagree, so there \
+                 is no single stated fact to quote"
+            }
+            ContractFreshness::TargetPartiallyIndexed => {
+                "the target repository is readable, and the part this link names was never indexed \
+                 there. Nothing was observed to change: this is unknown rather than stale, and \
+                 reporting unknown as current is how a truncated sweep becomes a clean bill of \
+                 health"
+            }
+            ContractFreshness::ContractDeleted => {
+                "the declaration this link was drawn from is gone from the manifest, so the link is \
+                 a record of something that used to be stated rather than something that is"
+            }
+            ContractFreshness::RegistryEntryRemoved => {
+                "the registry entry this link resolved through was removed. The entry is kept as a \
+                 tombstone precisely so this can be said: a deleted entry would have left the link \
+                 pointing at nothing nameable"
+            }
+        }
+    }
+}
+
+impl fmt::Display for ContractFreshness {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ContractFreshness {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ContractFreshness::ALL
+            .into_iter()
+            .find(|v| v.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("ContractFreshness", s))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2769,5 +3183,261 @@ mod tests {
         assert!(ChangesEnumerated::Enumerated
             .note()
             .contains("\"nothing changed\""));
+    }
+
+    // ---- Slice 13a-i: the cross-repository vocabularies -----------------------------------------
+
+    /// The two tombstone vocabularies, pinned, and the property that makes them tombstones.
+    ///
+    /// Pinned rather than generated: both are stored, so a stored value is a wire format and
+    /// renaming one is a migration that must fail here first. The `note()` assertions are the load
+    /// bearing half — a tombstone whose prose did not say the row survives would be a tombstone in
+    /// name only, and `registry_entry_removed` is unanswerable the moment the row stops existing.
+    #[test]
+    fn the_registry_and_link_statuses_are_tombstones_rather_than_deletions() {
+        let registry: [(RegistryEntryStatus, &str); 2] = [
+            (RegistryEntryStatus::Active, "active"),
+            (RegistryEntryStatus::Tombstoned, "tombstoned"),
+        ];
+        for (value, name) in registry {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<RegistryEntryStatus>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+        }
+        let mut listed: Vec<RegistryEntryStatus> =
+            registry.iter().map(|(value, _)| *value).collect();
+        listed.sort_unstable();
+        let mut all = RegistryEntryStatus::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a registry status was added to the vocabulary without a name above"
+        );
+
+        let link: [(ContractLinkStatus, &str); 2] = [
+            (ContractLinkStatus::Active, "active"),
+            (ContractLinkStatus::Withdrawn, "withdrawn"),
+        ];
+        for (value, name) in link {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<ContractLinkStatus>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+        }
+        let mut listed: Vec<ContractLinkStatus> = link.iter().map(|(value, _)| *value).collect();
+        listed.sort_unstable();
+        let mut all = ContractLinkStatus::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a link status was added to the vocabulary without a name above"
+        );
+
+        // Neither retired value may read as a deletion: each must say the row is kept, because
+        // `registry_entry_removed` and `contract_deleted` are reports made *from* the kept row.
+        assert!(RegistryEntryStatus::Tombstoned.note().contains("kept"));
+        assert!(ContractLinkStatus::Withdrawn.note().contains("kept"));
+
+        // `deleted` and `removed` are English, not members. A near-miss name that parsed would let
+        // a writer retire a row by spelling rather than by writing a timestamp.
+        for invented in ["deleted", "removed", "gone", "inactive", ""] {
+            assert!(
+                invented.parse::<RegistryEntryStatus>().is_err(),
+                "{invented:?} parsed as a RegistryEntryStatus"
+            );
+            assert!(
+                invented.parse::<ContractLinkStatus>().is_err(),
+                "{invented:?} parsed as a ContractLinkStatus"
+            );
+        }
+    }
+
+    /// Every resolution method names a declaration in a file, and nothing else may parse.
+    ///
+    /// The refused names are the row's own refused sources of a link — a similar name, a matching
+    /// endpoint string, an embedding distance, a sibling directory. None is a declaration, and the
+    /// vocabulary is the one place a relaxation of that rule would be cheapest to sneak in.
+    #[test]
+    fn every_resolution_method_is_a_stated_declaration() {
+        let pinned: [(ContractResolutionMethod, &str); 4] = [
+            (
+                ContractResolutionMethod::ManifestDeclared,
+                "manifest_declared",
+            ),
+            (
+                ContractResolutionMethod::WorkspaceDeclared,
+                "workspace_declared",
+            ),
+            (
+                ContractResolutionMethod::PathDependencyResolved,
+                "path_dependency_resolved",
+            ),
+            (
+                ContractResolutionMethod::ExportMapResolved,
+                "export_map_resolved",
+            ),
+        ];
+        for (value, name) in pinned {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<ContractResolutionMethod>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+        }
+        let mut listed: Vec<ContractResolutionMethod> =
+            pinned.iter().map(|(value, _)| *value).collect();
+        listed.sort_unstable();
+        let mut all = ContractResolutionMethod::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a resolution method was added to the vocabulary without a name above"
+        );
+
+        // Every value's name and prose says a file stated it.
+        for value in ContractResolutionMethod::ALL {
+            assert!(
+                value.as_str().ends_with("_declared") || value.as_str().ends_with("_resolved"),
+                "{value} names neither a declaration nor a resolution of one"
+            );
+            let note = value.note();
+            assert!(
+                note.contains("declar") || note.contains("manifest"),
+                "{value} does not say what stated it: {note:?}"
+            );
+        }
+
+        for refused in [
+            "name_similarity",
+            "endpoint_string_match",
+            "embedding_similarity",
+            "directory_proximity",
+            "inferred",
+            "",
+        ] {
+            assert!(
+                refused.parse::<ContractResolutionMethod>().is_err(),
+                "{refused:?} parsed as a ContractResolutionMethod; a link is drawn from a stated \
+                 declaration and from nothing else"
+            );
+        }
+    }
+
+    /// **Twelve freshness situations, and `generated_client_stale` is not one of them.**
+    ///
+    /// The count is the assertion. Row 13's plan said "twelve situations" and then listed thirteen,
+    /// and the thirteenth rests on generated-client metadata the same document refuses — a required
+    /// state that could never be produced from a fixture. Pinning both the count and the name keeps
+    /// a future draft from re-adding it without also adding the evidence.
+    ///
+    /// The two pairs that must not collapse are asserted as distinct values *and* as distinct
+    /// prose, because a gloss that read the same for both would collapse them where a reader is.
+    #[test]
+    fn the_twelve_contract_freshness_situations_stay_distinct() {
+        assert_eq!(
+            ContractFreshness::ALL.len(),
+            12,
+            "row 13 requires twelve situations; a thirteenth needs its own evidence and gate"
+        );
+
+        let pinned: [(ContractFreshness, &str); 12] = [
+            (ContractFreshness::SourceChanged, "source_changed"),
+            (ContractFreshness::TargetChanged, "target_changed"),
+            (ContractFreshness::BothChanged, "both_changed"),
+            (
+                ContractFreshness::ContractVersionMismatch,
+                "contract_version_mismatch",
+            ),
+            (
+                ContractFreshness::TargetRepositoryMissing,
+                "target_repository_missing",
+            ),
+            (
+                ContractFreshness::TargetRepositoryMoved,
+                "target_repository_moved",
+            ),
+            (
+                ContractFreshness::ContractFileMissing,
+                "contract_file_missing",
+            ),
+            (
+                ContractFreshness::DuplicateContractIdentity,
+                "duplicate_contract_identity",
+            ),
+            (
+                ContractFreshness::ConflictingDefinitions,
+                "conflicting_definitions",
+            ),
+            (
+                ContractFreshness::TargetPartiallyIndexed,
+                "target_partially_indexed",
+            ),
+            (ContractFreshness::ContractDeleted, "contract_deleted"),
+            (
+                ContractFreshness::RegistryEntryRemoved,
+                "registry_entry_removed",
+            ),
+        ];
+        for (value, name) in pinned {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<ContractFreshness>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+        }
+        let mut listed: Vec<ContractFreshness> = pinned.iter().map(|(value, _)| *value).collect();
+        listed.sort_unstable();
+        let mut all = ContractFreshness::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a freshness situation was added to the vocabulary without a name above"
+        );
+
+        // The refused state, refused by name. §2.1 of the plan refuses the evidence it would rest
+        // on, so a value that parsed would be a verdict nothing could ever produce.
+        for unreachable in ["generated_client_stale", "current", "fresh", "stale", ""] {
+            assert!(
+                unreachable.parse::<ContractFreshness>().is_err(),
+                "{unreachable:?} parsed as a ContractFreshness"
+            );
+        }
+
+        // Missing is not moved, and the moved one says why it is the dangerous case.
+        assert_ne!(
+            ContractFreshness::TargetRepositoryMissing,
+            ContractFreshness::TargetRepositoryMoved
+        );
+        let moved = ContractFreshness::TargetRepositoryMoved.note();
+        assert!(moved.contains("different repository"), "{moved}");
+        assert!(moved.contains("recorded repository id"), "{moved}");
+
+        // Partially indexed is not changed, and says it is unknown rather than stale.
+        assert_ne!(
+            ContractFreshness::TargetPartiallyIndexed,
+            ContractFreshness::TargetChanged
+        );
+        let partial = ContractFreshness::TargetPartiallyIndexed.note();
+        assert!(partial.contains("never indexed"), "{partial}");
+        assert!(partial.contains("unknown rather than stale"), "{partial}");
+
+        // No two situations share a sentence: a duplicate gloss collapses two states where the
+        // reader is, which is exactly the failure the twelve exist to prevent.
+        let mut notes: Vec<&str> = ContractFreshness::ALL.iter().map(|v| v.note()).collect();
+        notes.sort_unstable();
+        let before = notes.len();
+        notes.dedup();
+        assert_eq!(notes.len(), before, "two freshness situations share prose");
     }
 }

@@ -369,6 +369,24 @@ does not fit inside T2's path safety, which is about paths *within* one reposito
   in `third_party/LICENSES.md` before the code is written, per 12a's finding that the *measured* delta
   was +5 against an estimated +3.
 
+> ### Two things this section missed, found while implementing 13a-i (2026-08-08)
+>
+> Neither required a deviation; both will recur at **v9**, so they are recorded here rather than in
+> a session transcript.
+>
+> 1. **A schema-version bump is not purely additive to the outside world.** `canonical_dump` embeds
+>    `schema_version`, and `crates/nerve-index/tests/graph.rs:42` compares the dump byte-for-byte
+>    against `fixtures/ts-basic/golden.json`. §8's "what must not regress" list is correct as far as
+>    it goes — C1/C2/C3 add no entities, and `symbols_total`, `entities_total`, `entity_fts` and
+>    selector resolution are untouched — but it does not say that the golden dump is versioned. Any
+>    version bump touches that fixture on exactly one line, and the diff should prove nothing else
+>    moved.
+> 2. **`crates/nerve-index/tests/documents.rs:374-386` hand-maintains the set of post-v3 tables it
+>    drops** to reconstruct a v3 database for the downgrade test. Adding tables without extending
+>    that list makes the replay collide on `CREATE TABLE`. It fails loudly rather than silently, so
+>    it is a maintenance point rather than a hazard — but nothing forces the list to stay complete,
+>    and a guard generated from the migration set would remove the obligation to remember.
+
 ---
 
 ## 9. Acceptance criteria for row 13
