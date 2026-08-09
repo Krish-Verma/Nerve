@@ -447,8 +447,52 @@ export interface HistoryCommit {
   committer_ident: string | null;
   /** Repository prose, and the first free-form repository text Nerve stores. Text, never markup. */
   summary: string;
+  /**
+   * A `SummaryTruncation` member, and **never render `summary` without it**. The repository-level
+   * refusal tally says some summary was cut, not which one; the text alone cannot tell a short
+   * first line from a cut one, and a first line of exactly the stored bound is `complete`. `unknown`
+   * is what every commit recorded before schema v7 carries, so on an upgraded index it is the
+   * common value rather than the rare one.
+   */
+  summary_truncation: string;
+  summary_truncation_note: string;
   /** Present on a path's history, where each commit carries what it did to that path. */
   change?: HistoryChange;
+  /**
+   * Present on a path's history. The commit's own similarity candidate-set record, which is the
+   * only thing that can qualify an **absent** rename hypothesis: a commit whose candidate set a
+   * bound refused records no row at all, so without this its silence reads as "nothing moved".
+   * `null` where this matcher never analysed the commit, and `rename_analysis_absent_note` says so.
+   */
+  rename_analysis?: HistoryRenameAnalysis | null;
+  rename_analysis_absent_note?: string | null;
+}
+
+/**
+ * One matcher's candidate set for one commit, and how much of it was measured.
+ *
+ * The **threshold** is why this travels beside every hypothesis. A measurement without the number
+ * it was admitted against is a ratio the reader has to compare with a constant they guessed — and
+ * the constant belongs to the run, not to this build, so a row measured under an older threshold
+ * must still show the one it was actually judged by.
+ */
+export interface HistoryRenameAnalysis {
+  commit_oid: string;
+  matcher_id: string;
+  matcher_version: string;
+  /** Two integers, like the measurement. Admitted when `numerator × denom ≥ threshold_num × den`. */
+  threshold_numerator: number;
+  threshold_denominator: number;
+  deletions_considered: number;
+  additions_considered: number;
+  pairs_considered: number;
+  pairs_measured: number;
+  /** A `RenameAnalysisCompleteness` member. Three of its four values mean "not the full set". */
+  completeness: string;
+  completeness_note: string;
+  /** Keyed by `SimilarityUnmeasured`. An unmeasured pair is an unanswered question, not a "no". */
+  unmeasured: Record<string, number>;
+  unmeasured_notes: Record<string, string>;
 }
 
 /** A proposal that one path became another. There is no score and none may be invented. */
@@ -458,6 +502,7 @@ export interface HistoryRename {
   to_path: string;
   /** A `RenameEvidence` member. */
   evidence: string;
+  evidence_note: string;
   /**
    * The blob each side names. Two, not one, since schema v7: a similarity pair has two blobs, and
    * for an `exact_content` hypothesis they are equal — that equality is the evidence.
@@ -478,6 +523,16 @@ export interface HistoryRename {
   ambiguity_note: string;
   /** Always true. Carried per row rather than in a footnote a client can drop. */
   is_hypothesis: boolean;
+  /** Always false. The other half of the same statement, so neither has to be inferred. */
+  is_confirmed_rename: boolean;
+  /**
+   * The candidate-set record for this row's commit, joined on by the backend. `null` in two cases
+   * that are not the same, which is why `analysis_absent_note` says which — an exact-content
+   * hypothesis has no candidate set to be complete about, while a similarity hypothesis without one
+   * has a completeness that is unknown rather than complete. Never render the absence as a blank.
+   */
+  analysis: HistoryRenameAnalysis | null;
+  analysis_absent_note: string | null;
 }
 
 export interface HistoryPathChange {
@@ -541,6 +596,8 @@ export interface HistoryPathReport extends HistoryBlock {
   renames: HistoryRename[];
   renames_count: number;
   renames_truncated: boolean;
+  /** Which matcher each row's `analysis` was looked up under. Several may analyse one commit. */
+  rename_analysis_matcher_id: string;
 }
 
 /**

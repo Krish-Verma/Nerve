@@ -5198,3 +5198,378 @@ fn every_derived_history_command_carries_the_availability_block() {
         assert_eq!(value["exit_code"], serde_json::json!(0), "{args:?}");
     }
 }
+
+// ---- Slice 12c-ii Pass C: the similarity surface, and the per-summary flag -------------------
+//
+// Pass A stored the evidence and Pass B produced it. Everything below is about what a **reader**
+// gets, because a similarity hypothesis rendered without its method is a percentage from nowhere
+// and a summary rendered without its flag cannot be told from a cut one. Each assertion here is
+// the surface half of a stored fact that already had a storage test.
+//
+// `fixtures/history-similar`'s `ground_truth.json` is hand-written and predates the matcher, so
+// the numbers below are read off it rather than typed: a test that hard-coded 18/20 would agree
+// with whatever the matcher happened to produce.
+
+/// The hand-written oracle for `fixtures/history-similar`, never produced by running Nerve.
+fn similarity_ground_truth() -> serde_json::Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/history-similar/ground_truth.json");
+    serde_json::from_str(&std::fs::read_to_string(&path).expect("the oracle must be readable"))
+        .expect("the oracle must parse")
+}
+
+/// One admitted similarity pair from the oracle, by the path it moved to.
+fn admitted_pair(to_path: &str) -> serde_json::Value {
+    similarity_ground_truth()["similar_content_pairs"]
+        .as_array()
+        .expect("the oracle lists its pairs")
+        .iter()
+        .find(|pair| pair["to_path"] == serde_json::json!(to_path) && pair["admitted"] == true)
+        .unwrap_or_else(|| panic!("the oracle declares no admitted pair moving to {to_path}"))
+        .clone()
+}
+
+/// **A measurement never travels without the four things that make it readable.**
+///
+/// Method, version, the measurement as two integers, and the threshold it was admitted against.
+/// Any one of them missing turns `18 of 20` into a number a reader has to supply a meaning for,
+/// and the meaning they supply will be a percentage compared against a constant they guessed.
+#[test]
+fn a_similarity_hypothesis_carries_its_method_measurement_and_threshold() {
+    let (_dir, root) = history_fixture("history-similar");
+    let root = root.to_str().unwrap();
+    assert_eq!(code(&run(&["history", "sync", root])), 0);
+
+    let oracle = admitted_pair("mod/alpha-renamed.txt");
+    let matcher = similarity_ground_truth()["matcher"].clone();
+
+    let value = json(&run(&[
+        "history",
+        "file",
+        "mod/alpha-renamed.txt",
+        "--path",
+        root,
+        "--json",
+    ]));
+    let row = value["renames"]
+        .as_array()
+        .expect("the answer lists rename hypotheses")
+        .iter()
+        .find(|row| row["evidence"] == serde_json::json!("similar_content"))
+        .expect("the fixture's admitted pair must reach the surface")
+        .clone();
+
+    assert_eq!(row["from_path"], oracle["from_path"]);
+    assert_eq!(row["to_path"], oracle["to_path"]);
+    assert_eq!(row["matcher_id"], matcher["id"]);
+    assert_eq!(row["matcher_version"], matcher["version"]);
+    // Two integers, and the oracle's own two. A float here would be the `confidence: float` the
+    // evidence model forbids, arriving by way of presentation.
+    assert_eq!(row["match_numerator"], oracle["numerator"]);
+    assert_eq!(row["match_denominator"], oracle["denominator"]);
+    assert!(row["match_numerator"].is_i64() && row["match_denominator"].is_i64());
+    // The threshold, off the stored analysis rather than off a constant in this build.
+    assert_eq!(
+        row["analysis"]["threshold_numerator"],
+        matcher["threshold_numerator"]
+    );
+    assert_eq!(
+        row["analysis"]["threshold_denominator"],
+        matcher["threshold_denominator"]
+    );
+    assert_eq!(row["analysis"]["matcher_id"], matcher["id"]);
+    assert_eq!(row["analysis"]["matcher_version"], matcher["version"]);
+    assert_eq!(
+        row["analysis"]["completeness"],
+        serde_json::json!("complete")
+    );
+    assert!(row["analysis"]["completeness_note"].is_string());
+    assert_eq!(row["ambiguity"], oracle["ambiguity"]);
+    assert_eq!(row["is_hypothesis"], serde_json::json!(true));
+    assert_eq!(row["is_confirmed_rename"], serde_json::json!(false));
+    assert_eq!(row["analysis_absent_note"], serde_json::Value::Null);
+    assert_ne!(row["from_blob_oid"], row["to_blob_oid"]);
+
+    // And the same on the human surface, where the failure would be a sentence rather than a key.
+    let text = stdout(&run(&[
+        "history",
+        "file",
+        "mod/alpha-renamed.txt",
+        "--path",
+        root,
+    ]));
+    let numerator = oracle["numerator"].as_i64().unwrap();
+    let denominator = oracle["denominator"].as_i64().unwrap();
+    assert!(
+        text.contains(matcher["id"].as_str().unwrap()),
+        "the method is not named: {text}"
+    );
+    assert!(
+        text.contains(&format!("version {}", matcher["version"].as_str().unwrap())),
+        "the method's version is not named: {text}"
+    );
+    assert!(
+        text.contains(&format!("{numerator} of {denominator} line(s) shared")),
+        "the measurement must be printed as a count of a count: {text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "threshold      {} of {}",
+            matcher["threshold_numerator"].as_i64().unwrap(),
+            matcher["threshold_denominator"].as_i64().unwrap()
+        )),
+        "the threshold must be printed beside the measurement: {text}"
+    );
+    // No percentage anywhere. A ratio is comparable against anything and rounds; that is the whole
+    // reason the measurement is stored as two integers.
+    let percentage = format!("{}%", (numerator * 100) / denominator);
+    assert!(
+        !text.contains(&percentage) && !text.contains("90%"),
+        "a percentage was computed from the measurement: {text}"
+    );
+}
+
+/// **A hypothesis is never presented as a rename Git recorded.**
+#[test]
+fn a_similarity_hypothesis_is_never_called_a_confirmed_rename() {
+    let (_dir, root) = history_fixture("history-similar");
+    let root = root.to_str().unwrap();
+    assert_eq!(code(&run(&["history", "sync", root])), 0);
+
+    let text = stdout(&run(&[
+        "history",
+        "file",
+        "mod/alpha-renamed.txt",
+        "--path",
+        root,
+    ]));
+    // Anti-vacuity: the hypothesis really is on screen, so the negatives below mean something.
+    assert!(
+        text.contains("similar_content"),
+        "no similarity hypothesis was printed: {text}"
+    );
+    assert!(
+        text.contains("rename hypothesis — Git recorded no rename"),
+        "the label must be on the block itself: {text}"
+    );
+    for forbidden in [
+        "confirmed rename",
+        "was renamed to",
+        "git renamed",
+        "rename recorded by git",
+    ] {
+        assert!(
+            !text.to_ascii_lowercase().contains(forbidden),
+            "the surface claimed {forbidden:?}: {text}"
+        );
+    }
+}
+
+/// **An incomplete candidate set is never reported as complete, and it has no hypothesis to say so
+/// on.**
+///
+/// This is the quiet failure the whole analysis table exists for. `tiny/small2.txt` moved from a
+/// two-line file and `bin/other.bin` from a file with a NUL in it: neither pair can be measured, so
+/// neither commit records a similarity hypothesis at all. With the completeness carried only on
+/// hypotheses, that silence would be indistinguishable from "these paths are unrelated" — so the
+/// commit itself carries it, and the reason is named rather than dropped.
+#[test]
+fn an_incomplete_candidate_set_is_named_on_the_commit_that_has_no_hypothesis() {
+    let (_dir, root) = history_fixture("history-similar");
+    let root = root.to_str().unwrap();
+    assert_eq!(code(&run(&["history", "sync", root])), 0);
+
+    // The oracle says which commits are partial and why; the surface has to agree with it rather
+    // than with whatever the matcher produced.
+    let truth = similarity_ground_truth();
+    let oracle = truth["commits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|commit| commit["unmeasured"]["blob-too-small"].is_number())
+        .expect("the oracle declares a commit whose pair is beneath the line floor")
+        .clone();
+    assert_eq!(oracle["completeness"], serde_json::json!("partial"));
+
+    let value = json(&run(&[
+        "history",
+        "file",
+        "tiny/small2.txt",
+        "--path",
+        root,
+        "--json",
+    ]));
+    assert!(
+        value["renames"].as_array().unwrap().is_empty(),
+        "the fixture's unmeasurable pair must record no hypothesis, or this test proves nothing"
+    );
+    let listed = value["commits"]
+        .as_array()
+        .expect("the path's commits are listed");
+    let analysis = listed
+        .iter()
+        .filter_map(|commit| commit["rename_analysis"].as_object())
+        .find(|analysis| analysis["completeness"] == serde_json::json!("partial"))
+        .expect("the commit that could not measure its pair must say so on itself");
+    assert_eq!(analysis["completeness"], oracle["completeness"]);
+    assert_eq!(analysis["pairs_considered"], oracle["pairs_considered"]);
+    assert_eq!(analysis["pairs_measured"], oracle["pairs_measured"]);
+    assert_eq!(
+        analysis["unmeasured"]["blob-too-small"],
+        oracle["unmeasured"]["blob-too-small"]
+    );
+    assert!(analysis["unmeasured_notes"]["blob-too-small"].is_string());
+    assert!(analysis["completeness_note"].is_string());
+
+    // And on the human surface, where "complete" would be a sentence rather than a missing key.
+    let text = stdout(&run(&[
+        "history",
+        "file",
+        "tiny/small2.txt",
+        "--path",
+        root,
+    ]));
+    assert!(
+        text.contains("candidates     partial"),
+        "an incomplete candidate set must be named as incomplete: {text}"
+    );
+    assert!(
+        text.contains("unmeasured     blob-too-small"),
+        "the reason a pair went unmeasured must be named: {text}"
+    );
+    assert!(
+        !text.contains("candidates     complete"),
+        "this path's commit measured nothing and must not read as complete: {text}"
+    );
+}
+
+/// **Two kinds of evidence, two counts, and never a total.**
+#[test]
+fn exact_and_similar_rename_counts_are_reported_separately_and_never_summed() {
+    // Two copies, because these counts are per **run**: a second sync of the same repository walks
+    // commits it has already recorded and writes nothing, so reading the human surface from a
+    // second call against the first copy would assert on a row of zeroes and pass for free.
+    let (_dir, root) = history_fixture("history-similar");
+    let root = root.to_str().unwrap();
+    let (_human_dir, human_root) = history_fixture("history-similar");
+    let human_root = human_root.to_str().unwrap().to_owned();
+    let truth = similarity_ground_truth();
+    let expected_similar = truth["totals"]["admitted"].as_u64().unwrap();
+    let expected_exact = truth["totals"]["exact_content_pairs"].as_u64().unwrap();
+
+    let value = json(&run(&["history", "sync", root, "--json"]));
+    assert_eq!(
+        value["renames_written"],
+        serde_json::json!(expected_exact),
+        "the exact-content count must be the oracle's"
+    );
+    assert_eq!(
+        value["similar_renames_written"],
+        serde_json::json!(expected_similar),
+        "the similarity count must be the oracle's"
+    );
+    assert!(value["rename_analyses_written"].as_u64().unwrap() > 0);
+
+    // No field anywhere in the answer is the two added together. A blended total would let an
+    // exact match and a measured one arrive at the same figure and become indistinguishable.
+    let blended = expected_exact + expected_similar;
+    for (key, field) in value.as_object().unwrap() {
+        if key == "commits_walked" || key == "changes_written" || key == "duration_ms" {
+            continue;
+        }
+        if key.contains("rename") {
+            assert_ne!(
+                field.as_u64(),
+                Some(blended),
+                "`{key}` is the two rename counts summed, which is a number describing neither"
+            );
+        }
+    }
+
+    let text = stdout(&run(&["history", "sync", &human_root]));
+    assert!(
+        text.contains(&format!("{expected_exact} exact-content hypothesis")),
+        "the exact count must be labelled by its evidence: {text}"
+    );
+    assert!(
+        text.contains(&format!("{expected_similar} similar-content hypothesis")),
+        "the similarity count must be labelled by its evidence: {text}"
+    );
+    assert!(
+        !text.contains(&format!("renames        {blended} ")),
+        "a blended rename total was printed: {text}"
+    );
+}
+
+/// **No surface renders a summary without its flag**, on every commit and not only a cut one.
+///
+/// `fixtures/history-hostile` carries a 600-byte single-line summary, so the `truncated` value is
+/// exercised rather than asserted, and every other commit in the same answer must still carry the
+/// flag — an answer that showed it only where something was cut would make its absence the claim
+/// "this is the whole first line".
+#[test]
+fn no_commit_renders_a_summary_without_saying_whether_it_was_cut() {
+    let (_dir, root) = history_fixture("history-hostile");
+    let root = root.to_str().unwrap();
+    // Exit 3, not 0: this fixture's three malformed trees are refused and the rest is written,
+    // which is what `PARTIAL_INDEX` means. Asserting 0 here would be asserting the fixture is not
+    // hostile.
+    assert_eq!(code(&run(&["history", "sync", root])), 3);
+
+    let inventory = history_inventory("history-hostile");
+    let cut = inventory["attacks"]["summary-over-512-bytes"]["commit_oid"]
+        .as_str()
+        .expect("the fixture declares a commit with an over-long summary")
+        .to_string();
+    assert!(
+        inventory["attacks"]["summary-over-512-bytes"]["summary_bytes"]
+            .as_u64()
+            .unwrap()
+            > 512,
+        "the fixture's summary must actually exceed the bound"
+    );
+
+    let value = json(&run(&[
+        "history", "log", "--path", root, "--limit", "100", "--json",
+    ]));
+    let commits = value["commits"].as_array().expect("commits are listed");
+    assert!(commits.len() > 1);
+    for commit in commits {
+        assert!(
+            commit["summary"].is_string(),
+            "every commit carries a summary: {commit}"
+        );
+        let flag = commit["summary_truncation"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a summary reached a reader with no flag: {commit}"));
+        assert!(
+            ["complete", "truncated", "unknown"].contains(&flag),
+            "`{flag}` is not a SummaryTruncation member"
+        );
+        assert!(commit["summary_truncation_note"].is_string());
+    }
+    let row = commits
+        .iter()
+        .find(|commit| commit["commit_oid"] == serde_json::json!(cut))
+        .expect("the over-long commit is listed");
+    assert_eq!(
+        row["summary_truncation"],
+        serde_json::json!("truncated"),
+        "a summary Nerve cut must not be rendered as the whole first line"
+    );
+    assert_eq!(row["summary"].as_str().unwrap().len(), 512);
+
+    // The human surface, where the omission would be invisible rather than a missing key.
+    let text = stdout(&run(&["history", "log", "--path", root, "--limit", "100"]));
+    let summaries = text.matches("  summary        ").count();
+    let states = text.matches("  summary_state  ").count();
+    assert!(summaries > 1, "the fixture must print several summaries");
+    assert_eq!(
+        summaries, states,
+        "every printed summary must carry its own flag: {text}"
+    );
+    assert!(
+        text.contains("summary_state  truncated"),
+        "the cut summary must be named as cut: {text}"
+    );
+}

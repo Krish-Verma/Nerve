@@ -48,14 +48,15 @@ pub use graph::{
     PathHop, PathQuery, PathReport, WhyDirection, WhyQuery, WhyReport,
 };
 pub use history::{
-    change_frequency, changes_for_commit, cochange, commit_by_oid, commit_log,
+    analysis_of, change_frequency, changes_for_commit, cochange, commit_by_oid, commit_log,
     commits_touching_path, earlier_changes_may_exist, first_last_observed, history_freshness,
     history_ingest, history_totals, insert_changes, insert_commit, insert_rename_analysis,
-    insert_renames, recorded_commit_oids, rename_analysis_for_commits, renames_touching_path,
-    state_diff, upsert_history_ingest, AnalysisRow, ChangeFrequency, ChangeFrequencyRow, ChangeRow,
-    Cochange, CochangeRow, CommitRow, CurrentTree, EarlierHistoryUnavailable, FirstLastObserved,
-    HistoryFreshnessReport, HistoryTotals, IngestRow, PathChange, RenameRow, StateDiff,
-    StateDiffLimits, StateDiffReport, COCHANGE_IS_NOT_A_DEPENDENCY, CURRENT_TREE_BASIS,
+    insert_renames, recorded_commit_oids, rename_analysis_absence, rename_analysis_for_commits,
+    renames_touching_path, state_diff, upsert_history_ingest, AnalysisRow, ChangeFrequency,
+    ChangeFrequencyRow, ChangeRow, Cochange, CochangeRow, CommitRow, CurrentTree,
+    EarlierHistoryUnavailable, FirstLastObserved, HistoryFreshnessReport, HistoryTotals, IngestRow,
+    PathChange, RenameRow, StateDiff, StateDiffLimits, StateDiffReport,
+    COCHANGE_IS_NOT_A_DEPENDENCY, COMMIT_NOT_ANALYSED, CURRENT_TREE_BASIS,
 };
 pub use impact::{
     impact, ImpactQuery, ImpactReport, ImpactRow, ImpactTotals, UnresolvedAccount,

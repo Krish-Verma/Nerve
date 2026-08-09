@@ -2547,6 +2547,88 @@ fn no_repository_derived_string_appears_outside_the_untrusted_field() {
     ] {
         assert_labelled(&history_root, history::TOOL_NAME, &arguments, marker);
     }
+
+    // Slice 12c-ii Pass C. The fields this pass added are **inside** the envelope, asserted rather
+    // than assumed. The scan above proves no repository string escapes it; that is only half the
+    // property, because a payload that carried none of these fields at all would satisfy it. So the
+    // similarity evidence and the per-summary flag are located by pointer under
+    // `repository_content` and required to be absent everywhere else.
+    let (_similar_dir, similar_root) = common::history_repository("history-similar");
+    let answer = result_of(
+        &similar_root,
+        history::TOOL_NAME,
+        json!({ "question": "path", "path": "mod/alpha-renamed.txt", "limit": 100 }),
+    );
+    let payload = &answer["structuredContent"];
+    let inside = format!("/{}", tool::UNTRUSTED_CONTENT_FIELD);
+    for pointer in [
+        "/history/renames/0/matcher_id",
+        "/history/renames/0/matcher_version",
+        "/history/renames/0/match_numerator",
+        "/history/renames/0/match_denominator",
+        "/history/renames/0/evidence",
+        "/history/renames/0/evidence_note",
+        "/history/renames/0/is_hypothesis",
+        "/history/renames/0/is_confirmed_rename",
+        "/history/renames/0/from_blob_oid",
+        "/history/renames/0/to_blob_oid",
+        "/history/renames/0/analysis/threshold_numerator",
+        "/history/renames/0/analysis/threshold_denominator",
+        "/history/renames/0/analysis/completeness",
+        "/history/renames/0/analysis/completeness_note",
+        "/history/commits/0/summary",
+        "/history/commits/0/summary_truncation",
+        "/history/commits/0/summary_truncation_note",
+        "/history/commits/0/rename_analysis/completeness",
+        "/history/rename_analysis_matcher_id",
+    ] {
+        let at = format!("{inside}{pointer}");
+        let found = payload.pointer(&at).unwrap_or_else(|| {
+            panic!(
+                "{pointer} is not inside `{}`",
+                tool::UNTRUSTED_CONTENT_FIELD
+            )
+        });
+        assert!(!found.is_null(), "{pointer} reached the answer as null");
+        // And nothing outside the label carries the same field. `pointer` is relative to the
+        // envelope's content, so the same shape hoisted beside the trust block would resolve here.
+        assert!(
+            payload.pointer(pointer).is_none(),
+            "{pointer} also exists outside `{}`",
+            tool::UNTRUSTED_CONTENT_FIELD
+        );
+    }
+    // The evidence text itself — the notes a reader acts on — is repository-adjacent prose that a
+    // future edit could hoist beside the trust block. It is Nerve's own vocabulary, so the scan
+    // above would not catch it; this does.
+    let content = payload[tool::UNTRUSTED_CONTENT_FIELD].clone();
+    let mut labelled = Vec::new();
+    strings(&content, "", &mut labelled);
+    let notes: Vec<String> = labelled
+        .into_iter()
+        .filter(|(at, _)| at.ends_with("_note") || at.contains("/summary"))
+        .map(|(_, text)| text)
+        .collect();
+    assert!(
+        notes.len() >= 5,
+        "only {} qualifying sentences were found inside the envelope",
+        notes.len()
+    );
+    let outside = serde_json::to_string(&json!({
+        "tool": payload["tool"],
+        "trust": payload["trust"],
+        "query": payload["query"],
+        "bounds": payload["bounds"],
+        "evidence": payload["evidence"],
+    }))
+    .unwrap();
+    for note in notes {
+        assert!(
+            !outside.contains(&note),
+            "evidence text leaked outside `{}`: {note:?}",
+            tool::UNTRUSTED_CONTENT_FIELD
+        );
+    }
 }
 
 #[test]

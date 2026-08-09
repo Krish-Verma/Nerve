@@ -261,6 +261,122 @@ sys.exit(0 if len(b) == 1
   check "an over-large --max-commits is refused with the clamp stated" bash -c "
     out=\$('$NERVE' history sync '$HWORK/bounded' --max-commits 999999 2>&1); rc=\$?
     [ \$rc -eq 10 ] && printf '%s' \"\$out\" | grep -q 5000"
+
+  # ---- Slice 12c-ii: similarity evidence, on the shipped binary -----------------------------
+  #
+  # Every check below exercises behaviour rather than existence. The numbers are read out of
+  # `fixtures/history-similar/ground_truth.json`, which is hand-written, predates the matcher, and
+  # is never produced by running Nerve — so a check that passed because the matcher agreed with
+  # itself would not pass here. The one thing a similarity hypothesis must never be is a
+  # percentage with no method, no version and no threshold beside it.
+  if [ -d "$ROOT/fixtures/history-similar" ]; then
+    history_repo history-similar "$HWORK/similar" >/dev/null 2>&1
+    SIMILAR_SYNC=$("$NERVE" history sync "$HWORK/similar" 2>&1)
+    printf '%s' "$SIMILAR_SYNC" > /tmp/nerve_acceptance_similar_sync
+
+    check "a similarity hypothesis reports its matcher, its measurement and its threshold" bash -c "
+      '$NERVE' history file mod/alpha-renamed.txt --path '$HWORK/similar' --json |
+      python3 -c '
+import json,sys
+truth = json.load(open(\"$ROOT/fixtures/history-similar/ground_truth.json\"))
+matcher = truth[\"matcher\"]
+pair = next(p for p in truth[\"similar_content_pairs\"]
+            if p[\"to_path\"] == \"mod/alpha-renamed.txt\" and p[\"admitted\"])
+rows = [r for r in json.load(sys.stdin)[\"renames\"] if r[\"evidence\"] == \"similar_content\"]
+assert len(rows) == 1, rows
+r = rows[0]
+assert r[\"matcher_id\"] == matcher[\"id\"], r
+assert r[\"matcher_version\"] == matcher[\"version\"], r
+assert r[\"match_numerator\"] == pair[\"numerator\"], r
+assert r[\"match_denominator\"] == pair[\"denominator\"], r
+assert isinstance(r[\"match_numerator\"], int) and isinstance(r[\"match_denominator\"], int), r
+a = r[\"analysis\"]
+assert a[\"threshold_numerator\"] == matcher[\"threshold_numerator\"], a
+assert a[\"threshold_denominator\"] == matcher[\"threshold_denominator\"], a
+assert a[\"completeness\"] == \"complete\", a
+assert r[\"from_blob_oid\"] != r[\"to_blob_oid\"], r
+'"
+
+    # A hypothesis is a proposal. Both halves are checked: the label must be present (or a command
+    # that printed nothing would pass) and no affirmative phrasing may appear anywhere.
+    check "a similarity hypothesis is labelled a hypothesis and never a confirmed rename" bash -c "
+      out=\$('$NERVE' history file mod/alpha-renamed.txt --path '$HWORK/similar')
+      printf '%s' \"\$out\" | grep -q 'similar_content' || exit 1
+      printf '%s' \"\$out\" | grep -q 'rename hypothesis — Git recorded no rename' || exit 1
+      printf '%s' \"\$out\" | grep -qE '[0-9]+ of [0-9]+ line\(s\) shared' || exit 1
+      printf '%s' \"\$out\" | grep -qE 'threshold +[0-9]+ of [0-9]+' || exit 1
+      ! printf '%s' \"\$out\" | grep -qiE 'confirmed rename|was renamed to|git renamed|rename recorded by git'"
+
+    # Two kinds of evidence, two counts, and no line anywhere that adds them together.
+    check "exact and similar rename counts are reported separately and never blended" bash -c "
+      '$NERVE' history sync '$HWORK/similar' --json >/dev/null 2>&1
+      python3 -c '
+import json,re,sys
+truth = json.load(open(\"$ROOT/fixtures/history-similar/ground_truth.json\"))
+exact = truth[\"totals\"][\"exact_content_pairs\"]
+similar = truth[\"totals\"][\"admitted\"]
+text = open(\"/tmp/nerve_acceptance_similar_sync\").read()
+assert \"%d exact-content hypothesis\" % exact in text, text
+assert \"%d similar-content hypothesis\" % similar in text, text
+blended = exact + similar
+assert not re.search(r\"renames +%d hypothes\" % blended, text), text
+assert \"never added to the line above\" in text, text
+'"
+
+    # A commit that could measure nothing is the case a per-row flag cannot state, so the commit
+    # carries it. Reporting it as complete would be the quiet failure the analysis table exists for.
+    check "an unmeasurable candidate pair is named and never reported as complete" bash -c "
+      out=\$('$NERVE' history file bin/other.bin --path '$HWORK/similar')
+      printf '%s' \"\$out\" | grep -q 'candidates     partial' || exit 1
+      printf '%s' \"\$out\" | grep -q 'unmeasured     blob-binary' || exit 1
+      ! printf '%s' \"\$out\" | grep -q 'candidates     complete'"
+
+    check "similarity reads leave the database byte-identical" bash -c "
+      before=\$(shasum -a 256 '$HWORK/similar/.nerve/nerve.db' | cut -d' ' -f1)
+      '$NERVE' history file mod/alpha-renamed.txt --path '$HWORK/similar' >/dev/null 2>&1
+      '$NERVE' history file bin/other.bin --path '$HWORK/similar' --json >/dev/null 2>&1
+      '$NERVE' history log --path '$HWORK/similar' >/dev/null 2>&1
+      after=\$(shasum -a 256 '$HWORK/similar/.nerve/nerve.db' | cut -d' ' -f1)
+      [ \"\$before\" = \"\$after\" ]"
+  else
+    skip "similarity renames" "fixtures/history-similar is missing"
+  fi
+
+  # A summary is bounded at 512 bytes and the repository-level tally cannot say *which* one was
+  # cut. `fixtures/history-hostile` carries a 600-byte single-line summary, so this exercises the
+  # `truncated` value rather than asserting it — and every other commit in the same answer has to
+  # carry the flag too, or its absence becomes the claim "nothing was cut".
+  if [ -d "$ROOT/fixtures/history-hostile" ]; then
+    history_repo history-hostile "$HWORK/hostile" >/dev/null 2>&1
+    "$NERVE" history sync "$HWORK/hostile" >/dev/null 2>&1
+
+    check "no summary is rendered without saying whether it was cut" bash -c "
+      '$NERVE' history log --path '$HWORK/hostile' --limit 100 --json |
+      python3 -c '
+import json,sys
+inv = json.load(open(\"$ROOT/fixtures/history-hostile/inventory.json\"))
+cut = inv[\"attacks\"][\"summary-over-512-bytes\"][\"commit_oid\"]
+assert inv[\"attacks\"][\"summary-over-512-bytes\"][\"summary_bytes\"] > 512
+rows = json.load(sys.stdin)[\"commits\"]
+assert len(rows) > 1, rows
+for r in rows:
+    assert isinstance(r[\"summary\"], str), r
+    assert r[\"summary_truncation\"] in (\"complete\", \"truncated\", \"unknown\"), r
+    assert isinstance(r[\"summary_truncation_note\"], str), r
+row = next(r for r in rows if r[\"commit_oid\"] == cut)
+assert row[\"summary_truncation\"] == \"truncated\", row
+assert len(row[\"summary\"]) == 512, len(row[\"summary\"])
+'"
+
+    check "the human surface prints one truncation flag per printed summary" bash -c "
+      out=\$('$NERVE' history log --path '$HWORK/hostile' --limit 100)
+      s=\$(printf '%s\n' \"\$out\" | grep -c '^  summary        ')
+      f=\$(printf '%s\n' \"\$out\" | grep -c '^  summary_state  ')
+      [ \"\$s\" -gt 1 ] && [ \"\$s\" = \"\$f\" ] &&
+        printf '%s' \"\$out\" | grep -q 'summary_state  truncated'"
+  else
+    skip "per-summary truncation" "fixtures/history-hostile is missing"
+  fi
 else
   skip "git history" "fixtures/history-* are missing"
 fi

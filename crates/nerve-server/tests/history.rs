@@ -969,3 +969,226 @@ fn a_hostile_commit_summary_is_carried_as_a_string_and_never_as_a_field_name() {
         "the escaping that makes this safe must be visible in the bytes"
     );
 }
+
+// ---- Slice 12c-ii Pass C: similarity evidence, and the per-summary flag -----------------------
+//
+// The measurement, the method, the threshold and the candidate-set completeness are one claim, and
+// this surface either carries all four or carries a percentage from nowhere. Everything below is
+// checked against `fixtures/history-similar/ground_truth.json`, which is hand-written, predates the
+// matcher, and is never produced by running Nerve — a test that hard-coded 18 of 20 would be
+// asserting that the matcher agrees with itself.
+
+/// The hand-written oracle for `fixtures/history-similar`.
+fn similarity_oracle() -> serde_json::Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/history-similar/ground_truth.json");
+    serde_json::from_str(&std::fs::read_to_string(&path).expect("the oracle must be readable"))
+        .expect("the oracle must parse")
+}
+
+/// **Every field §6.6 requires, on the HTTP surface, for one admitted pair.**
+#[test]
+fn a_similarity_hypothesis_carries_its_method_its_measurement_and_its_threshold() {
+    let (_dir, _root, session) = common::served_history("history-similar");
+    let oracle = similarity_oracle();
+    let matcher = oracle["matcher"].clone();
+    let pair = oracle["similar_content_pairs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pair| pair["to_path"] == serde_json::json!("mod/alpha-renamed.txt"))
+        .expect("the oracle declares this pair")
+        .clone();
+    assert_eq!(pair["admitted"], serde_json::json!(true));
+
+    let response = session.get("/api/history/path?path=mod/alpha-renamed.txt&limit=100");
+    assert_eq!(response.status, 200, "{}", response.body);
+    let value: serde_json::Value = serde_json::from_str(&response.body).expect("valid JSON");
+    let row = value["renames"]
+        .as_array()
+        .expect("the answer lists hypotheses")
+        .iter()
+        .find(|row| row["evidence"] == serde_json::json!("similar_content"))
+        .expect("the admitted pair must reach the surface")
+        .clone();
+
+    // The twelve fields, in the order §6.6 names them.
+    assert_eq!(row["is_hypothesis"], serde_json::json!(true));
+    assert_eq!(row["is_confirmed_rename"], serde_json::json!(false));
+    assert_eq!(row["evidence"], serde_json::json!("similar_content"));
+    assert!(row["evidence_note"]
+        .as_str()
+        .unwrap()
+        .contains("hypothesis"));
+    assert_eq!(row["matcher_id"], matcher["id"]);
+    assert_eq!(row["matcher_version"], matcher["version"]);
+    assert_eq!(row["match_numerator"], pair["numerator"]);
+    assert_eq!(row["match_denominator"], pair["denominator"]);
+    assert_eq!(
+        row["analysis"]["threshold_numerator"],
+        matcher["threshold_numerator"]
+    );
+    assert_eq!(
+        row["analysis"]["threshold_denominator"],
+        matcher["threshold_denominator"]
+    );
+    assert_eq!(row["ambiguity"], pair["ambiguity"]);
+    assert!(row["ambiguity_note"].is_string());
+    assert_eq!(
+        row["analysis"]["completeness"],
+        serde_json::json!("complete")
+    );
+    assert!(row["analysis"]["completeness_note"].is_string());
+    assert_eq!(row["from_path"], pair["from_path"]);
+    assert_eq!(row["to_path"], pair["to_path"]);
+    assert!(row["from_blob_oid"].is_string() && row["to_blob_oid"].is_string());
+    assert_ne!(row["from_blob_oid"], row["to_blob_oid"]);
+    assert!(row["commit_oid"].as_str().unwrap().len() == 40);
+    assert_eq!(value["rename_analysis_matcher_id"], matcher["id"]);
+    // Availability travels with it, as it does on every history answer.
+    assert!(value["limitations"].is_object());
+
+    // **No float anywhere on this path.** The measurement is an exact rational, and the moment one
+    // of these is serialized as a ratio the evidence model's ban on `confidence: float` is defeated
+    // by presentation rather than by storage.
+    for field in ["match_numerator", "match_denominator"] {
+        assert!(
+            row[field].is_i64(),
+            "`{field}` must be an integer, not {}",
+            row[field]
+        );
+    }
+    for field in ["threshold_numerator", "threshold_denominator"] {
+        assert!(row["analysis"][field].is_i64(), "`{field}` must be integer");
+    }
+    assert!(
+        !response.body.contains("\"score\"") && !response.body.contains("\"similarity_ratio\""),
+        "a score reached the wire: {}",
+        response.body
+    );
+}
+
+/// **An exact-content hypothesis carries no measurement, and that is not a perfect one.**
+///
+/// The blend §6 forbids would arrive here: giving the exact matcher a `1 of 1` would make it
+/// sortable against a similarity row, which is the one comparison the two-value vocabulary exists
+/// to prevent.
+#[test]
+fn an_exact_content_hypothesis_carries_no_measurement_and_says_why_it_has_no_analysis() {
+    let (_dir, _root, session) = common::served_history("history-similar");
+    let response = session.get("/api/history/path?path=empty/b.txt&limit=100");
+    assert_eq!(response.status, 200, "{}", response.body);
+    let value: serde_json::Value = serde_json::from_str(&response.body).expect("valid JSON");
+    let row = value["renames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["evidence"] == serde_json::json!("exact_content"))
+        .expect("the oracle's exact-content pair must reach the surface")
+        .clone();
+
+    assert_eq!(row["match_numerator"], serde_json::Value::Null);
+    assert_eq!(row["match_denominator"], serde_json::Value::Null);
+    assert_eq!(row["from_blob_oid"], row["to_blob_oid"]);
+    // No analysis row by decision, and the decision is stated rather than left as a blank a reader
+    // fills in with "complete".
+    assert_eq!(row["analysis"], serde_json::Value::Null);
+    let absent = row["analysis_absent_note"]
+        .as_str()
+        .expect("the absence must be explained");
+    assert!(
+        absent.contains("no candidate set"),
+        "the absence must say what it is: {absent}"
+    );
+    assert_eq!(row["is_hypothesis"], serde_json::json!(true));
+}
+
+/// **A commit that could measure nothing says so on itself, because it has no hypothesis to say it
+/// on.**
+#[test]
+fn a_commit_whose_candidate_pair_was_unmeasurable_is_never_reported_as_complete() {
+    let (_dir, _root, session) = common::served_history("history-similar");
+    let oracle = similarity_oracle();
+    let declared = oracle["commits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|commit| commit["unmeasured"]["blob-binary"].is_number())
+        .expect("the oracle declares a commit whose pair is binary")
+        .clone();
+    assert_eq!(declared["completeness"], serde_json::json!("partial"));
+
+    let response = session.get("/api/history/path?path=bin/other.bin&limit=100");
+    assert_eq!(response.status, 200, "{}", response.body);
+    let value: serde_json::Value = serde_json::from_str(&response.body).expect("valid JSON");
+    assert!(
+        value["renames"].as_array().unwrap().is_empty(),
+        "an unmeasurable pair must record no hypothesis, or this test proves nothing"
+    );
+    let analysis = value["commits"]
+        .as_array()
+        .expect("the path's commits")
+        .iter()
+        .map(|commit| commit["rename_analysis"].clone())
+        .find(|analysis| analysis["completeness"] == serde_json::json!("partial"))
+        .expect("the commit that measured nothing must carry its own completeness");
+    assert_eq!(analysis["pairs_considered"], declared["pairs_considered"]);
+    assert_eq!(analysis["pairs_measured"], declared["pairs_measured"]);
+    assert_eq!(
+        analysis["unmeasured"]["blob-binary"],
+        declared["unmeasured"]["blob-binary"]
+    );
+    assert!(analysis["unmeasured_notes"]["blob-binary"]
+        .as_str()
+        .unwrap()
+        .contains("NUL"));
+}
+
+/// **No commit reaches this surface with a summary and no flag beside it.**
+#[test]
+fn every_commit_this_api_returns_says_whether_its_summary_was_cut() {
+    let (_dir, _root, session) = common::served_history("history-hostile");
+    let inventory = common::history_inventory("history-hostile");
+    let cut = inventory["attacks"]["summary-over-512-bytes"]["commit_oid"]
+        .as_str()
+        .expect("the fixture declares an over-long summary")
+        .to_string();
+
+    let mut checked = 0;
+    let mut saw_truncated = false;
+    for target in [
+        "/api/history/commits?limit=200".to_string(),
+        format!("/api/history/commit?commit={cut}"),
+    ] {
+        let response = session.get(&target);
+        assert_eq!(response.status, 200, "{target}: {}", response.body);
+        let value: serde_json::Value = serde_json::from_str(&response.body).expect("valid JSON");
+        let rows: Vec<serde_json::Value> = match value["commits"].as_array() {
+            Some(rows) => rows.clone(),
+            None => vec![value["commit"].clone()],
+        };
+        assert!(!rows.is_empty(), "{target} returned no commit");
+        for row in rows {
+            assert!(row["summary"].is_string(), "{target}: {row}");
+            let flag = row["summary_truncation"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{target}: a summary with no flag: {row}"));
+            assert!(["complete", "truncated", "unknown"].contains(&flag));
+            assert!(row["summary_truncation_note"].is_string());
+            if row["commit_oid"] == serde_json::json!(cut) {
+                assert_eq!(
+                    flag, "truncated",
+                    "a summary Nerve cut must not be rendered as the whole first line"
+                );
+                assert_eq!(row["summary"].as_str().unwrap().len(), 512);
+                saw_truncated = true;
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked > 3, "only {checked} commits were checked");
+    assert!(
+        saw_truncated,
+        "the fixture's cut summary never reached the surface, so this proves nothing"
+    );
+}

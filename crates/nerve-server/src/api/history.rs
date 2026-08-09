@@ -45,8 +45,9 @@
 use serde_json::{json, Value};
 
 use nerve_store::{
-    ChangeRow, CommitRow, EarlierHistoryUnavailable, FirstLastObserved, HistoryFreshnessReport,
-    HistoryTotals, IngestRow, PathChange, RenameRow, StateDiff, StateDiffLimits, StateDiffReport,
+    AnalysisRow, ChangeRow, CommitRow, EarlierHistoryUnavailable, FirstLastObserved,
+    HistoryFreshnessReport, HistoryTotals, IngestRow, PathChange, RenameRow, StateDiff,
+    StateDiffLimits, StateDiffReport,
 };
 
 use super::{Answer, ApiError, Context};
@@ -276,6 +277,12 @@ fn commit(row: &CommitRow, changes: Option<usize>) -> Value {
         "committer_ident": row.committer_ident,
         // Repository prose, carried as a string value and never interpreted.
         "summary": row.summary,
+        // And never carried without this. The ingest record's refusal tally is per *repository* —
+        // it says some summary was cut, not which — so from the text alone a client cannot tell a
+        // short first line from a cut one. Length cannot recover it either: a first line of exactly
+        // the bound is `complete`, which is why the vocabulary has three values and not a boolean.
+        "summary_truncation": row.summary_truncation.as_str(),
+        "summary_truncation_note": row.summary_truncation.note(),
     })
 }
 
@@ -290,12 +297,51 @@ fn change(row: &ChangeRow) -> Value {
     })
 }
 
-fn rename(row: &RenameRow) -> Value {
+/// One commit's similarity candidate-set record, carried beside every hypothesis drawn from it.
+///
+/// The **threshold** is the field this exists for. A measurement rendered without the number it was
+/// admitted against is a ratio a client has to compare with a constant it guessed, and the constant
+/// is a property of the *run* rather than of this build — a row measured under an older threshold
+/// must still render the threshold it was actually judged by. Everything else here says how much of
+/// the candidate set was measured, which is the difference between "these are the hypotheses" and
+/// "these are the hypotheses that could be measured".
+fn rename_analysis(row: &AnalysisRow) -> Value {
+    json!({
+        "commit_oid": row.commit_oid,
+        "matcher_id": row.matcher_id,
+        "matcher_version": row.matcher_version,
+        "threshold_numerator": row.threshold_numerator,
+        "threshold_denominator": row.threshold_denominator,
+        "deletions_considered": row.deletions_considered,
+        "additions_considered": row.additions_considered,
+        "pairs_considered": row.pairs_considered,
+        "pairs_measured": row.pairs_measured,
+        "completeness": row.completeness.as_str(),
+        "completeness_note": row.completeness.note(),
+        "unmeasured": row.unmeasured.iter()
+            .map(|(reason, count)| (reason.as_str().to_string(), *count))
+            .collect::<std::collections::BTreeMap<String, i64>>(),
+        // In words as well as counted, because "blob-binary 1" beside a hypothesis reads as a
+        // defect and is not one: an unmeasured pair is an unanswered question, never a negative
+        // answer, and a client that read it as "not a rename" would have it exactly backwards.
+        "unmeasured_notes": row.unmeasured.keys()
+            .map(|reason| (reason.as_str().to_string(), reason.note().to_string()))
+            .collect::<std::collections::BTreeMap<String, String>>(),
+    })
+}
+
+/// A hypothesis with everything its measurement is meaningless without.
+///
+/// `analysis` is `null` in two cases and they are not the same, so `analysis_absent_note` names
+/// which — in `nerve-store`'s words rather than this surface's, because the CLI and the MCP tool
+/// render the same two sentences and a paraphrase here would be the second copy.
+fn rename(row: &RenameRow, analysis: Option<&AnalysisRow>) -> Value {
     json!({
         "commit_oid": row.commit_oid,
         "from_path": row.from_path,
         "to_path": row.to_path,
         "evidence": row.evidence.as_str(),
+        "evidence_note": row.evidence.note(),
         // Two blob oids since schema v7, because a similarity pair has two. For an exact-content
         // hypothesis they are equal, and that identity is the evidence rather than a redundancy.
         "from_blob_oid": row.from_blob_oid,
@@ -310,8 +356,14 @@ fn rename(row: &RenameRow) -> Value {
         "ambiguity": row.ambiguity.as_str(),
         "ambiguity_note": row.ambiguity.note(),
         // On every row rather than in a footnote a client can drop. Git records no rename; this is a
-        // proposal drawn from identical content, and there is no score to sort it by.
+        // proposal drawn from content, and there is no score to sort it by.
         "is_hypothesis": true,
+        "is_confirmed_rename": false,
+        "analysis": analysis.map(rename_analysis),
+        "analysis_absent_note": match analysis {
+            Some(_) => Value::Null,
+            None => json!(nerve_store::rename_analysis_absence(row.evidence)),
+        },
     })
 }
 
@@ -572,6 +624,27 @@ pub fn path(ctx: &Context<'_>, target: &Target) -> Answer {
     commits.truncate(limit);
     renames.truncate(limit);
 
+    // The candidate-set record, joined rather than inferred, for each hypothesis's commit **and for
+    // each commit listed**. A commit missing from this map was never analysed by this matcher; a
+    // commit present with `refused_bound` was analysed and refused. Both carry zero similarity
+    // hypotheses and only the stored row tells them apart, which is why the listed commits are in
+    // the join at all: a refusal has no row for a per-row field to hang on, so without this the
+    // silence would be readable only as "nothing moved here".
+    let mut analysis_oids: Vec<&str> = renames
+        .iter()
+        .map(|row| row.commit_oid.as_str())
+        .chain(commits.iter().map(|(row, _)| row.commit_oid.as_str()))
+        .collect();
+    analysis_oids.sort_unstable();
+    analysis_oids.dedup();
+    let analyses = nerve_store::rename_analysis_for_commits(
+        ctx.conn,
+        &read.repo_id,
+        &analysis_oids,
+        nerve_index::similarity::MATCHER_ID,
+    )
+    .map_err(ApiError::internal)?;
+
     let observed = nerve_store::first_last_observed(ctx.conn, &read.repo_id, path)
         .map_err(ApiError::internal)?;
 
@@ -600,13 +673,33 @@ pub fn path(ctx: &Context<'_>, target: &Target) -> Answer {
             let mut object = commit(row, None);
             if let Some(fields) = object.as_object_mut() {
                 fields.insert("change".into(), change(row_change));
+                let analysis = analyses.get(&row.commit_oid);
+                fields.insert(
+                    "rename_analysis".into(),
+                    analysis.map(rename_analysis).unwrap_or(Value::Null),
+                );
+                fields.insert(
+                    "rename_analysis_absent_note".into(),
+                    match analysis {
+                        Some(_) => Value::Null,
+                        None => json!(nerve_store::COMMIT_NOT_ANALYSED),
+                    },
+                );
             }
             object
         })
         .collect::<Vec<_>>());
-    value["renames"] = json!(renames.iter().map(rename).collect::<Vec<_>>());
+    value["renames"] = json!(renames
+        .iter()
+        .map(|row| rename(row, nerve_store::analysis_of(&analyses, row)))
+        .collect::<Vec<_>>());
     value["renames_count"] = json!(renames.len());
     value["renames_truncated"] = json!(renames_truncated);
+    // Which matcher the `analysis` on each row above was looked up under. Stated rather than
+    // implied: the analysis table's primary key admits several matchers per commit, and a client
+    // that assumed the completeness it read described some other matcher's run would be reading a
+    // completeness of a run that never happened.
+    value["rename_analysis_matcher_id"] = json!(nerve_index::similarity::MATCHER_ID);
     Ok(value)
 }
 

@@ -195,6 +195,70 @@ pub struct AnalysisRow {
     pub unmeasured: BTreeMap<SimilarityUnmeasured, i64>,
 }
 
+/// The analysis that qualifies **this** hypothesis, or `None`.
+///
+/// **A hypothesis is only ever qualified by its own producer's analysis.** The lookup is keyed on
+/// the commit *and* on the row's `matcher_id`, because the analysis table's primary key admits
+/// several matchers per commit and every commit the similarity matcher walked has a row — including
+/// the commits where the exact-content matcher found something. Handing an `exact_content` row the
+/// similarity matcher's threshold and completeness would attribute a measurement to evidence that
+/// carries none, which is the blend §6 of the slice plan forbids, arriving by way of a join rather
+/// than by way of a column.
+///
+/// This exists as a function rather than as four lines in each surface for the reason
+/// [`rename_analysis_for_commits`]'s doc gives: a row names its own producer, and being attributed
+/// by a join a caller might forget is exactly the failure the `matcher_id` column prevents.
+pub fn analysis_of<'a>(
+    analyses: &'a BTreeMap<String, AnalysisRow>,
+    rename: &RenameRow,
+) -> Option<&'a AnalysisRow> {
+    analyses
+        .get(&rename.commit_oid)
+        .filter(|analysis| analysis.matcher_id == rename.matcher_id)
+}
+
+/// Why a **commit** is shown with no [`AnalysisRow`] beside it.
+///
+/// Separate from [`rename_analysis_absence`], which is about a hypothesis: this is the answer for a
+/// commit that carries no similarity hypothesis at all, where the reader's question is whether that
+/// silence means "nothing moved" or "nothing was looked at". A commit present in the analysis table
+/// with `refused_bound` was analysed and refused; a commit absent from it was never analysed, and
+/// only the stored row tells them apart — so the absence is stated rather than left blank.
+pub const COMMIT_NOT_ANALYSED: &str =
+    "this commit carries no candidate-set record for this matcher, so whether its similarity \
+     candidates were measured in full is unknown here rather than complete — it was recorded by a \
+     sync that predates the matcher, or analysed by a different one";
+
+/// Why a rename hypothesis is shown with no [`AnalysisRow`] beside it.
+///
+/// **One sentence per case, in one place, because three surfaces render it.** A hypothesis without
+/// its candidate-set completeness has to say *why* it has none, or the absence is a blank a reader
+/// fills in with "complete" — which is the reading `RenameAnalysisCompleteness::RefusedBound` exists
+/// to make impossible one table over. The CLI, the HTTP API and the MCP tool all carry the string
+/// this returns rather than each writing their own, so the two cases cannot drift apart.
+///
+/// The [`RenameEvidence::ExactContent`] case is a **claim**: that matcher reads no blob content, so
+/// it has no candidate set to be complete about. The [`RenameEvidence::SimilarContent`] case is an
+/// **anomaly** — the similarity matcher writes one analysis row per commit it walks, so a similarity
+/// hypothesis with no row was recorded by an older sync, and saying so is better than showing a
+/// measurement whose threshold and completeness are silently missing.
+pub fn rename_analysis_absence(evidence: RenameEvidence) -> &'static str {
+    match evidence {
+        RenameEvidence::ExactContent => {
+            "no candidate set was analysed for this hypothesis, and none could be: the exact-content \
+             matcher reads no blob content — both oids were already in the tree diff — so there is \
+             no threshold, no measurement and nothing for a completeness to describe. What bounds it \
+             is the commit's own changes_enumerated"
+        }
+        RenameEvidence::SimilarContent => {
+            "no analysis row was recorded for this commit under this matcher, so the candidate-set \
+             completeness behind this measurement is unknown here rather than complete — the rows \
+             shown may not be the full set, and this hypothesis was probably written by a sync older \
+             than the analysis table"
+        }
+    }
+}
+
 /// What one history ingest read, and what it could not.
 ///
 /// One row per repository: the latest ingest replaces the previous one, because the questions it

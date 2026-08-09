@@ -217,11 +217,26 @@ function PathAnswer({ report }: { report: HistoryPathReport }) {
             {report.renames_truncated ? ' shown, and cut' : ''}
           </span>
         </header>
+        <div className="panel__body">
+          {/*
+            Which matcher the candidate-set record on each row below was looked up under. Several
+            matchers may analyse one commit, so a completeness read without the matcher it belongs
+            to describes a run that never happened.
+          */}
+          <div className="row row--wrap">
+            <Chip tone="quiet" title="Two kinds of evidence, kept apart. One says two paths named the same bytes; the other says a named method measured how much two different blobs share. They are never blended, summed, or ranked against each other.">
+              exact content and similar content are separate claims
+            </Chip>
+            <Chip tone="quiet" title="The primary key of the analysis table admits several matchers per commit, so the completeness shown on a row belongs to this matcher's run and to no other.">
+              similarity analysed by {report.rename_analysis_matcher_id}
+            </Chip>
+          </div>
+        </div>
         {report.renames.length === 0 ? (
           <div className="panel__body">
             <Empty
               title="No hypothesis names this path"
-              body="No commit Nerve read deleted a path and added another with identical content where one of them is this one. Renames are proposed from equal content only, so a rename that also edited the file leaves no hypothesis at all."
+              body="No commit Nerve read deleted a path and added another whose content either matched it byte for byte or measured above the similarity threshold, where one of the two is this one. A move whose file was also heavily rewritten falls below that threshold and leaves no hypothesis — a published false negative, not evidence that nothing moved. A commit whose candidate set exceeded a bound records no hypothesis at all, and each hypothesis below carries which of those its commit was."
             />
           </div>
         ) : (

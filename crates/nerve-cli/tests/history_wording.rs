@@ -13,7 +13,7 @@
 //!
 //! # One crate is no longer the answer, so the guard records an owner per note
 //!
-//! Seven of the eight vocabularies live in `nerve-core`. [`EarlierHistoryUnavailable`] does not: it
+//! Eleven of the twelve vocabularies live in `nerve-core`. [`EarlierHistoryUnavailable`] does not: it
 //! composes [`ParentCompleteness`] and [`WalkTermination`] rather than being a third axis, so it
 //! lives in `nerve-store` and its note lives beside it. A single global "only `nerve-core` may hold
 //! a note" rule would therefore have had to exempt that note from every crate, which is not a rule
@@ -32,7 +32,7 @@
 //! Three differences from `layering.rs`, each deliberate:
 //!
 //! 1. **The sentinels are generated from the vocabulary**, not retyped. [`notes`] calls the note
-//!    methods on every value of all eight vocabularies, so the thing searched for is the prose that
+//!    methods on every value of all twelve vocabularies, so the thing searched for is the prose that
 //!    actually ships. Retyping it would let the guard and the product drift apart, which is the
 //!    exact class of defect the hoist exists to close.
 //! 2. **The bytes are un-wrapped before searching.** Rust's `\<newline>` escape means a note's
@@ -48,6 +48,7 @@ use std::path::{Path, PathBuf};
 
 use nerve_core::vocab::{
     ChangesEnumerated, FirstObservedKind, HistoryFreshness, ParentCompleteness, RenameAmbiguity,
+    RenameAnalysisCompleteness, RenameEvidence, SimilarityUnmeasured, SummaryTruncation,
     WalkTermination,
 };
 use nerve_store::EarlierHistoryUnavailable;
@@ -61,9 +62,9 @@ const CORE_VOCAB: &str = "nerve-core/src/vocab.rs";
 /// The one file allowed to hold [`EarlierHistoryUnavailable`]'s note.
 const STORE_HISTORY: &str = "nerve-store/src/history.rs";
 
-/// The prose the eight hoisted notes render, each paired with the file that owns it.
+/// The prose the twelve hoisted vocabularies render, each note paired with the file that owns it.
 ///
-/// Generated over `ALL`, so a value added to any of the eight vocabularies is searched for without
+/// Generated over `ALL`, so a value added to any of the twelve vocabularies is searched for without
 /// this file being edited. [`FirstObservedKind`] contributes **two** notes per value, because the
 /// answer and the permission to call it a creation are separate sentences and both ship.
 fn notes() -> Vec<(&'static str, &'static str)> {
@@ -80,6 +81,22 @@ fn notes() -> Vec<(&'static str, &'static str)> {
     for value in RenameAmbiguity::ALL {
         out.push((CORE_VOCAB, value.note()));
     }
+    // Slice 12c-ii's four. `SummaryTruncation` is the one this list was missing while its prose was
+    // already on four surfaces: the guard scanned for seven vocabularies, so a TypeScript byte-copy
+    // of "the first line was longer than the stored bound and was cut" would have passed every test
+    // in the workspace. The other three are here for the same reason and before the same mistake.
+    for value in RenameEvidence::ALL {
+        out.push((CORE_VOCAB, value.note()));
+    }
+    for value in RenameAnalysisCompleteness::ALL {
+        out.push((CORE_VOCAB, value.note()));
+    }
+    for value in SummaryTruncation::ALL {
+        out.push((CORE_VOCAB, value.note()));
+    }
+    for value in SimilarityUnmeasured::ALL {
+        out.push((CORE_VOCAB, value.note()));
+    }
     for value in FirstObservedKind::ALL {
         out.push((CORE_VOCAB, value.note()));
         out.push((CORE_VOCAB, value.created_claim_note()));
@@ -90,6 +107,14 @@ fn notes() -> Vec<(&'static str, &'static str)> {
     for value in EarlierHistoryUnavailable::ALL {
         out.push((STORE_HISTORY, value.note()));
     }
+    // Not a vocabulary's note, and in the scan for exactly the same reason. Slice 12c-ii Pass C
+    // needed a sentence for *why a hypothesis has no candidate-set record*, which three surfaces
+    // render; the CLI and the HTTP API each writing their own would be the drift this file exists
+    // to stop, one layer down from a `note()`.
+    for value in RenameEvidence::ALL {
+        out.push((STORE_HISTORY, nerve_store::rename_analysis_absence(value)));
+    }
+    out.push((STORE_HISTORY, nerve_store::COMMIT_NOT_ANALYSED));
     out
 }
 
@@ -99,9 +124,16 @@ fn expected_note_count() -> usize {
         + ParentCompleteness::ALL.len()
         + ChangesEnumerated::ALL.len()
         + RenameAmbiguity::ALL.len()
+        + RenameEvidence::ALL.len()
+        + RenameAnalysisCompleteness::ALL.len()
+        + SummaryTruncation::ALL.len()
+        + SimilarityUnmeasured::ALL.len()
         + FirstObservedKind::ALL.len() * 2
         + HistoryFreshness::ALL.len()
         + EarlierHistoryUnavailable::ALL.len()
+        // `rename_analysis_absence`, one sentence per evidence value, and `COMMIT_NOT_ANALYSED`.
+        + RenameEvidence::ALL.len()
+        + 1
 }
 
 /// Undo the two source-level escapes that stand between a note's bytes on disk and its bytes at run
@@ -237,7 +269,7 @@ fn every_history_note_exists_in_exactly_one_file() {
         expected_note_count(),
         "a vocabulary lost a value between `ALL` and its note"
     );
-    assert!(notes.len() >= 35, "found only {} notes", notes.len());
+    assert!(notes.len() >= 52, "found only {} notes", notes.len());
     // Both owners are actually used. A refactor that moved every note into one file would otherwise
     // make the per-owner machinery below vacuous while every assertion still passed.
     for owner in [CORE_VOCAB, STORE_HISTORY] {
@@ -350,7 +382,7 @@ fn interface_sources() -> Vec<(String, Vec<u8>)> {
 #[test]
 fn no_interface_source_holds_a_copy_of_a_history_note() {
     let notes = notes();
-    assert!(notes.len() >= 35, "found only {} notes", notes.len());
+    assert!(notes.len() >= 52, "found only {} notes", notes.len());
 
     let sources = interface_sources();
     assert!(
@@ -394,6 +426,14 @@ fn no_interface_source_holds_a_copy_of_a_history_note() {
         "ambiguity_note",
         "freshness_note",
         "earlier_history_unavailable_note",
+        // Slice 12c-ii Pass C. Both qualify something already on screen and neither is optional:
+        // a summary without its flag cannot be told from a cut one, and a candidate-set
+        // completeness is the difference between "these are the hypotheses" and "these are the
+        // hypotheses that could be measured".
+        "summary_truncation_note",
+        "completeness_note",
+        "analysis_absent_note",
+        "unmeasured_notes",
     ] {
         assert!(
             sources
@@ -403,7 +443,7 @@ fn no_interface_source_holds_a_copy_of_a_history_note() {
         );
         rendered += 1;
     }
-    assert_eq!(rendered, 8);
+    assert_eq!(rendered, 12);
 }
 
 /// The judgment moved too, and it is the one that matters most.

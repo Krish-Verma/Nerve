@@ -298,3 +298,130 @@ test('no history view composes a claim from a kind instead of reading the permis
   assert.ok(path.includes('may_claim_created_note'), 'the backend sentence must be rendered');
   assert.ok(path.includes('observed.kind_note'), 'the backend sentence must be rendered');
 });
+
+// ---- Slice 12c-ii Pass C: the similarity evidence, and the flag beside every summary ----------
+//
+// Source scans, for the reason the header of this file gives: what a component *renders* is not
+// visible to a test over pure functions, and every rule below is about what reaches the screen.
+
+test('no commit card renders a summary without the flag that says whether it was cut', () => {
+  const source = read('./views/HistoryParts.tsx');
+  assert.ok(source.includes('{commit.summary}'), 'the summary must be on screen at all');
+  assert.ok(
+    source.includes('summaryTruncationGloss(commit.summary_truncation)'),
+    'the flag must be glossed in the interface own voice',
+  );
+  assert.ok(
+    source.includes('{commit.summary_truncation}'),
+    'the value itself must be shown, not only its gloss',
+  );
+  assert.ok(
+    source.includes('commit.summary_truncation_note'),
+    'the backend sentence qualifying the summary must be rendered',
+  );
+
+  // The flag is unconditional. A card that showed it only for a cut summary would make its absence
+  // the claim "this is the whole first line", and `unknown` would read as `complete`.
+  const card = source.slice(source.indexOf('export function CommitCard'));
+  const summaryAt = card.indexOf('{commit.summary}');
+  const flagAt = card.indexOf('summary {commit.summary_truncation}');
+  assert.ok(summaryAt > 0 && flagAt > summaryAt, 'the flag must sit with the summary it qualifies');
+  assert.ok(
+    !card.includes("commit.summary_truncation === 'truncated' ?"),
+    'the flag must not be conditional on the summary having been cut',
+  );
+});
+
+test('the truncation tone has no default arm, so unknown is never drawn as complete', () => {
+  const source = read('./views/HistoryParts.tsx');
+  const start = source.indexOf('export function summaryTruncationTone');
+  assert.ok(start > 0, 'the tone function must exist');
+  const body = source.slice(start, source.indexOf('\n}', start));
+  assert.ok(!body.includes('default:'), 'an unrecognised value must not borrow a real one hue');
+  let checked = 0;
+  for (const value of ['complete', 'truncated', 'unknown']) {
+    assert.ok(body.includes(`case '${value}':`), `${value} has no arm of its own`);
+    checked += 1;
+  }
+  assert.equal(checked, 3);
+  assert.ok(
+    !body.includes("case 'complete':\n      return 'fresh'"),
+    'a complete summary is ordinary rather than a finding',
+  );
+});
+
+test('a similarity hypothesis is rendered with its method, measurement, threshold and completeness', () => {
+  const source = read('./views/HistoryParts.tsx');
+  let checked = 0;
+  for (const fragment of [
+    'row.matcher_id',
+    'row.matcher_version',
+    'row.match_numerator',
+    'row.match_denominator',
+    'analysis.threshold_numerator',
+    'analysis.threshold_denominator',
+    'renameAnalysisCompletenessGloss(analysis.completeness)',
+    'analysis.completeness_note',
+    'similarityUnmeasuredGloss(reason)',
+  ]) {
+    assert.ok(source.includes(fragment), `the rename list never renders \`${fragment}\``);
+    checked += 1;
+  }
+  assert.equal(checked, 9);
+
+  // The measurement is two integers and never a computed ratio. Any of these would turn structured
+  // match quality back into the single comparable number the evidence model forbids.
+  for (const forbidden of [
+    'match_numerator / row.match_denominator',
+    'match_numerator * 100',
+    'toFixed(',
+    'Math.round(row.match',
+  ]) {
+    assert.ok(!source.includes(forbidden), `a percentage is computed from the measurement: ${forbidden}`);
+  }
+  assert.ok(
+    source.includes('{row.match_numerator} of {row.match_denominator} lines shared'),
+    'the measurement must read as a count of a count',
+  );
+});
+
+test('a hypothesis is never drawn as a rename Git recorded, and an absent analysis is never a blank', () => {
+  const source = read('./views/HistoryParts.tsx');
+  assert.ok(
+    source.includes('hypothesis — Git recorded no rename'),
+    'every row must carry the standing of the claim',
+  );
+  for (const forbidden of ['confirmed rename', 'was renamed to', 'renamed from']) {
+    assert.ok(
+      !source.toLowerCase().includes(forbidden),
+      `the rename list contains the phrase "${forbidden}"`,
+    );
+  }
+
+  // Both absences reach the reader as the backend's own sentence rather than as nothing at all.
+  assert.ok(source.includes('row.analysis_absent_note'), 'a hypothesis with no analysis must say why');
+  assert.ok(
+    source.includes('commit.rename_analysis_absent_note'),
+    'a commit with no analysis must say why',
+  );
+  assert.ok(
+    !source.includes('analysis?.completeness ?? ') && !source.includes("?? 'complete'"),
+    'an absent completeness must never be defaulted to complete',
+  );
+});
+
+test('the path view no longer says renames are proposed from equal content only', () => {
+  const source = read('./views/HistoryPath.tsx');
+  assert.ok(
+    !source.includes('Renames are proposed from equal content only'),
+    'the empty state predates the similarity matcher and would now be false',
+  );
+  assert.ok(
+    source.includes('rename_analysis_matcher_id'),
+    'the view must name which matcher the completeness on each row belongs to',
+  );
+  assert.ok(
+    source.includes('similarity threshold'),
+    'the empty state must say what an absent hypothesis does and does not mean',
+  );
+});

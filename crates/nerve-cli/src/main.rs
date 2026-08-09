@@ -2417,6 +2417,12 @@ fn commit_json(commit: &nerve_store::CommitRow, changes: Option<usize>) -> serde
         "committer_ident": commit.committer_ident.as_deref().map(inert_text),
         "summary": summary,
         "summary_escaped": summary != commit.summary,
+        // Beside the summary and never apart from it. The repository-level tally in the ingest
+        // record says *some* summary was cut; only this says whether **this** one was, and from the
+        // text alone a reader cannot tell a short first line from a cut one — a first line of
+        // exactly the bound is `complete`, so length cannot recover the answer.
+        "summary_truncation": commit.summary_truncation.as_str(),
+        "summary_truncation_note": commit.summary_truncation.note(),
     })
 }
 
@@ -2431,12 +2437,53 @@ fn change_json(change: &nerve_store::ChangeRow) -> serde_json::Value {
     })
 }
 
-fn rename_json(rename: &nerve_store::RenameRow) -> serde_json::Value {
+/// One commit's similarity analysis, as the surface carries it beside a hypothesis.
+///
+/// Everything a measurement is meaningless without: the method, its version, the **threshold** the
+/// measurement was admitted against, and how much of the candidate set was measured at all. The
+/// threshold is stored per run rather than assumed from a constant, so a row measured under an
+/// older threshold still renders the number it was actually judged by.
+fn rename_analysis_json(analysis: &nerve_store::AnalysisRow) -> serde_json::Value {
+    json!({
+        "commit_oid": analysis.commit_oid,
+        "matcher_id": analysis.matcher_id,
+        "matcher_version": analysis.matcher_version,
+        // Two integers, like the measurement itself. A ratio of two thresholds is comparable and
+        // rounds; `7 of 8` says what was required.
+        "threshold_numerator": analysis.threshold_numerator,
+        "threshold_denominator": analysis.threshold_denominator,
+        "deletions_considered": analysis.deletions_considered,
+        "additions_considered": analysis.additions_considered,
+        "pairs_considered": analysis.pairs_considered,
+        "pairs_measured": analysis.pairs_measured,
+        "completeness": analysis.completeness.as_str(),
+        "completeness_note": analysis.completeness.note(),
+        "unmeasured": analysis.unmeasured.iter()
+            .map(|(reason, count)| (reason.as_str().to_string(), *count))
+            .collect::<std::collections::BTreeMap<String, i64>>(),
+        // The reasons in words, because "blob-binary 1" beside a hypothesis reads as a defect and
+        // is not one: an unmeasured pair is an unanswered question, never a negative answer.
+        "unmeasured_notes": analysis.unmeasured.keys()
+            .map(|reason| (reason.as_str().to_string(), reason.note().to_string()))
+            .collect::<std::collections::BTreeMap<String, String>>(),
+    })
+}
+
+/// A hypothesis, and every field without which its measurement would be a number from nowhere.
+///
+/// `analysis` is the per-commit candidate-set record, joined on rather than re-derived. `None` is
+/// **not** rendered as an empty object: `analysis_absent_note` says which of the two cases it is,
+/// in `nerve-store`'s words, because a blank here would be read as "the set was complete".
+fn rename_json(
+    rename: &nerve_store::RenameRow,
+    analysis: Option<&nerve_store::AnalysisRow>,
+) -> serde_json::Value {
     json!({
         "commit_oid": rename.commit_oid,
         "from_path": rename.from_path,
         "to_path": rename.to_path,
         "evidence": rename.evidence.as_str(),
+        "evidence_note": rename.evidence.note(),
         // Two blob oids since schema v7, because a similarity pair has two. For an exact-content
         // hypothesis they are equal, and that identity is the evidence rather than a redundancy.
         "from_blob_oid": rename.from_blob_oid,
@@ -2450,8 +2497,14 @@ fn rename_json(rename: &nerve_store::RenameRow) -> serde_json::Value {
         "ambiguity": rename.ambiguity.as_str(),
         "ambiguity_note": rename.ambiguity.note(),
         // Stated on every row rather than in a footnote a consumer can drop. Git records no rename;
-        // this is a proposal drawn from identical content, and there is no score to sort it by.
+        // this is a proposal drawn from content, and there is no score to sort it by.
         "is_hypothesis": true,
+        "is_confirmed_rename": false,
+        "analysis": analysis.map(rename_analysis_json),
+        "analysis_absent_note": match analysis {
+            Some(_) => serde_json::Value::Null,
+            None => json!(nerve_store::rename_analysis_absence(rename.evidence)),
+        },
     })
 }
 
@@ -2519,6 +2572,49 @@ fn first_last_observed_json(observed: &nerve_store::FirstLastObserved) -> serde_
             "entities_at_path": observed.current_tree.entities_at_path,
         },
     })
+}
+
+/// One commit's similarity candidate-set record, printed the same way wherever it appears.
+///
+/// It appears in two places for one reason: a hypothesis needs the threshold it was admitted
+/// against, and a commit with **no** hypothesis needs to say whether that silence is "nothing
+/// moved" or "nothing could be measured". The two callers differ only in what they say when there
+/// is no record at all, which is why `absent` is a parameter and never a sentence written here.
+fn print_rename_analysis(
+    output: &Output,
+    analysis: Option<&nerve_store::AnalysisRow>,
+    absent: &str,
+) {
+    let Some(analysis) = analysis else {
+        output.line(format!("  candidates     {absent}"));
+        return;
+    };
+    output.line(format!(
+        "  threshold      {} of {} — admitted when numerator × {} ≥ {} × denominator",
+        analysis.threshold_numerator,
+        analysis.threshold_denominator,
+        analysis.threshold_denominator,
+        analysis.threshold_numerator
+    ));
+    output.line(format!(
+        "  candidates     {} — {} pair(s) considered, {} measured, from {} deletion(s) × {} \
+         addition(s)",
+        analysis.completeness.as_str(),
+        analysis.pairs_considered,
+        analysis.pairs_measured,
+        analysis.deletions_considered,
+        analysis.additions_considered
+    ));
+    output.line(format!("                 {}", analysis.completeness.note()));
+    // Each reason, in its own words. "blob-binary 1" beside a hypothesis reads as a defect and is
+    // not one: an unmeasured pair is an unanswered question, never a negative answer.
+    for (reason, count) in &analysis.unmeasured {
+        output.line(format!(
+            "  unmeasured     {} × {count} — {}",
+            reason.as_str(),
+            reason.note()
+        ));
+    }
 }
 
 /// Print the first/last-observed block.
@@ -2657,6 +2753,14 @@ fn print_commit(output: &Output, commit: &nerve_store::CommitRow, changes: Optio
         output.line(format!("  committer      {}", inert_text(ident)));
     }
     output.line(format!("  summary        {}", inert_text(&commit.summary)));
+    // On the line under the summary, always — including `complete`. A flag printed only when a
+    // summary was cut would make its absence the claim "nothing was cut", and `unknown` — what
+    // every commit recorded before schema v7 carries — would then read as `complete`.
+    output.line(format!(
+        "  summary_state  {} — {}",
+        commit.summary_truncation.as_str(),
+        commit.summary_truncation.note()
+    ));
 }
 
 /// Walk `.git` and record the commit graph.
@@ -2730,9 +2834,24 @@ fn run_history_sync(
                 "  changes        {} row(s)",
                 outcome.changes_written
             ));
+            // Two counts, on two lines, and **never a total**. They rest on different evidence:
+            // one says *these two paths named the same bytes*, the other says *a named method
+            // measured how much two different blobs share*. A single number would describe
+            // neither, in the way the `py-framework` and `ts-js-framework` precision tables are
+            // never summed.
             output.line(format!(
-                "  renames        {} hypothesis(es)",
+                "  renames        {} exact-content hypothesis(es)",
                 outcome.renames_written
+            ));
+            output.line(format!(
+                "                 {} similar-content hypothesis(es) — a different kind of \
+                 evidence, never added to the line above",
+                outcome.similar_renames_written
+            ));
+            output.line(format!(
+                "  analyses       {} commit candidate-set record(s), one per newly recorded \
+                 commit, including commits with no candidate pair at all",
+                outcome.rename_analyses_written
             ));
             output.line(format!(
                 "  stopped        {} — {}",
@@ -2790,7 +2909,21 @@ fn run_history_sync(
                 "commits_already_present": outcome.commits_already_present,
                 "commits_repaired": outcome.commits_repaired,
                 "changes_written": outcome.changes_written,
+                // Three fields, never a fourth that adds two of them together. `renames_written`
+                // counts the exact-content matcher's rows and keeps its Slice 12b name and meaning.
                 "renames_written": outcome.renames_written,
+                "similar_renames_written": outcome.similar_renames_written,
+                "rename_analyses_written": outcome.rename_analyses_written,
+                "rename_matchers": {
+                    "exact": nerve_index::history::EXACT_MATCHER_ID,
+                    "exact_version": nerve_index::history::EXACT_MATCHER_VERSION,
+                    "similarity": nerve_index::similarity::MATCHER_ID,
+                    "similarity_version": nerve_index::similarity::MATCHER_VERSION,
+                },
+                "similarity_threshold_numerator":
+                    nerve_index::similarity::SIMILARITY_THRESHOLD_NUMERATOR,
+                "similarity_threshold_denominator":
+                    nerve_index::similarity::SIMILARITY_THRESHOLD_DENOMINATOR,
                 "walk_terminated_by": outcome.walk_terminated_by.as_str(),
                 "walk_terminated_note": outcome.walk_terminated_by.note(),
                 "shallow": outcome.shallow,
@@ -3137,6 +3270,33 @@ fn run_history_file(output: &Output, path: &Path, tree_path: &str, limit: usize)
     commits.truncate(limit);
     renames.truncate(limit);
 
+    // The per-commit candidate-set record, joined onto the hypotheses above **and onto the commits
+    // listed below**. Without it a similarity row is a ratio with no threshold and no statement of
+    // whether the set it came from was measured in full — a percentage from nowhere, written as two
+    // integers instead of one float.
+    //
+    // The listed commits are in the join for the case the hypotheses cannot cover: a commit whose
+    // candidate set was refused by a bound, or whose pairs could not be measured, records **no**
+    // similarity row, so there is no row for a per-row field to hang on. Reading that silence as
+    // "nothing moved here" is the failure `RenameAnalysisCompleteness` exists to prevent, and it can
+    // only be prevented where the commit itself carries its analysis.
+    let mut analysis_oids: Vec<&str> = renames
+        .iter()
+        .map(|rename| rename.commit_oid.as_str())
+        .chain(commits.iter().map(|(commit, _)| commit.commit_oid.as_str()))
+        .collect();
+    analysis_oids.sort_unstable();
+    analysis_oids.dedup();
+    let analyses = match nerve_store::rename_analysis_for_commits(
+        &read.conn,
+        &read.repo_id,
+        &analysis_oids,
+        nerve_index::similarity::MATCHER_ID,
+    ) {
+        Ok(analyses) => analyses,
+        Err(err) => return output.failure("history file", exit::INTERNAL, &err.to_string()),
+    };
+
     // Asked unconditionally, unlike the two lists above: with no ingest this answers
     // `no_history_ingested`, which is one of the four states §11 requires to stay distinct, and
     // short-circuiting it would collapse "never read" into "read, and nothing was found".
@@ -3199,10 +3359,22 @@ fn run_history_file(output: &Output, path: &Path, tree_path: &str, limit: usize)
                 .map(|mode| format!("{mode:o}"))
                 .unwrap_or_else(|| "-".to_string()),
         ));
+        // Beneath the change, because it qualifies the *absence* of a rename hypothesis for this
+        // commit as much as the presence of one. A commit whose candidate set a bound refused
+        // records no hypothesis, and without this line that empty result reads as "nothing moved".
+        print_rename_analysis(
+            output,
+            analyses.get(&commit.commit_oid),
+            nerve_store::COMMIT_NOT_ANALYSED,
+        );
     }
     for rename in &renames {
+        let analysis = nerve_store::analysis_of(&analyses, rename);
         output.line(String::new());
-        output.line("rename hypothesis — not a fact, and there is no score");
+        // "Git recorded no rename" rather than "not a confirmed rename": a denial that contains
+        // the phrase it denies is one careless `grep -q` away from being read as the claim, and
+        // this line is the one sentence a reader takes the whole block's standing from.
+        output.line("rename hypothesis — Git recorded no rename, and there is no score");
         output.line(format!("  commit         {}", rename.commit_oid));
         output.line(format!(
             "  from           {}",
@@ -3215,6 +3387,32 @@ fn run_history_file(output: &Output, path: &Path, tree_path: &str, limit: usize)
             rename.from_blob_oid,
             rename.to_blob_oid
         ));
+        output.line(format!("                 {}", rename.evidence.note()));
+        // The producer, always. A measurement whose method is not named is not readable at all,
+        // and an exact-content row names one too — it just measured nothing.
+        output.line(format!(
+            "  matcher        {} version {}",
+            rename.matcher_id, rename.matcher_version
+        ));
+        // "18 of 20 line(s)", never "90%". Two integers a reader can check by hand, printed with
+        // the threshold they were admitted against, because neither is readable without the other.
+        match (rename.match_numerator, rename.match_denominator) {
+            (Some(numerator), Some(denominator)) => {
+                output.line(format!(
+                    "  measurement    {numerator} of {denominator} line(s) shared, by the matcher \
+                     above"
+                ));
+            }
+            _ => output.line(
+                "  measurement    none — this evidence computes no similarity, so there is no \
+                 ratio and no perfect score either",
+            ),
+        }
+        print_rename_analysis(
+            output,
+            analysis,
+            nerve_store::rename_analysis_absence(rename.evidence),
+        );
         output.line(format!(
             "  ambiguity      {} — {}",
             rename.ambiguity.as_str(),
@@ -3237,12 +3435,27 @@ fn run_history_file(output: &Output, path: &Path, tree_path: &str, limit: usize)
                 let mut object = commit_json(commit, None);
                 if let Some(fields) = object.as_object_mut() {
                     fields.insert("change".into(), change_json(change));
+                    let analysis = analyses.get(&commit.commit_oid);
+                    fields.insert(
+                        "rename_analysis".into(),
+                        analysis.map(rename_analysis_json).unwrap_or(serde_json::Value::Null),
+                    );
+                    fields.insert(
+                        "rename_analysis_absent_note".into(),
+                        match analysis {
+                            Some(_) => serde_json::Value::Null,
+                            None => json!(nerve_store::COMMIT_NOT_ANALYSED),
+                        },
+                    );
                 }
                 object
             }).collect::<Vec<_>>(),
             "renames_count": renames.len(),
             "renames_truncated": renames_truncated,
-            "renames": renames.iter().map(rename_json).collect::<Vec<_>>(),
+            "renames": renames.iter()
+                .map(|rename| rename_json(rename, nerve_store::analysis_of(&analyses, rename)))
+                .collect::<Vec<_>>(),
+            "rename_analysis_matcher_id": nerve_index::similarity::MATCHER_ID,
         }),
     );
     exit::SUCCESS

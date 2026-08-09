@@ -25,6 +25,7 @@ import type {
   HistoryChange,
   HistoryCommit,
   HistoryRename,
+  HistoryRenameAnalysis,
   Json,
 } from '../api/types';
 import { count, type Tone } from '../format';
@@ -37,7 +38,10 @@ import {
   historyFreshnessGloss,
   parentCompletenessGloss,
   renameAmbiguityGloss,
+  renameAnalysisCompletenessGloss,
   renameEvidenceGloss,
+  similarityUnmeasuredGloss,
+  summaryTruncationGloss,
   walkTerminationGloss,
 } from '../vocab';
 
@@ -92,6 +96,47 @@ export function completenessTone(value: string): Tone {
     case 'parents_missing':
       return 'stale';
     case 'parents_unverifiable':
+      return 'unknown';
+  }
+  return 'unknown';
+}
+
+/**
+ * Hue for whether a stored summary is the whole first line.
+ *
+ * `unknown` is not `complete`, and this is the one place a careless `default` arm would say it was.
+ * Every commit recorded before schema v7 carries `unknown`, so on an upgraded index it is the
+ * ordinary value — drawn as `quiet` it would read as "nothing was cut", which is precisely the
+ * claim the value exists to refuse.
+ */
+export function summaryTruncationTone(value: string): Tone {
+  switch (value) {
+    case 'complete':
+      return 'quiet';
+    case 'truncated':
+      return 'stale';
+    case 'unknown':
+      return 'unknown';
+  }
+  return 'unknown';
+}
+
+/**
+ * Hue for how much of a commit's similarity candidate set was measured.
+ *
+ * Only `complete` is drawn as settled. `refused_bound` is the one that matters most: the commit
+ * records no similarity hypothesis at all, so an empty list beside it is a refusal rather than an
+ * absence of renames.
+ */
+export function renameCompletenessTone(value: string): Tone {
+  switch (value) {
+    case 'complete':
+      return 'fresh';
+    case 'partial':
+      return 'absent';
+    case 'refused_bound':
+      return 'stale';
+    case 'not_attempted':
       return 'unknown';
   }
   return 'unknown';
@@ -350,6 +395,24 @@ export function CommitCard({
         {aside}
       </div>
       <div className="fact__value wrapany">{commit.summary}</div>
+      {/*
+        The summary and its flag, together, always — including when nothing was cut. A badge shown
+        only for a truncated summary would make its absence the claim "this is the whole first
+        line", and `unknown` — what every commit recorded before schema v7 carries — would be the
+        one silently reading as `complete`. The sentence is the backend's own and is printed for
+        the two values that qualify the text above.
+      */}
+      <div className="row row--wrap">
+        <Chip
+          tone={summaryTruncationTone(commit.summary_truncation)}
+          title={summaryTruncationGloss(commit.summary_truncation)}
+        >
+          summary {commit.summary_truncation}
+        </Chip>
+        {commit.summary_truncation === 'complete' ? null : (
+          <span className="head__sub wrapany">{commit.summary_truncation_note}</span>
+        )}
+      </div>
       <div className="hash wrapany">
         {gitTime(commit.committer_time, commit.committer_tz)}
         {commit.committer_ident === null ? '' : ` · ${commit.committer_ident}`}
@@ -364,6 +427,17 @@ export function CommitCard({
         <span className="head__sub wrapany">{commit.changes_enumerated_note}</span>
       </div>
       {commit.change === undefined ? null : <ChangeLine change={commit.change} />}
+      {/*
+        Only a path's history carries this, because only there is a commit shown next to the rename
+        hypotheses that name the path. It is what stops "no hypothesis here" being read as "nothing
+        moved here": a commit whose candidate set a bound refused records no hypothesis at all.
+      */}
+      {commit.rename_analysis === undefined ? null : (
+        <CandidateSet
+          analysis={commit.rename_analysis}
+          absent={commit.rename_analysis_absent_note}
+        />
+      )}
     </>
   );
 
@@ -434,6 +508,14 @@ export function ChangeList({
  * have been drawn — and there is no score anywhere, because none exists. When one blob matches
  * several paths every pairing is recorded and none is promoted, so a `many_to` row must not be
  * drawn the way a `unique` one is.
+ *
+ * A `similar_content` row carries more, and every part of it is load-bearing. The measurement is
+ * printed as **numerator of denominator** and never as a percentage: two integers say what was
+ * counted and can be checked by hand, where `90%` is comparable against anything and rounds. Beside
+ * it go the method that produced the number, that method's version, the threshold the number was
+ * admitted against, and how much of the commit's candidate set was measured at all — because a
+ * ratio without those four is a percentage from nowhere. The two evidence values are never blended:
+ * an exact match carries no measurement, which is not a perfect one.
  */
 export function RenameList({ renames }: { renames: HistoryRename[] }) {
   return (
@@ -445,8 +527,8 @@ export function RenameList({ renames }: { renames: HistoryRename[] }) {
           style={{ gap: 5 }}
         >
           <div className="row row--wrap">
-            <Chip tone="unknown" title="Git records no rename. This is a proposal drawn from identical content.">
-              hypothesis
+            <Chip tone="unknown" title="Git records no rename. This is a proposal drawn from content, and there is no score to sort it by.">
+              hypothesis — Git recorded no rename
             </Chip>
             <Chip
               tone={row.ambiguity === 'unique' ? 'quiet' : 'absent'}
@@ -472,9 +554,83 @@ export function RenameList({ renames }: { renames: HistoryRename[] }) {
           <div className="hash wrapany">
             blob {row.from_blob_oid.slice(0, 12)} → {row.to_blob_oid.slice(0, 12)}
           </div>
+          {/*
+            The producer of the row, on every row. An exact-content hypothesis names one too: it
+            measured nothing, and saying which method decided that is what makes the empty
+            measurement beside it readable rather than missing.
+          */}
+          <div className="hash wrapany">
+            matcher {row.matcher_id} version {row.matcher_version}
+          </div>
+          <div className="row row--wrap">
+            {row.match_numerator === null || row.match_denominator === null ? (
+              <Chip tone="quiet" title={renameEvidenceGloss(row.evidence)}>
+                no measurement — this evidence computes none
+              </Chip>
+            ) : (
+              <Chip tone="quiet" title="Two integers, never a percentage. A ratio rounds, is comparable against anything, and does not say what was counted.">
+                {row.match_numerator} of {row.match_denominator} lines shared
+              </Chip>
+            )}
+          </div>
+          <CandidateSet analysis={row.analysis} absent={row.analysis_absent_note} />
         </div>
       ))}
     </div>
+  );
+}
+
+/**
+ * One commit's similarity candidate set: the threshold, how much of it was measured, and why not.
+ *
+ * Rendered in two places, and the second is the one that is easy to leave out. Beside a hypothesis
+ * it supplies the threshold the measurement was admitted against. Beside a **commit** it is the only
+ * thing that can qualify an *absent* hypothesis — a commit whose candidate set exceeded a bound
+ * records no row at all, so with nothing here its empty result reads as "nothing moved", which is
+ * the reading `refused_bound` exists to refuse.
+ *
+ * `null` is never drawn as a blank for the same reason. The two absences are different — an
+ * exact-content hypothesis has no candidate set to be complete about, a commit may simply never have
+ * been analysed — and the backend's sentence says which.
+ */
+function CandidateSet({
+  analysis,
+  absent,
+}: {
+  analysis: HistoryRenameAnalysis | null | undefined;
+  absent: string | null | undefined;
+}) {
+  if (analysis === null || analysis === undefined) {
+    return <div className="head__sub wrapany">{absent ?? ''}</div>;
+  }
+  return (
+    <>
+      <div className="row row--wrap">
+        <Chip tone="quiet" title="The number a measurement had to reach to be admitted. It belongs to the run that measured, not to this build, so a row measured under an older threshold still shows the one it was judged by.">
+          threshold {analysis.threshold_numerator} of {analysis.threshold_denominator}
+        </Chip>
+        <Chip
+          tone={renameCompletenessTone(analysis.completeness)}
+          title={renameAnalysisCompletenessGloss(analysis.completeness)}
+        >
+          candidates {analysis.completeness}
+        </Chip>
+        <span className="hash">
+          {count(analysis.pairs_considered)} considered · {count(analysis.pairs_measured)} measured
+          · {count(analysis.deletions_considered)} deletions ×{' '}
+          {count(analysis.additions_considered)} additions
+        </span>
+      </div>
+      <div className="head__sub wrapany">{analysis.completeness_note}</div>
+      {Object.entries(analysis.unmeasured).map(([reason, howMany]) => (
+        <div className="row row--wrap" key={reason}>
+          <Chip tone="absent" title={similarityUnmeasuredGloss(reason)}>
+            {reason} × {count(howMany)}
+          </Chip>
+          <span className="head__sub wrapany">{analysis.unmeasured_notes[reason] ?? ''}</span>
+        </div>
+      ))}
+    </>
   );
 }
 

@@ -67,7 +67,7 @@ fn types_ts() -> String {
 ///
 /// One list, used by both the source-side vocabulary tests' companion below and the
 /// bundle-staleness check, so a new gloss table cannot be added to one and forgotten by the other.
-const GLOSS_TABLES: [(&str, &str); 19] = [
+const GLOSS_TABLES: [(&str, &str); 22] = [
     ("format.ts", "FRESHNESS"),
     ("format.ts", "SOURCE_TYPES"),
     ("format.ts", "DIRECTNESS"),
@@ -90,29 +90,29 @@ const GLOSS_TABLES: [(&str, &str); 19] = [
     ("vocab.ts", "RENAME_AMBIGUITY"),
     ("vocab.ts", "FIRST_OBSERVED_KIND"),
     ("vocab.ts", "HISTORY_FRESHNESS"),
-];
-
-/// Gloss tables the interface **declares and does not yet render**.
-///
-/// Slice 12c-ii adds storage and vocabulary for similarity renames; the surfaces that read
-/// `git_rename_analysis` and `git_commit.summary_truncation` are a later pass. Nothing imports
-/// these three functions yet, so Rollup drops the tables from the bundle, and listing them in
-/// [`GLOSS_TABLES`] would fail the staleness check for a reason that is not staleness — the source
-/// and the artifact agree exactly, and both agree that nothing renders them.
-///
-/// **The list exists so the gap is data rather than an omission**, which is the same discipline
-/// `git_commit.changes_enumerated` applies to a commit with no change rows. A table on neither list
-/// fails [`every_gloss_table_the_source_declares_is_on_exactly_one_list`] by name, and the pass that
-/// renders one of these has to move it rather than remember to add it: leaving it here once a view
-/// imports it makes the bundle check stop covering a gloss that is now on screen.
-///
-/// Their per-value coverage is guarded regardless — `every_rename_analysis_completeness_is_glossed`
-/// and its two siblings read the TypeScript source, so a Rust value without a sentence fails today.
-const DECLARED_NOT_RENDERED: [(&str, &str); 3] = [
+    // Slice 12c-ii Pass C. Moved here from `DECLARED_NOT_RENDERED` in the same change that made
+    // the views import them: `CommitCard` renders the summary flag on every commit it draws, and
+    // `RenameList` renders the candidate-set completeness and the unmeasured reasons beside every
+    // similarity hypothesis. Leaving them on the deferred list once a view imports one would make
+    // the bundle-staleness check stop covering a gloss that is now on screen.
     ("vocab.ts", "RENAME_ANALYSIS_COMPLETENESS"),
     ("vocab.ts", "SUMMARY_TRUNCATION"),
     ("vocab.ts", "SIMILARITY_UNMEASURED"),
 ];
+
+/// Gloss tables the interface **declares and does not yet render**.
+///
+/// Empty, and deliberately kept rather than deleted. Slice 12c-ii Pass A declared three tables one
+/// pass before anything imported them; Pass C moved all three into [`GLOSS_TABLES`], so there is
+/// nothing deferred today. The list stays because
+/// [`every_gloss_table_the_source_declares_is_on_exactly_one_list`] is what makes a *new* table
+/// choose a side — a table on neither list fails by name — and because the honest way to declare a
+/// gloss ahead of the view that renders it is to record the gap as data rather than to omit it.
+///
+/// A table listed here must be genuinely unrendered: the test proves it by asserting its prose is
+/// **absent** from the shipped bundle, which is what stops this becoming a way to opt out of the
+/// staleness check.
+const DECLARED_NOT_RENDERED: [(&str, &str); 0] = [];
 
 /// Every `const NAME: Record<…>` a gloss source declares, in declaration order.
 ///
