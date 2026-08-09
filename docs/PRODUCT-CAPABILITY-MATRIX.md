@@ -166,8 +166,15 @@ These are **gaps, not refusals**, and they are the functional UI parity phase's 
    `outline: none` (`nerve.css:382`), leaving only `.field:focus-within`'s border-colour change —
    measured `rgb(46,40,34)` → `rgb(87,79,72)`, a **1.81:1** contrast between states against
    WCAG 2.4.11's **3:1** minimum. Fix: `.field > input:focus-visible` restoring the global outline.
-6. **Corrupt-history UI** (a deliberately damaged object store) has never been exercised in a
-   browser; the server-side behaviour is covered by tests.
+6. **Corrupt-history UI** — exercised 2026-08-08 against `fixtures/history-missing` (a parent
+   commit object deleted with **no** `shallow` file, so the hole cannot be reported as a declared
+   truncation), served by the release binary and driven at 1600px and 380px. **Clean, and the
+   invariant holds**: the ingest stops at `missing_object` — *"a fault in this repository, not a
+   declared boundary"* — the affected commit renders `parents_missing` and *"earliest visible in
+   this checkout"*, its enumeration reads *"the parent tree could not be read, so nothing was
+   enumerated — not an empty commit"*, and the phrase *"begins here"* appears nowhere. No
+   horizontal overflow, no console messages, no exceptions, no 4xx at either width. `summary
+   complete` renders on every commit, so §6.7 holds on this path too. **No gap remains here.**
 7. Rows 13 and 14 are unbuilt in their entirety.
 
 Gaps 5 and 6 are the residue of row 12's browser QA; everything needed to close 5 exists now that
