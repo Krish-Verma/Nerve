@@ -75,6 +75,7 @@ pub mod pyresolve;
 pub mod pystruct;
 pub mod pysurface;
 pub mod refs;
+pub mod registry;
 pub mod resolve;
 pub mod similarity;
 pub mod trace;
@@ -153,6 +154,11 @@ pub use pysurface::{PyModuleSurface, PySurfaceIndex};
 pub use refs::{
     extract_references, RefTarget, ReferenceExtraction, ReferenceSite, UnresolvedReason,
     EXTRACTOR_ID as REFERENCE_EXTRACTOR_ID, EXTRACTOR_VERSION as REFERENCE_EXTRACTOR_VERSION,
+};
+pub use registry::{
+    add_registry_target, availability_of, list_registry, probe_target, relocate_registry_target,
+    remove_registry_target, target_database_path, RegistryAvailability, RegistryEntryView,
+    RegistryOutcome, RegistryRefusal, RegistryTarget,
 };
 pub use similarity::{
     admits as similarity_admits, analyse as analyse_similarity, SimilarityAnalysis,

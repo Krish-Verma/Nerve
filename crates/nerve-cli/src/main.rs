@@ -114,6 +114,25 @@ enum Command {
     /// behind them.
     #[command(subcommand)]
     History(HistoryCommand),
+    /// Record which neighbouring repositories this one is allowed to be told about.
+    ///
+    /// **Nothing here is discovered.** A sibling checkout is a filesystem accident, not a
+    /// declaration, so a repository becomes a neighbour only because `nerve repo add` named it —
+    /// which is the "directory proximity" link `docs/plans/slice-13-cross-repository-contracts.md`
+    /// §1 refuses, one layer down.
+    ///
+    /// This is the first command that reads a directory the user did not point Nerve at, and it is
+    /// therefore a new trust boundary (`docs/THREAT-MODEL.md` T12). The neighbour's
+    /// `.nerve/nerve.db` is opened **read-only** and nothing else over there is opened at all; its
+    /// bytes are identical afterwards; the target is never indexed as a side effect; and the stored
+    /// path is re-validated on every use, because a row naming a directory is untrusted input the
+    /// moment it is written.
+    ///
+    /// `remove` **retires** an entry and never deletes it. There is no purge verb: a row that
+    /// vanished from the table could not be reported as having ended, and a retired name stays
+    /// taken.
+    #[command(subcommand)]
+    Repo(RepoCommand),
     /// Report index counts, freshness and schema version.
     Status {
         /// Repository root. Defaults to the current directory.
@@ -540,6 +559,89 @@ enum HistoryCommand {
     },
 }
 
+/// `nerve repo` subcommands.
+///
+/// Two writers, one reader and one re-pointer, following `nerve history`'s shape: the verbs are what
+/// the commands do, and the repository the registry belongs to is always `--path`, because the
+/// positional argument here is the *neighbour* rather than the subject.
+#[derive(Debug, Subcommand)]
+enum RepoCommand {
+    /// Register a neighbouring repository, reading its identity from its own index.
+    ///
+    /// The target's `.nerve/nerve.db` is opened read-only to learn its `repo_id`, and that id is
+    /// what every later check is made against — never the path. A path that no longer exists and a
+    /// path that now holds a *different* repository are different facts with different remedies,
+    /// and only the recorded id can tell them apart.
+    ///
+    /// Each refusal has its own name: the path does not exist, it is not a directory, it holds no
+    /// `.nerve/nerve.db`, its database is newer than this build supports, it is a symlink leading
+    /// out of the target root, it is this very repository, or it is already registered. None of
+    /// them falls back to a narrower answer.
+    Add {
+        /// The neighbouring repository's root. Must already have been `nerve init`-ed.
+        #[arg(value_name = "TARGET")]
+        target: PathBuf,
+        /// Local name for the entry. Defaults to the target directory's own name.
+        #[arg(long, value_name = "ID")]
+        id: Option<String>,
+        /// What to call it on a surface. Defaults to the target directory's own name.
+        ///
+        /// A directory name is repository content and is treated as untrusted on T7's terms: it is
+        /// stored verbatim, never interpreted, and rendered inert.
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// Repository root whose registry this is. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// List every registered neighbour and what each one is right now.
+    ///
+    /// **Retired entries are listed**, marked as retired. That is not a courtesy: `registry_entry_removed`
+    /// is a report made from the kept row, and a list that hid it would make the state unreportable
+    /// at exactly the moment it becomes the answer.
+    ///
+    /// Availability is re-derived from the filesystem on every run rather than read out of the row,
+    /// because what the row points at is free to change after it is written. Exit `0` whatever the
+    /// verdicts are: `nerve check` is the only command that may exit on staleness.
+    List {
+        /// Repository root whose registry this is. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Retire a registered neighbour and withdraw the links that resolved through it.
+    ///
+    /// A tombstone, never a delete, and the two writes happen in one transaction. The row keeps its
+    /// id and its recorded repository id, which is the only reason a link that resolved through it
+    /// can later be reported as `registry_entry_removed` rather than as a link pointing at nothing
+    /// nameable. There is no purge verb in this release, and the retired name stays taken.
+    Remove {
+        /// The entry's local id, as `nerve repo list` prints it.
+        #[arg(value_name = "REGISTRY_ID")]
+        registry_id: String,
+        /// Repository root whose registry this is. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Point an entry at a different path, **after** proving the recorded repository is there.
+    ///
+    /// The identity check is the whole command. Without it, relocation is not a convenience — it is
+    /// precisely the silent re-pointing `target_repository_moved` exists to detect, performed by
+    /// Nerve itself on request, and every link resolved through the entry afterwards would describe
+    /// a repository nobody registered. A new path holding some other repository is refused with
+    /// that reason named.
+    Relocate {
+        /// The entry's local id, as `nerve repo list` prints it.
+        #[arg(value_name = "REGISTRY_ID")]
+        registry_id: String,
+        /// Where that repository now lives.
+        #[arg(value_name = "NEW_PATH")]
+        new_path: PathBuf,
+        /// Repository root whose registry this is. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+}
+
 /// `--direction` values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum DirectionArg {
@@ -694,6 +796,21 @@ fn main() {
         Command::History(HistoryCommand::Availability { path }) => {
             run_history_availability(&output, &path)
         }
+        Command::Repo(RepoCommand::Add {
+            target,
+            id,
+            name,
+            path,
+        }) => run_repo_add(&output, &path, &target, id.as_deref(), name.as_deref()),
+        Command::Repo(RepoCommand::List { path }) => run_repo_list(&output, &path),
+        Command::Repo(RepoCommand::Remove { registry_id, path }) => {
+            run_repo_remove(&output, &path, &registry_id)
+        }
+        Command::Repo(RepoCommand::Relocate {
+            registry_id,
+            new_path,
+            path,
+        }) => run_repo_relocate(&output, &path, &registry_id, &new_path),
         Command::Status { path, path_flag } => run_status(
             &output,
             &path.or(path_flag).unwrap_or_else(|| PathBuf::from(".")),
@@ -3997,6 +4114,334 @@ fn run_history_availability(output: &Output, path: &Path) -> i32 {
             "current_git_commit": freshness.current_git_commit,
             "current_state_id": freshness.current_state_id,
         }),
+    );
+    exit::SUCCESS
+}
+
+// ---- the cross-repository registry -----------------------------------------------------------
+//
+// These four handlers render and nothing else. **Availability is never computed here.** It is
+// derived once, in `nerve_index::registry`, because this is the first thing in Nerve whose answer
+// depends on a *second* repository — and two surfaces deciding independently whether a neighbour is
+// reachable is two answers to one question. `crates/nerve-cli/tests/registry_guards.rs` scans this
+// crate and `nerve-server` for a second derivation, in the shape `history_wording.rs` established.
+//
+// The target path never appears in a `format!` that builds a filesystem path here either. The one
+// file Nerve opens in a neighbour is named in `nerve_index::registry`, and a surface that spelled it
+// again would be a second place to widen it.
+
+/// Open the index for a registry command, and find the repository the registry belongs to.
+///
+/// `writable` is the whole reason this is one helper rather than two: `list` answers a question and
+/// must not be able to write, so it takes the `query_only` connection every other read command
+/// takes; `add`, `remove` and `relocate` are mutating commands and say so.
+fn open_registry(
+    output: &Output,
+    command: &'static str,
+    path: &Path,
+    writable: bool,
+) -> Result<(OpenIndex, String), i32> {
+    let opened = if writable {
+        open_existing(path)
+    } else {
+        open_query_only(path)
+    }
+    .map_err(|message| output.failure(command, exit::NO_INDEX, &message))?;
+    let repository = nerve_store::repository(&opened.conn)
+        .map_err(|err| output.failure(command, exit::INTERNAL, &err.to_string()))?;
+    let repo_id = repository
+        .ok_or_else(|| {
+            output.failure(
+                command,
+                exit::NO_INDEX,
+                &format!(
+                    "no repository row at {}; run `nerve init` first",
+                    opened.root.display()
+                ),
+            )
+        })?
+        .repo_id;
+    Ok((opened, repo_id))
+}
+
+/// One entry and its verdict, as JSON.
+///
+/// `local_path` is in the response and is *not* in anything Git tracks: it lives in
+/// `.nerve/nerve.db`, which `.gitignore` covers, and `crates/nerve-cli/tests/registry_guards.rs`
+/// asserts that rather than trusting it. A user asking where their neighbour is recorded has to be
+/// told.
+fn registry_entry_json(view: &nerve_index::RegistryEntryView) -> serde_json::Value {
+    let entry = &view.entry;
+    let availability = &view.availability;
+    json!({
+        "registry_id": inert_text(&entry.registry_id),
+        "expected_repository_id": entry.expected_repository_id,
+        "display_name": inert_text(&entry.display_name),
+        "local_path": inert_text(&entry.local_path),
+        "added_at": entry.added_at,
+        "status": entry.status.as_str(),
+        "status_note": entry.status.note(),
+        "withdrawn_at": entry.withdrawn_at,
+        "last_seen_state": entry.last_seen_state,
+        "last_seen_at": entry.last_seen_at,
+        "availability_checked_at": entry.availability_checked_at,
+        "availability": availability.as_str(),
+        "availability_statement": availability.statement(),
+        "refusal": availability.refusal().map(|reason| reason.as_str()),
+        "refusal_statement": availability.refusal().map(|reason| reason.statement()),
+        "observed_repository_id": availability.observed_repository_id(),
+        "freshness": availability.freshness().map(|state| state.as_str()),
+        "freshness_note": availability.freshness().map(|state| state.note()),
+    })
+}
+
+/// One entry and its verdict, as lines.
+///
+/// Every repository-supplied string goes through [`inert_text`] for the reason a commit summary
+/// does: a display name is content from a checkout that may have been cloned from anywhere, and a
+/// newline in it would forge a second line of Nerve's own output.
+fn print_registry_entry(output: &Output, view: &nerve_index::RegistryEntryView) {
+    let entry = &view.entry;
+    let availability = &view.availability;
+    output.line(format!(
+        "  {}  {}",
+        inert_text(&entry.registry_id),
+        inert_text(&entry.display_name)
+    ));
+    output.line(format!(
+        "    {:<14} {}",
+        "path",
+        inert_text(&entry.local_path)
+    ));
+    output.line(format!(
+        "    {:<14} {}",
+        "repository_id", entry.expected_repository_id
+    ));
+    output.line(format!(
+        "    {:<14} {} — {}",
+        "status",
+        entry.status.as_str(),
+        entry.status.note()
+    ));
+    if let Some(withdrawn_at) = &entry.withdrawn_at {
+        output.line(format!("    {:<14} {withdrawn_at}", "withdrawn_at"));
+    }
+    output.line(format!(
+        "    {:<14} {} — {}",
+        "availability",
+        availability.as_str(),
+        availability.statement()
+    ));
+    if let Some(reason) = availability.refusal() {
+        output.line(format!(
+            "    {:<14} {} — {}",
+            "reason",
+            reason.as_str(),
+            reason.statement()
+        ));
+    }
+    if let Some(found) = availability.observed_repository_id() {
+        output.line(format!("    {:<14} {found}", "found_instead"));
+    }
+    match availability.freshness() {
+        Some(state) => output.line(format!(
+            "    {:<14} {} — {}",
+            "freshness",
+            state.as_str(),
+            state.note()
+        )),
+        None => output.line(format!(
+            "    {:<14} {}",
+            "freshness", "(none — this entry puts no qualification on what resolves through it)"
+        )),
+    }
+}
+
+/// Report a named refusal, with nothing done and nothing guessed at.
+fn refuse_registry(
+    output: &Output,
+    command: &'static str,
+    subject: &str,
+    reason: nerve_index::RegistryRefusal,
+) -> i32 {
+    output.failure_detail(
+        command,
+        exit::USAGE,
+        &format!("{}: {}", inert_text(subject), reason.statement()),
+        &[
+            "  nothing was registered, moved or retired; this is a refusal, not a partial result"
+                .to_string(),
+        ],
+        json!({
+            "subject": inert_text(subject),
+            "refusal": reason.as_str(),
+            "refusal_statement": reason.statement(),
+        }),
+    )
+}
+
+/// The object every successful registry command prints under `--json`.
+fn registry_object(
+    output: &Output,
+    command: &'static str,
+    root: &Path,
+    entries: Vec<serde_json::Value>,
+) {
+    output.object(json!({
+        "command": command,
+        "ok": true,
+        "root": root.display().to_string(),
+        "entries": entries,
+    }));
+}
+
+fn run_repo_add(
+    output: &Output,
+    path: &Path,
+    target: &Path,
+    id: Option<&str>,
+    name: Option<&str>,
+) -> i32 {
+    let (opened, repo_id) = match open_registry(output, "repo add", path, true) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    let outcome = match nerve_index::add_registry_target(&opened.conn, &repo_id, target, id, name) {
+        Ok(outcome) => outcome,
+        Err(err) => return output.failure("repo add", error_exit_code(&err), &err.to_string()),
+    };
+    let entry = match outcome {
+        nerve_index::RegistryOutcome::Done(entry) => entry,
+        nerve_index::RegistryOutcome::Refused(reason) => {
+            return refuse_registry(output, "repo add", &target.display().to_string(), reason)
+        }
+    };
+    let view = nerve_index::RegistryEntryView {
+        availability: nerve_index::availability_of(&entry),
+        entry,
+    };
+    output.line(format!(
+        "Registered {} in {}",
+        inert_text(&view.entry.registry_id),
+        opened.root.display()
+    ));
+    print_registry_entry(output, &view);
+    registry_object(
+        output,
+        "repo add",
+        &opened.root,
+        vec![registry_entry_json(&view)],
+    );
+    exit::SUCCESS
+}
+
+fn run_repo_list(output: &Output, path: &Path) -> i32 {
+    let (opened, repo_id) = match open_registry(output, "repo list", path, false) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    let views = match nerve_index::list_registry(&opened.conn, &repo_id) {
+        Ok(views) => views,
+        Err(err) => return output.failure("repo list", error_exit_code(&err), &err.to_string()),
+    };
+
+    if views.is_empty() {
+        output.line(format!(
+            "No registered neighbours in {}",
+            opened.root.display()
+        ));
+        output.line(
+            "  registry       empty — no sibling directory is ever registered on its own; a \
+             neighbour exists because `nerve repo add` named it",
+        );
+    } else {
+        output.line(format!(
+            "{} registered neighbour(s) in {}",
+            views.len(),
+            opened.root.display()
+        ));
+        for view in &views {
+            print_registry_entry(output, view);
+        }
+    }
+    registry_object(
+        output,
+        "repo list",
+        &opened.root,
+        views.iter().map(registry_entry_json).collect(),
+    );
+    exit::SUCCESS
+}
+
+fn run_repo_remove(output: &Output, path: &Path, registry_id: &str) -> i32 {
+    let (opened, repo_id) = match open_registry(output, "repo remove", path, true) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    let outcome = match nerve_index::remove_registry_target(&opened.conn, &repo_id, registry_id) {
+        Ok(outcome) => outcome,
+        Err(err) => return output.failure("repo remove", error_exit_code(&err), &err.to_string()),
+    };
+    let entry = match outcome {
+        nerve_index::RegistryOutcome::Done(entry) => entry,
+        nerve_index::RegistryOutcome::Refused(reason) => {
+            return refuse_registry(output, "repo remove", registry_id, reason)
+        }
+    };
+    let view = nerve_index::RegistryEntryView {
+        availability: nerve_index::availability_of(&entry),
+        entry,
+    };
+    output.line(format!(
+        "Retired {} — the entry is kept, not deleted, and stays listed",
+        inert_text(&view.entry.registry_id)
+    ));
+    print_registry_entry(output, &view);
+    registry_object(
+        output,
+        "repo remove",
+        &opened.root,
+        vec![registry_entry_json(&view)],
+    );
+    exit::SUCCESS
+}
+
+fn run_repo_relocate(output: &Output, path: &Path, registry_id: &str, new_path: &Path) -> i32 {
+    let (opened, repo_id) = match open_registry(output, "repo relocate", path, true) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    let outcome = match nerve_index::relocate_registry_target(
+        &opened.conn,
+        &repo_id,
+        registry_id,
+        new_path,
+    ) {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            return output.failure("repo relocate", error_exit_code(&err), &err.to_string())
+        }
+    };
+    let entry = match outcome {
+        nerve_index::RegistryOutcome::Done(entry) => entry,
+        nerve_index::RegistryOutcome::Refused(reason) => {
+            return refuse_registry(output, "repo relocate", registry_id, reason)
+        }
+    };
+    let view = nerve_index::RegistryEntryView {
+        availability: nerve_index::availability_of(&entry),
+        entry,
+    };
+    output.line(format!(
+        "Relocated {} — the repository recorded for this entry was found at the new path",
+        inert_text(&view.entry.registry_id)
+    ));
+    print_registry_entry(output, &view);
+    registry_object(
+        output,
+        "repo relocate",
+        &opened.root,
+        vec![registry_entry_json(&view)],
     );
     exit::SUCCESS
 }

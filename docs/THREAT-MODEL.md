@@ -308,6 +308,61 @@ server pool thread and connection count is unbounded. A test
 (`a_truncated_or_garbage_request_does_not_take_the_server_down`) pins that the server stays
 responsive, because the accept/read pool is separate from the query workers.
 
+### T12 — Reading a second repository named by a registry entry (A1) — **Slice 13a gate**
+
+**The new part is that Nerve reads a directory the user did not point it at.** Every threat above
+concerns the repository given on the command line. Slice 13a-ii's `nerve repo add` records a
+*neighbouring* checkout, and every later command reads that neighbour's `.nerve/nerve.db` on the
+strength of a row written in the past. This does not fit inside **T2**, which is about paths *within*
+one repository: T2's `canonical_child` proves a path stays under *the* root, and here there are two
+roots, only one of which Nerve was invited into.
+
+Three things make this its own boundary. The registry row is **persistent** — it outlives the command
+that wrote it, and what it names is free to change afterwards. The target is **not the subject** — the
+user asked about repository A and Nerve opens B. And the answer is **derived from B and reported as
+A's** — a link qualified against the wrong repository is a wrong claim with A's name on it.
+
+**Controls (implemented, Slice 13a-ii; test for each):**
+
+| # | Control | Test |
+|---|---|---|
+| 1 | **Registration is explicit.** No sibling directory is ever auto-discovered; a neighbour exists because a mutating command named it | `a_sibling_checkout_is_never_discovered_and_only_a_named_one_is_registered` (index), `a_sibling_checkout_is_never_registered_by_itself` (CLI) — each registers one neighbour in the same test, so the negative is not satisfied by a registry that registers nothing |
+| 2 | **The target opens read-only** (`SQLITE_OPEN_READ_ONLY`, no `CREATE`, no `URI`, plus `query_only=ON`) and its database is **byte-identical** before and after, verified by hash | `the_connection_opened_on_a_neighbour_is_query_only_and_refuses_a_write`, `every_read_of_a_neighbour_leaves_its_database_byte_identical`, `every_repo_command_leaves_the_neighbours_database_byte_identical` |
+| 3 | **The path is validated at registration and re-validated at every use**, and identity is checked against the **recorded `repo_id`**, never against the path | `a_checkout_swapped_underneath_an_entry_is_reported_as_moved_and_not_as_available` — the path is byte-identical across the swap and only the id changes, which is the only thing that could detect it |
+| 4 | **The database, and nothing else.** Nerve does not index the target, walks no tree there, writes no row and modifies no file it finds | `registering_a_neighbour_indexes_nothing_and_modifies_no_file_inside_it` — whole-tree hash, plus entity and `extractor_run` counts unchanged |
+| 5 | **Every string read out is untrusted repository content** on T7's terms: stored verbatim, interpreted never, rendered inert | `a_hostile_directory_name_is_stored_verbatim_and_never_interpreted` (store), `a_hostile_display_name_is_rendered_inert_on_both_surfaces` (CLI, text and `--json`) |
+| 6 | **A symlink out of the user's control is refused, not followed**, by the existing `canonical_child` choke point | `a_registered_path_that_is_a_symlink_is_refused_rather_than_followed`, `a_nerve_directory_symlinked_out_of_the_target_root_is_refused`, and `a_directory_with_no_index_is_refused_as_an_absent_index_and_not_as_an_escape` so the guard does not claim a hit it did not get |
+| 7 | **`local_path` is user-specific and absolute and is never tracked by Git** | `no_user_specific_absolute_path_is_tracked_by_git` and `a_registered_absolute_path_lands_only_inside_the_ignored_directory` — the second registers a real neighbour and then searches the whole tree for that exact path, requiring it *inside* `.nerve/` so the search is known to be capable of finding it |
+
+Two further decisions belong here rather than in a commit message.
+
+**A refusal is never rendered as a missing repository.** `target_repository_missing` means *nothing
+is there*. A path Nerve declined to follow is a different fact and carries no freshness value at all,
+because reporting the second as the first is exactly the T2 honesty failure Slice 8b-i had to amend —
+a refusal disguised as a miss.
+
+**A neighbour whose schema is newer than this build is refused, not migrated.** Migrating is a write,
+and Nerve has never written into a repository it was not pointed at
+(`a_neighbour_whose_schema_is_newer_than_this_build_is_refused_rather_than_migrated`).
+
+**Residual, measured and accepted — SQLite's WAL sidecars.** A Nerve index runs in WAL mode, and a
+read-only SQLite connection to a WAL database **creates `nerve.db-shm` and a zero-length
+`nerve.db-wal`** beside it when they are absent; a read-only connection cannot remove them again
+either. So control 4 is exact as written — no file that was already there is modified, no row is
+written, nothing is indexed — but two coordination files do appear inside the neighbour's `.nerve/`,
+which `nerve init` has already covered with a `*` gitignore.
+`registering_a_neighbour_indexes_nothing_and_modifies_no_file_inside_it` pins the residual to exactly
+those two paths, so a third one fails. `file:…?immutable=1` removes them and was **not** taken: it
+requires `SQLITE_OPEN_URI` plus a percent-encoder of our own in the expression that decides whether
+the connection is read-only — the trade T11 already records this project refusing — and it tells
+SQLite to ignore the WAL, so a neighbour being indexed right now would be read stale and reported as
+current, which is the one failure row 13 exists to prevent. **Revisit if** Nerve ever reads a
+neighbour on a hot path, or on media where the sidecars cannot be created.
+
+**Status: ✅ implemented and attack-verified** — 15 tests at the boundary
+(`crates/nerve-index/tests/registry.rs`), 9 at the surface (`crates/nerve-cli/tests/registry.rs`),
+4 repository-wide scans (`crates/nerve-cli/tests/registry_guards.rs`).
+
 ## 5. Explicit non-goals
 
 - Nerve does not defend against a **local attacker who already has the user's UID** — such an
@@ -332,6 +387,7 @@ responsive, because the accept/read pool is separate from the query workers.
 | MCP transport + `nerve_investigate` (Slice 8a) | T7, T8 | ✅ implemented and attack-verified. **T8:** every argument bounded before use, no argument reaching SQL as text, a traversal-shaped selector refused *as a refusal* rather than disguised as "not found", a symlink-swapped indexed file reporting freshness `refused` with no byte of the secret in the response, and three independent response bounds (row cap, per-assertion observation cap, and a 128 KiB ceiling measured on the text a client actually reads) with exact continuation. **T7:** every repository-derived value confined to one `repository_content` field, labelled three ways, and held there by a property test that walks the whole response and asserts no string inside the field appears outside it. Orchestrator-verified: an injected Markdown **heading** surfaces 7 times and every occurrence is inside a labelled region |
 | Selectors, all three surfaces (Slice 8b-i) | T2, T7 | ✅ implemented and attack-verified. **T2:** one shared syntactic refusal for CLI, HTTP and MCP; before it, two of the three disguised a refusal as a miss. Both directions verified — `../../etc/passwd`, `/etc/passwd`, `..\..\windows`, `a\..\b`, `docs/..\..\x` refused; `./docs/architecture.md`, `docs/./architecture.md`, `a..b.ts`, `a\b.ts` **not** refused, so the check does not over-refuse a legal path. **T7:** this slice made `Document` entities reachable by path through MCP for the first time, widening the T7 surface, so it was re-attacked rather than assumed — an injected level-1 heading surfaces 4 times, every occurrence inside `repository_content`, 0 leaks. `selectors.alternatives` was placed **inside** the untrusted subtree because it carries repository names and paths |
 | MCP remaining tools (Slice 8b-ii) | T7, T8 | ✅ implemented and attack-verified. Five tools; 8a's envelope **extracted into `mcp/tool.rs`** so the property is stated once rather than copied four times, and `envelope()` is the only way a tool builds a result. **T7:** the property test now covers all five, with two anti-vacuity assertions built into its helper (*"nothing was labelled"* / *"hostile content never reached the answer"*) — the trap that produced a false pass twice on this project. A mutation leaking `search`'s top hit fails it, and a **counterfactual run confirmed the investigate-only spot check still passed under the same mutation**, so the failure comes from the extension. **T8:** every argument validated in one place before reaching the application layer; an undeclared argument is refused, not ignored; traversal refused on every selector-taking tool — orchestrator probe disabling the shared refusal fails **7 tests, one per tool**. Adversarial stdio: SQL-injection string and FTS5 operators answered without panic, 5000-byte query refused, database byte-identical, 0 bytes stderr. **Known gap, verified not exploitable today:** the T7 walker scans JSON *values*, not object *keys*; every dynamic key in a live response is an `EntityKind` or `Relation` from a closed compile-time vocabulary |
+| Cross-repository registry (Slice 13a-ii) | T12 | ✅ implemented and attack-verified — the first read of a repository the user did not point Nerve at. All seven T12 controls have a test, each paired with the positive half that stops it passing vacuously: the sibling scan registers a real neighbour, the byte-identity check asserts the read produced an answer first, and the tracked-path scan requires the registered absolute path to be findable *inside* `.nerve/` before requiring it absent everywhere else. Verified: a checkout swapped underneath an entry is reported `target_repository_moved` against the recorded `repo_id` while the path is byte-identical across the swap; a symlinked target and a `.nerve` symlinked at somebody else's database are both refused, while a directory with no index is refused as an *absent index* rather than as an escape; a hostile directory name is stored verbatim and rendered inert on both the text and `--json` surfaces without forging a line; a neighbour with a newer schema is refused rather than migrated. **One residual, measured and named in T12:** a read-only open of a WAL database makes SQLite create two coordination sidecars in the neighbour's already-ignored `.nerve/`, pinned to exactly those two paths |
 
 ## 7. Corrective items
 

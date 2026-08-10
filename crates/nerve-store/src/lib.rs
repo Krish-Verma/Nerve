@@ -40,7 +40,7 @@ pub mod schema;
 pub mod select;
 pub mod write;
 
-pub use db::{database_bytes, open, open_in_memory};
+pub use db::{database_bytes, open, open_in_memory, open_read_only};
 pub use derive::{derive_assertion_state_for, rebuild_assertion_state};
 pub use diagnose::{diagnose, DatabaseDiagnostics};
 pub use dump::canonical_dump;
@@ -84,9 +84,9 @@ pub use query::{
 };
 pub use registry::{
     contract_links_for_registry_entry, insert_contract_link, insert_registry_entry,
-    list_contract_links, list_registry_entries, registry_entry, relocate_registry_entry,
-    tombstone_registry_entry, withdraw_contract_link, withdraw_links_for_registry_entry,
-    ContractLinkRow, RegistryEntryRow,
+    list_contract_links, list_registry_entries, record_registry_observation, registry_entry,
+    relocate_registry_entry, tombstone_registry_entry, withdraw_contract_link,
+    withdraw_links_for_registry_entry, ContractLinkRow, RegistryEntryRow,
 };
 pub use schema::{migrate, schema_version, SCHEMA_VERSION};
 pub use select::{

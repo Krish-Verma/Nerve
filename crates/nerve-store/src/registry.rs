@@ -338,6 +338,44 @@ pub fn tombstone_registry_entry(
     Ok(changed > 0)
 }
 
+/// Record that the target was read, and what state it was in. `Ok(true)` if a row changed.
+///
+/// Three columns move together because the schema's `CHECK` says two of them must:
+/// `last_seen_state` and `last_seen_at` are both written or both cleared, since a state observed at
+/// no time and a time with no state are each half a fact. `availability_checked_at` is stamped
+/// either way — *the target was looked at* and *the target had an indexed state* are different
+/// observations, and a target that has been read and found unindexed must not look like one that
+/// was never read.
+///
+/// `state_id` is **not** a foreign key and cannot be: it names a row in the neighbour's database.
+/// Passing `None` is the honest record for a neighbour that has been initialised and never indexed.
+///
+/// Only an active entry is stamped. A tombstone records what was true when it was retired, and
+/// nothing in this slice re-reads a retired entry's target — reading a directory on behalf of an
+/// entry the user withdrew is a read the user did not ask for.
+pub fn record_registry_observation(
+    conn: &Connection,
+    repo_id: &str,
+    registry_id: &str,
+    state_id: Option<&str>,
+) -> Result<bool> {
+    let changed = conn.execute(
+        "UPDATE repo_registry
+            SET last_seen_state = ?3,
+                last_seen_at = CASE WHEN ?3 IS NULL THEN NULL
+                                    ELSE strftime('%Y-%m-%dT%H:%M:%fZ','now') END,
+                availability_checked_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE repo_id = ?1 AND registry_id = ?2 AND status = ?4",
+        params![
+            repo_id,
+            registry_id,
+            state_id,
+            RegistryEntryStatus::Active.as_str(),
+        ],
+    )?;
+    Ok(changed > 0)
+}
+
 /// Point an active registry entry at a different path. `Ok(true)` if a row changed.
 ///
 /// Only the path moves. `registry_id` and `expected_repository_id` are deliberately not parameters:
@@ -346,8 +384,12 @@ pub fn tombstone_registry_entry(
 /// `target_repository_moved` exists to catch — performed by Nerve itself, on request.
 ///
 /// **Nothing here verifies that the new path holds the expected repository.** That check needs a
-/// read-only open of the target and is Slice 13a-ii's, which owns the second-repository trust
-/// boundary; this function is the storage half and must not be called without it.
+/// read-only open of the target and lives at the second-repository trust boundary, which is
+/// `nerve_index::registry::relocate_registry_target` (Slice 13a-ii); this function is the storage
+/// half and **must not be called without it**. Called bare it *is* the silent re-pointing
+/// `target_repository_moved` exists to catch, performed by Nerve itself on request, so
+/// `crates/nerve-index/tests/registry.rs` asserts the verified path is the only route a surface
+/// has to it.
 ///
 /// A tombstoned entry is not relocated: the `WHERE` clause matches only an active row, so a retired
 /// entry stays where it was when it was retired, and returns `Ok(false)`.

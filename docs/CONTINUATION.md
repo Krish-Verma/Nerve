@@ -282,7 +282,7 @@ cargo test --release -p nerve-index --test incremental -- --ignored --nocapture
 ## Commands to resume
 
 ```bash
-cd /Users/krishverma/Documents/Nerve
+cd /path/to/Nerve
 export PATH="$HOME/.cargo/bin:$PATH"
 git log --oneline -10
 cargo test --workspace

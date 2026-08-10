@@ -10,8 +10,8 @@ continued past it. This report reconstructs the actual state rather than trustin
 
 | | |
 |---|---|
-| Path | `/Users/krishverma/Documents/Nerve` |
-| Toplevel | `/Users/krishverma/Documents/Nerve` (same — not a subdirectory) |
+| Path | `<checkout root>` |
+| Toplevel | `<checkout root>` (same — not a subdirectory) |
 | Branch | `main` |
 | **HEAD found** | **`a8a2d5d`** — `docs: Slice 6 plan — and the question that gates it` |
 | Working tree | **clean** — `git status --porcelain=v2` returned no entries |

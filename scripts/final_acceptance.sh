@@ -105,7 +105,7 @@ fi
 # ---------------------------------------------------------------------------------------------
 section "3. Command surface"
 
-for command in init index coverage trace status check doctor search gaps impact path serve mcp why; do
+for command in init index coverage trace status check doctor search gaps impact path serve mcp why repo; do
   check "nerve $command exists" bash -c "'$NERVE' help $command >/dev/null 2>&1"
 done
 
@@ -379,6 +379,153 @@ assert len(row[\"summary\"]) == 512, len(row[\"summary\"])
   fi
 else
   skip "git history" "fixtures/history-* are missing"
+fi
+
+# ---------------------------------------------------------------------------------------------
+section "4c. The cross-repository registry, and the second repository it reads"
+
+# Every check here exercises behaviour. `nerve repo exists` is already covered by section 3 and is
+# worth nothing on its own: the questions that matter are whether a *real* second checkout is
+# registered and read, whether a retired entry is still listed, whether a relocation onto the wrong
+# repository is refused, and whether the neighbour's bytes survive all of it.
+#
+# Three separate fixture copies, each `nerve init`-ed on its own, so each has its own `project_id`
+# and therefore its own `repo_id`. Two copies sharing an identity would make the relocate refusal
+# pass for the wrong reason.
+if [ -d "$ROOT/fixtures/ts-basic" ] && [ -d "$ROOT/fixtures/ts-resolution" ]; then
+  RWORK=$(mktemp -d)
+  trap 'rm -rf "$WORK" "$HWORK" "$RWORK"' EXIT
+
+  registry_repo() {
+    local fixture="$1" dest="$2" index="$3"
+    cp -R "$ROOT/fixtures/$fixture" "$dest" || return 1
+    rm -rf "$dest/.nerve"
+    "$NERVE" init "$dest" >/dev/null 2>&1 || return 1
+    [ "$index" = "index" ] && { "$NERVE" index "$dest" >/dev/null 2>&1 || return 1; }
+    return 0
+  }
+
+  if registry_repo ts-basic "$RWORK/a" index &&
+     registry_repo ts-resolution "$RWORK/b" index &&
+     registry_repo ts-resolution "$RWORK/other" index &&
+     registry_repo ts-resolution "$RWORK/sibling" index; then
+
+    # 1. Nothing is discovered. Three checkouts sit beside `a` and none of them is registered.
+    check "no sibling checkout is registered without being named" bash -c "
+      '$NERVE' repo list --path '$RWORK/a' --json |
+      python3 -c 'import json,sys; d=json.load(sys.stdin); assert d[\"entries\"] == [], d'"
+
+    # 2. A real second repository is registered, and read.
+    check "a second repository is registered and reported available" bash -c "
+      '$NERVE' repo add '$RWORK/b' --path '$RWORK/a' --id neighbour --json |
+      python3 -c '
+import json,sys
+e = json.load(sys.stdin)[\"entries\"][0]
+assert e[\"registry_id\"] == \"neighbour\", e
+assert e[\"availability\"] == \"available\", e
+assert e[\"freshness\"] is None, e
+assert e[\"expected_repository_id\"].startswith(\"repo_\"), e
+assert e[\"local_path\"].endswith(\"/b\"), e
+'"
+
+    check "the registered neighbour is listed" bash -c "
+      '$NERVE' repo list --path '$RWORK/a' --json |
+      python3 -c '
+import json,sys
+rows = json.load(sys.stdin)[\"entries\"]
+assert len(rows) == 1, rows
+assert rows[0][\"registry_id\"] == \"neighbour\", rows
+assert rows[0][\"status\"] == \"active\", rows
+'"
+
+    # 3. Relocation onto a different repository is refused, with the reason named, and the entry
+    #    does not move. Without this check, relocation is the silent re-pointing the row plan calls
+    #    the dangerous case, performed by Nerve on request.
+    check "relocating onto a different repository is refused by identity" bash -c "
+      out=\$('$NERVE' repo relocate neighbour '$RWORK/other' --path '$RWORK/a' --json)
+      status=\$?
+      [ \"\$status\" = 10 ] || { printf '%s\n' \"\$out\"; exit 1; }
+      printf '%s' \"\$out\" | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+assert d[\"ok\"] is False, d
+assert d[\"refusal\"] == \"target_repository_moved\", d
+'
+      '$NERVE' repo list --path '$RWORK/a' --json | python3 -c '
+import json,sys
+row = json.load(sys.stdin)[\"entries\"][0]
+assert row[\"local_path\"].endswith(\"/b\"), row
+'"
+
+    # 4. Removal is a tombstone. The entry is still listed, marked, and carries the one freshness
+    #    state that only a kept row can report.
+    check "a retired entry is still listed, and says so" bash -c "
+      '$NERVE' repo remove neighbour --path '$RWORK/a' >/dev/null &&
+      '$NERVE' repo list --path '$RWORK/a' --json | python3 -c '
+import json,sys
+rows = json.load(sys.stdin)[\"entries\"]
+assert len(rows) == 1, rows
+assert rows[0][\"status\"] == \"tombstoned\", rows
+assert rows[0][\"availability\"] == \"entry_removed\", rows
+assert rows[0][\"freshness\"] == \"registry_entry_removed\", rows
+assert rows[0][\"withdrawn_at\"], rows
+'"
+
+    # 5. The neighbour's database is byte-identical after every one of those reads. A *different*
+    #    neighbour, because the first one is now a tombstone and a tombstoned entry opens nothing —
+    #    hashing a file nobody read would be the vacuous version of this check.
+    check "the neighbour's database is byte-identical after every read" bash -c "
+      before=\$(shasum -a 256 '$RWORK/other/.nerve/nerve.db' | cut -d' ' -f1)
+      '$NERVE' repo add '$RWORK/other' --path '$RWORK/a' --id again >/dev/null || exit 1
+      '$NERVE' repo list --path '$RWORK/a' >/dev/null
+      '$NERVE' repo list --path '$RWORK/a' --json >/dev/null
+      '$NERVE' repo relocate again '$RWORK/other' --path '$RWORK/a' >/dev/null || exit 1
+      after=\$(shasum -a 256 '$RWORK/other/.nerve/nerve.db' | cut -d' ' -f1)
+      [ \"\$before\" = \"\$after\" ] || { echo \"\$before != \$after\"; exit 1; }
+      # Anti-vacuity: the reads really produced an answer, so 'unchanged' is not 'nothing ran'.
+      '$NERVE' repo list --path '$RWORK/a' --json | python3 -c '
+import json,sys
+rows = {r[\"registry_id\"]: r for r in json.load(sys.stdin)[\"entries\"]}
+assert set(rows) == {\"neighbour\", \"again\"}, rows
+assert rows[\"again\"][\"availability\"] == \"available\", rows[\"again\"]
+'"
+
+    # 6. A registered path that no longer exists and one that now holds another repository are two
+    #    different answers. Collapsing them is refutation 6 of the row plan.
+    check "a missing neighbour and a swapped one stay distinct" bash -c "
+      '$NERVE' repo add '$RWORK/sibling' --path '$RWORK/a' --id swapped >/dev/null || exit 1
+      rm -rf '$RWORK/other'
+      rm -rf '$RWORK/sibling'
+      cp -R '$ROOT/fixtures/ts-basic' '$RWORK/sibling'
+      rm -rf '$RWORK/sibling/.nerve'
+      '$NERVE' init '$RWORK/sibling' >/dev/null 2>&1
+      '$NERVE' index '$RWORK/sibling' >/dev/null 2>&1
+      '$NERVE' repo list --path '$RWORK/a' --json | python3 -c '
+import json,sys
+rows = {r[\"registry_id\"]: r for r in json.load(sys.stdin)[\"entries\"]}
+assert rows[\"again\"][\"freshness\"] == \"target_repository_missing\", rows[\"again\"]
+assert rows[\"again\"][\"refusal\"] == \"path_does_not_exist\", rows[\"again\"]
+assert rows[\"swapped\"][\"freshness\"] == \"target_repository_moved\", rows[\"swapped\"]
+assert rows[\"swapped\"][\"observed_repository_id\"], rows[\"swapped\"]
+assert rows[\"swapped\"][\"observed_repository_id\"] != rows[\"swapped\"][\"expected_repository_id\"]
+assert rows[\"again\"][\"freshness\"] != rows[\"swapped\"][\"freshness\"]
+'"
+
+    # 7. Every refusal names itself rather than falling back to a narrower answer.
+    check "every registration refusal names its own reason" bash -c "
+      seen=''
+      for target in '$RWORK/nowhere' '$RWORK/a'; do
+        out=\$('$NERVE' repo add \"\$target\" --path '$RWORK/a' --json)
+        [ \$? = 10 ] || { printf '%s\n' \"\$out\"; exit 1; }
+        seen=\"\$seen \$(printf '%s' \"\$out\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"refusal\"])')\"
+      done
+      printf '%s' \"\$seen\" | grep -q path_does_not_exist &&
+      printf '%s' \"\$seen\" | grep -q same_repository"
+  else
+    skip "cross-repository registry" "the fixture repositories could not be built"
+  fi
+else
+  skip "cross-repository registry" "fixtures/ts-basic or fixtures/ts-resolution is missing"
 fi
 
 # ---------------------------------------------------------------------------------------------

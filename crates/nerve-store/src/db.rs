@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 use crate::error::Result;
 
@@ -20,6 +20,37 @@ pub fn open(path: &Path) -> Result<Connection> {
         restrict_permissions(path)?;
     }
     apply_pragmas(&conn)?;
+    Ok(conn)
+}
+
+/// Open an existing database that belongs to **another repository**, read-only.
+///
+/// This is not [`open`] with a flag. [`open`] creates the file when it is absent, chmods it, and
+/// then runs [`apply_pragmas`] — and `PRAGMA journal_mode=WAL` **writes to the database header**.
+/// Pointed at a neighbour's index that is the opposite of what Slice 13a-ii's trust boundary
+/// requires: Nerve would have modified the bytes of a repository the user named only as a
+/// dependency, and the byte-identical-after-every-read property could not hold.
+///
+/// So three things are deliberately different here, and each closes one way in.
+///
+/// 1. **`SQLITE_OPEN_READ_ONLY` and no `SQLITE_OPEN_CREATE`.** A path that is not a database is an
+///    error rather than a new empty database created inside somebody else's checkout.
+/// 2. **No `SQLITE_OPEN_URI`.** With URI parsing on, a `local_path` ending
+///    `…/nerve.db?mode=rwc` would re-open the connection writable — and `local_path` is a row in a
+///    file on disk, which is untrusted input the moment it is written.
+/// 3. **`PRAGMA query_only=ON` as well**, which is redundant against the flag by design: it is the
+///    same construction `nerve check` and every read command already rely on, so a later edit that
+///    reaches for a convenient repair fails at SQLite rather than at review.
+///
+/// No pragma that writes is applied, and the connection never runs a migration. A neighbour whose
+/// schema this build does not support is refused by its caller, not upgraded — upgrading a database
+/// Nerve does not own would be a write.
+pub fn open_read_only(path: &Path) -> Result<Connection> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.pragma_update(None, "query_only", "ON")?;
     Ok(conn)
 }
 
