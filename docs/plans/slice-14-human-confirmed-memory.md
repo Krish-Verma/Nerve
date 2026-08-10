@@ -323,6 +323,48 @@ agents.
 5. **`nerve memory delete` was drafted** beside invalidate. A delete verb is how "history preserved"
    stops being true. Refused, not deferred. §4.
 
+### Corrections from implementing 14a (2026-08-10)
+
+The orchestrator overruled one implementation decision, and the repository settled it:
+
+**§7.4's "a probe storing any of them fails by name" needs a `CHECK`, not a Rust vocabulary.** 14a
+first left `memory.status` unconstrained in SQL, on the reasonable ground that this schema closes
+vocabularies in `nerve-core` and stores the text — which `V4`'s doc comment does state. But **v7
+already contradicts that as a blanket rule**: `git_rename_hypothesis` enumerates `'exact_content'`
+and `'similar_content'` in a `CHECK`, precisely because an invariant depended on the column's
+*domain* rather than on its spelling. The same holds here: with the vocabulary closed only in Rust,
+raw SQL can store `potentially_stale`, which then fails on the next read through
+`MemoryStatus::FromStr` — loudly, but **after the row is on disk**, which is a repair job rather than
+a refusal. `V9` therefore enumerates the four stored statuses. The cost is stated: a fifth *stored*
+status needs a table rebuild, and that is the intended price, because a fifth stored status changes
+what a memory record can be and should not be reachable by adding a Rust variant and finding the
+database already accepted it.
+
+Eight things the plan left under-specified, found by implementing it and recorded rather than
+improvised:
+
+1. **`scope` is never defined**, though the corrected §3 conflict key depends on it. Stored as an
+   opaque non-empty string the store never interprets; **14b decides the values.**
+2. **`multiple_active`'s grouping is unspecified.** Grouped by `(repository, subject, scope)` — the
+   conflict key minus `claim_key` — so the two views are decided over nested groups.
+3. **§4's citation sketch asks for a resolution verdict**; 14a ships the durable snapshots and
+   defers the verdict, because nothing in 14a reads a citation's live target and a verdict with no
+   reader is a code path no test exercises.
+4. **`memory_id` is composite `(repo_id, memory_id)`**, following `repo_registry`, which buys
+   composite foreign keys stating that a citation, an event or a supersession may not cross
+   repositories.
+5. **`memory_event.operation` has no vocabulary**; left an open string, since 14b's commands own the
+   verbs.
+6. **"Append-only" has no stated enforcement.** A workspace source scan was chosen over a
+   `BEFORE DELETE … RAISE(ABORT)` trigger, because a trigger can be dropped by a later migration and
+   would make any future whole-database purge require a v10.
+7. **Subject resolution follows exactly one identity link, forwards only.** A subject moved twice
+   across two indexing runs reports `missing` — a true statement about the snapshot. Bounded and
+   pinned, with a control proving the second hop is reachable on its own.
+8. **`scripts/final_acceptance.sh` still awards `nerve memory` an existence-only PASS** (§6's own
+   defect). **14d must replace it**, and until then row 14's acceptance coverage is a claim about a
+   command name.
+
 ### Refutations of the corrected draft, found 2026-08-08 before implementation
 
 6. **`memory.subject_entity_id` was drafted as a foreign key into `entity`.** Entity rows are

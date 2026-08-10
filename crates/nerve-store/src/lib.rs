@@ -12,12 +12,14 @@
 //! [`select`] and [`graph`] rather than in a surface crate, so the CLI, the Slice 4 server and
 //! the Slice 8 MCP tools all answer the same question the same way.
 //!
-//! Two modules hold facts that are deliberately **outside** the evidence graph and outside the
+//! Three modules hold facts that are deliberately **outside** the evidence graph and outside the
 //! canonical dump, each for a reason recorded beside it: [`history`], because a tree diff is a
 //! primary-source fact and routing a certainty through an evidence profile costs three rows to
-//! express doubt that does not exist; and [`registry`], because a cross-repository link has one end
+//! express doubt that does not exist; [`registry`], because a cross-repository link has one end
 //! in a database this one does not own, so it cannot be an `assertion` — both of an assertion's
-//! endpoints are hard foreign keys into the local `entity` table.
+//! endpoints are hard foreign keys into the local `entity` table; and [`memory`], because a human's
+//! sentence about one subject is not a relation between two entities and `assertion_state` is
+//! defined as a pure function of machine observations.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -33,6 +35,7 @@ pub mod gaps;
 pub mod graph;
 pub mod history;
 pub mod impact;
+pub mod memory;
 pub mod prune;
 pub mod query;
 pub mod registry;
@@ -69,6 +72,13 @@ pub use history::{
 pub use impact::{
     impact, ImpactQuery, ImpactReport, ImpactRow, ImpactTotals, UnresolvedAccount,
     DEFAULT_RELATIONS as DEFAULT_IMPACT_RELATIONS, UNCATEGORISED as UNCATEGORISED_UNRESOLVED,
+};
+pub use memory::{
+    append_memory_event, insert_memory, insert_memory_citation, list_memory, memory,
+    memory_citations, memory_events, memory_for_subject, memory_in_scope, read_memory,
+    read_memory_all, read_memory_for_subject, read_memory_in_scope, resolve_memory_subject,
+    supersede_memory, superseded_by, MemoryCitationRow, MemoryEventRow, MemoryReport, MemoryRow,
+    MemorySubject, MemorySubjectReport,
 };
 pub use prune::{
     delete_claims_sourced_at, delete_directory_containment, delete_extractor_file_rows,

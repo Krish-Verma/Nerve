@@ -28,9 +28,9 @@ use std::path::{Path, PathBuf};
 use nerve_core::vocab::{
     AssertionStatus, ChangeKind, ChangesEnumerated, ContractFreshness, ContractLinkStatus,
     ContractResolutionMethod, Directness, EntityKind, EvidenceSourceType, FirstObservedKind,
-    HistoryFreshness, ParentCompleteness, RegistryEntryStatus, Relation, RenameAmbiguity,
-    RenameAnalysisCompleteness, RenameEvidence, SimilarityUnmeasured, SummaryTruncation,
-    UnresolvedCategory, WalkTermination,
+    HistoryFreshness, MemoryStatus, MemorySubjectResolution, MemoryView, ParentCompleteness,
+    RegistryEntryStatus, Relation, RenameAmbiguity, RenameAnalysisCompleteness, RenameEvidence,
+    SimilarityUnmeasured, SummaryTruncation, UnresolvedCategory, WalkTermination,
 };
 use nerve_index::contracts::{Ambiguity, ContractRule};
 use nerve_index::docref;
@@ -121,18 +121,23 @@ const GLOSS_TABLES: [(&str, &str); 28] = [
 /// choose a side — a table on neither list fails by name — and because the honest way to declare a
 /// gloss ahead of the view that renders it is to record the gap as data rather than to omit it.
 ///
-/// **The list is empty as of Slice 13d, and it stays.** Slice 13a-i's four cross-repository
-/// vocabularies sat here while the row had storage and no surface; 13d ships `views/Contracts.tsx`,
-/// which imports all four, so all four moved to [`GLOSS_TABLES`] in the same change — the rule this
-/// pair of lists exists to enforce. An empty list is not a dead one: it is what the next vocabulary
-/// declared ahead of its view is added to, and
-/// [`every_gloss_table_the_source_declares_is_on_exactly_one_list`] still fails a table that is on
-/// neither.
+/// The list was empty as of Slice 13d. Slice 13a-i's four cross-repository vocabularies sat here
+/// while the row had storage and no surface; 13d ships `views/Contracts.tsx`, which imports all
+/// four, so all four moved to [`GLOSS_TABLES`] in the same change — the rule this pair of lists
+/// exists to enforce.
+///
+/// **Slice 14a's three memory vocabularies are what it holds now**, and for the same reason: 14a is
+/// storage and a read model, with no surface until 14d. They move to [`GLOSS_TABLES`] in the same
+/// change that makes a view import one, and not before.
 ///
 /// A table listed here must be genuinely unrendered: the test proves it by asserting its prose is
 /// **absent** from the shipped bundle, which is what stops this becoming a way to opt out of the
 /// staleness check.
-const DECLARED_NOT_RENDERED: [(&str, &str); 0] = [];
+const DECLARED_NOT_RENDERED: [(&str, &str); 3] = [
+    ("vocab.ts", "MEMORY_STATUS"),
+    ("vocab.ts", "MEMORY_VIEW"),
+    ("vocab.ts", "MEMORY_SUBJECT_RESOLUTION"),
+];
 
 /// Every `const NAME: Record<…>` a gloss source declares, in declaration order.
 ///
@@ -1069,6 +1074,130 @@ fn every_contract_link_status_is_glossed() {
     );
 }
 
+// ---- the memory vocabularies -------------------------------------------------------------------
+//
+// Three of them, added by Slice 14a and glossed in the same change, which is the point. 14a ships
+// storage and a read model and no surface, so all three sit on `DECLARED_NOT_RENDERED` rather than
+// `GLOSS_TABLES` — the guard above proves that claim by checking their prose is absent from the
+// bundle — but the per-value coverage below is asserted now, so a fifth subject verdict cannot be
+// added in 14b without the sentence a reader would need for it.
+
+/// The four **stored** statuses, and none of the three derived views may be among them.
+///
+/// The gloss table is the place the split would quietly heal itself: an interface that glossed
+/// `potentially_stale` as a status would be describing a column that does not hold it, and a reader
+/// would have no way to tell a stored fact from a computed one.
+#[test]
+fn every_stored_memory_status_is_glossed_and_no_derived_view_is() {
+    let expected: Vec<String> = MemoryStatus::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    assert_eq!(expected.len(), 4);
+    covers(
+        "MemoryStatus::ALL",
+        "MEMORY_STATUS (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "MEMORY_STATUS"),
+    );
+
+    let keys = object_keys(&vocab_ts(), "MEMORY_STATUS");
+    for derived in MemoryView::ALL {
+        assert!(
+            !keys.iter().any(|key| key == derived.as_str()),
+            "`{derived}` is glossed as a stored status and is computed at read time"
+        );
+    }
+
+    // Superseded and invalidated must not share a sentence: *something replaced it* and *nothing
+    // did* are the two answers a returning reader is choosing between.
+    let source = vocab_ts();
+    assert_ne!(
+        gloss_for(&source, "MEMORY_STATUS", MemoryStatus::Superseded.as_str()),
+        gloss_for(&source, "MEMORY_STATUS", MemoryStatus::Invalidated.as_str()),
+    );
+}
+
+/// The three derived views, and the pair that must not collapse into one.
+///
+/// `conflicted` and `multiple_active` are the whole of the corrected §3. A gloss that read the same
+/// for both would put the interface back where the first draft was: reporting every second note
+/// about a file as a contradiction.
+#[test]
+fn every_memory_view_is_glossed_and_a_shared_subject_is_not_a_conflict() {
+    let expected: Vec<String> = MemoryView::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    covers(
+        "MemoryView::ALL",
+        "MEMORY_VIEW (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "MEMORY_VIEW"),
+    );
+
+    let source = vocab_ts();
+    let conflicted = gloss_for(&source, "MEMORY_VIEW", MemoryView::Conflicted.as_str());
+    let several = gloss_for(&source, "MEMORY_VIEW", MemoryView::MultipleActive.as_str());
+    assert_ne!(
+        conflicted, several,
+        "`conflicted` and `multiple_active` share a gloss, which is the collapse the corrected \
+         design exists to prevent"
+    );
+    assert!(
+        several.contains("ordinary"),
+        "the several-notes gloss must say it is ordinary: {several}"
+    );
+}
+
+/// The five subject verdicts, and the two that must not read as one.
+///
+/// A missing gloss here would be worse than elsewhere. `missing` and
+/// `repository_state_unavailable` are the pair a happy-path draft collapses, and reporting *"I
+/// could not check"* as *"it is gone"* would claim a deletion nothing observed — the same
+/// `Stale` / `Unverified` separation Slice 7c-i made.
+#[test]
+fn every_memory_subject_resolution_is_glossed_and_unknown_is_not_missing() {
+    let expected: Vec<String> = MemorySubjectResolution::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    assert_eq!(expected.len(), 5);
+    covers(
+        "MemorySubjectResolution::ALL",
+        "MEMORY_SUBJECT_RESOLUTION (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "MEMORY_SUBJECT_RESOLUTION"),
+    );
+
+    let source = vocab_ts();
+    assert_ne!(
+        gloss_for(
+            &source,
+            "MEMORY_SUBJECT_RESOLUTION",
+            MemorySubjectResolution::Missing.as_str()
+        ),
+        gloss_for(
+            &source,
+            "MEMORY_SUBJECT_RESOLUTION",
+            MemorySubjectResolution::RepositoryStateUnavailable.as_str()
+        ),
+        "`missing` and `repository_state_unavailable` share a gloss, so the interface would report \
+         a deletion nothing observed"
+    );
+
+    // The link verdict must say the attachment came from a record, not from a resemblance.
+    let linked = gloss_for(
+        &source,
+        "MEMORY_SUBJECT_RESOLUTION",
+        MemorySubjectResolution::ResolvedThroughIdentityLink.as_str(),
+    );
+    assert!(
+        linked.contains("similar"),
+        "the link gloss must refuse name similarity by name: {linked}"
+    );
+}
+
 /// All twelve freshness situations, and the two pairs that must not read as one.
 ///
 /// A missing gloss here would be worse than elsewhere for the same reason a missing
@@ -1196,6 +1325,9 @@ fn no_gloss_is_empty_or_the_fallback_sentence() {
         (vocab_ts(), "CONTRACT_RESOLUTION_METHOD"),
         (vocab_ts(), "CONTRACT_LINK_STATUS"),
         (vocab_ts(), "CONTRACT_FRESHNESS"),
+        (vocab_ts(), "MEMORY_STATUS"),
+        (vocab_ts(), "MEMORY_VIEW"),
+        (vocab_ts(), "MEMORY_SUBJECT_RESOLUTION"),
         (format_ts(), "SOURCE_TYPES"),
         (format_ts(), "DIRECTNESS"),
         (format_ts(), "STATUS_GLOSS"),

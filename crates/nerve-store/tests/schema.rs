@@ -202,6 +202,9 @@ const V7_TABLE: &str = "git_rename_analysis";
 /// The two tables schema v8 adds, in the order the migration creates them.
 const V8_TABLES: [&str; 2] = ["repo_registry", "contract_link"];
 
+/// The three tables schema v9 adds, in the order the migration creates them.
+const V9_TABLES: [&str; 3] = ["memory", "memory_citation", "memory_event"];
+
 /// What v7 added on top of v6, exactly as the Slice 12c-ii build shipped it.
 ///
 /// Written out rather than reached by calling `migrate` part of the way, for the same reason
@@ -552,7 +555,7 @@ fn fresh_database_reaches_the_current_schema_version() {
     assert_eq!(schema_version(&conn).unwrap(), None);
     migrate(&conn).unwrap();
     assert_eq!(schema_version(&conn).unwrap(), Some(SCHEMA_VERSION));
-    assert_eq!(SCHEMA_VERSION, 8);
+    assert_eq!(SCHEMA_VERSION, 9);
     // A fresh database reaches v6 directly, without a v1, v2, v3, v4 or v5 database ever existing.
     // v5's column is present from the start, with the default that makes a *migrated* row miss the
     // framework cache. On a fresh database nothing has been cached yet, so the default is inert
@@ -606,6 +609,28 @@ fn fresh_database_reaches_the_current_schema_version() {
         );
         assert_eq!(scalar(&conn, &format!("SELECT count(*) FROM {table}")), 0);
     }
+    // v9's three tables, present and empty. Empty is the only correct state: a memory record is
+    // something a human wrote, so a fresh database holding one would be a note nobody made.
+    for table in V9_TABLES {
+        assert!(
+            table_names(&conn).contains(&table.to_string()),
+            "v9 table {table} is missing from a fresh database"
+        );
+        assert_eq!(scalar(&conn, &format!("SELECT count(*) FROM {table}")), 0);
+    }
+    // The subject is a snapshot and nothing else. A column named `subject_entity_id` would be the
+    // foreign key row 14 was rewritten to remove, so its absence is asserted rather than assumed.
+    assert!(column_names(&conn, "memory").contains(&"subject_entity_id_snapshot".to_string()));
+    assert!(
+        !column_names(&conn, "memory").contains(&"subject_entity_id".to_string()),
+        "memory holds a live subject pointer; entity rows are pruned on re-index"
+    );
+    // Supersession has exactly one writable direction.
+    assert!(column_names(&conn, "memory").contains(&"supersedes_memory_id".to_string()));
+    assert!(
+        !column_names(&conn, "memory").contains(&"superseded_by".to_string()),
+        "memory stores both directions of supersession; the two can disagree"
+    );
     for (table, column) in [
         ("occurrence", "state_id"),
         ("observation", "state_id"),
@@ -1290,11 +1315,11 @@ fn a_v6_database_upgrades_to_v7_and_every_rename_row_survives() {
 /// The oldest database Nerve can still read reaches the current version, end to end.
 ///
 /// v1 is the interesting starting point rather than a redundant one: it is the only route on which
-/// v3's identity restatement, v4's re-attribution, v5's column, v6's tables, v7's rebuild and v8's
-/// registry all run in one call, so a step that displaced an earlier one shows up here and nowhere
-/// else.
+/// v3's identity restatement, v4's re-attribution, v5's column, v6's tables, v7's rebuild, v8's
+/// registry and v9's memory all run in one call, so a step that displaced an earlier one shows up
+/// here and nowhere else.
 #[test]
-fn a_v1_database_reaches_v8_with_every_earlier_step_still_done() {
+fn a_v1_database_reaches_the_current_version_with_every_earlier_step_still_done() {
     let conn = database_with_filesystem_rows(1);
     assert!(!table_names(&conn).contains(&"git_rename_hypothesis".to_string()));
 
@@ -1318,6 +1343,13 @@ fn a_v1_database_reaches_v8_with_every_earlier_step_still_done() {
         assert!(
             table_names(&conn).contains(&table.to_string()),
             "v1 → v8 did not create {table}"
+        );
+        assert_eq!(scalar(&conn, &format!("SELECT count(*) FROM {table}")), 0);
+    }
+    for table in V9_TABLES {
+        assert!(
+            table_names(&conn).contains(&table.to_string()),
+            "v1 → v9 did not create {table}"
         );
         assert_eq!(scalar(&conn, &format!("SELECT count(*) FROM {table}")), 0);
     }
@@ -2115,6 +2147,644 @@ fn the_same_declaration_recorded_twice_is_one_link() {
         4,
         "one identity, four recordings, none of them refused for sharing the name"
     );
+}
+
+// ---- v9: human-confirmed memory ----------------------------------------------------------------
+
+/// What v8 added on top of v7, exactly as the Slice 13a-i build shipped it.
+///
+/// Written out rather than reached by calling `migrate` part of the way, for the reason [`V1_ONLY`],
+/// [`V6_ONLY`] and [`V7_ONLY`] are: "a v8 database" has to mean what v8 actually left behind, which
+/// is the starting point every real database now takes to v9.
+const V8_ONLY: &str = r#"
+CREATE TABLE repo_registry (
+    repo_id                 TEXT NOT NULL REFERENCES repository(repo_id),
+    registry_id             TEXT NOT NULL,
+    expected_repository_id  TEXT NOT NULL,
+    display_name            TEXT NOT NULL,
+    local_path              TEXT NOT NULL,
+    added_at                TEXT NOT NULL,
+    last_seen_state         TEXT,
+    last_seen_at            TEXT,
+    availability_checked_at TEXT,
+    status                  TEXT NOT NULL,
+    withdrawn_at            TEXT,
+    PRIMARY KEY (repo_id, registry_id),
+    CHECK (
+        (status = 'active'     AND withdrawn_at IS NULL)
+     OR (status = 'tombstoned' AND withdrawn_at IS NOT NULL)
+    ),
+    CHECK (
+        (last_seen_state IS NULL     AND last_seen_at IS NULL)
+     OR (last_seen_state IS NOT NULL AND last_seen_at IS NOT NULL)
+    ),
+    CHECK (registry_id <> '' AND expected_repository_id <> '' AND local_path <> '')
+);
+CREATE INDEX idx_repo_registry_status ON repo_registry(repo_id, status);
+CREATE TABLE contract_link (
+    link_id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id                       TEXT NOT NULL REFERENCES repository(repo_id),
+    source_repository_id          TEXT NOT NULL,
+    source_state_at_resolution    TEXT NOT NULL REFERENCES repository_state(state_id),
+    source_entity_id              TEXT REFERENCES entity(entity_id),
+    source_kind_snapshot          TEXT,
+    source_path                   TEXT NOT NULL,
+    source_span                   TEXT NOT NULL,
+    registry_entry_id             TEXT NOT NULL,
+    expected_target_repository_id TEXT NOT NULL,
+    target_state_at_resolution    TEXT,
+    target_entity_id              TEXT,
+    target_kind_snapshot          TEXT,
+    target_name_snapshot          TEXT,
+    target_path_snapshot          TEXT,
+    target_span_snapshot          TEXT,
+    relation_semantics            TEXT NOT NULL,
+    contract_kind                 TEXT NOT NULL,
+    contract_identity             TEXT NOT NULL,
+    expected_contract_version     TEXT,
+    observed_contract_version     TEXT,
+    resolution_method             TEXT NOT NULL,
+    extractor_id                  TEXT NOT NULL,
+    extractor_version             TEXT NOT NULL,
+    evidence_details              TEXT,
+    ambiguity                     TEXT,
+    unsupported_reason            TEXT,
+    first_seen_at                 TEXT NOT NULL,
+    last_seen_at                  TEXT NOT NULL,
+    withdrawn_at                  TEXT,
+    status                        TEXT NOT NULL,
+    FOREIGN KEY (repo_id, registry_entry_id) REFERENCES repo_registry(repo_id, registry_id),
+    CHECK (
+        (status = 'active'    AND withdrawn_at IS NULL)
+     OR (status = 'withdrawn' AND withdrawn_at IS NOT NULL)
+    ),
+    CHECK (
+        target_entity_id IS NULL
+     OR (target_kind_snapshot IS NOT NULL
+            AND target_name_snapshot IS NOT NULL
+            AND target_path_snapshot IS NOT NULL)
+    ),
+    CHECK (
+        unsupported_reason IS NULL
+     OR (target_entity_id IS NULL AND target_path_snapshot IS NULL)
+    ),
+    CHECK (last_seen_at >= first_seen_at),
+    CHECK (
+        source_repository_id <> '' AND source_path <> '' AND source_span <> ''
+        AND registry_entry_id <> '' AND expected_target_repository_id <> ''
+        AND relation_semantics <> '' AND contract_kind <> '' AND contract_identity <> ''
+        AND extractor_id <> '' AND extractor_version <> ''
+    )
+);
+CREATE UNIQUE INDEX idx_contract_link_identity ON contract_link(
+    repo_id, registry_entry_id, contract_kind, contract_identity,
+    source_path, source_span, resolution_method
+);
+CREATE INDEX idx_contract_link_registry ON contract_link(repo_id, registry_entry_id, status);
+INSERT INTO schema_version (version, applied_at, description)
+    VALUES (8, '2026-01-01T00:00:00.000Z', 'Slice 13a-i');
+"#;
+
+/// A memory record, named by column. The insert every v9 test below builds on.
+///
+/// The subject columns hold a snapshot of `local1`, which the fixture also creates as a real
+/// `entity` row — so the deletion test below can remove the entity and watch the record survive.
+const MEMORY_INSERT: &str = "INSERT INTO memory
+     (memory_id, repo_id, subject_entity_id_snapshot, subject_kind_snapshot,
+      subject_name_snapshot, subject_path_snapshot, subject_selector_snapshot, anchor_state_id,
+      scope, claim_key, content, author_label, created_at, status, supersedes_memory_id,
+      invalidated_at, invalidation_reason)
+ VALUES (?1, 'r', ?2, 'file', 'app.ts', 'src/app.ts', 'file:src/app.ts', 's',
+         'file', ?3, 'the retry budget here is deliberate', 'krish',
+         '2026-01-01T00:00:00.000Z', ?4, ?5, ?6, ?7)";
+
+/// A v8 database with a registry entry and a contract link, assembled from what v8 shipped.
+fn v8_database_from_the_written_out_steps() -> nerve_store::Connection {
+    let conn = v7_database_with_history();
+    conn.execute_batch(V8_ONLY).unwrap();
+    conn.execute(
+        REGISTRY_INSERT,
+        rusqlite::params!["reg1", "repo-b", "active", None::<String>],
+    )
+    .unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), Some(8));
+    conn
+}
+
+/// A current database holding one repository, one state, one entity and nothing in memory yet.
+fn v9_database() -> nerve_store::Connection {
+    let conn = open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+    conn.execute_batch(
+        "INSERT INTO repository VALUES ('r','p','/tmp','t');
+         INSERT INTO repository_state VALUES ('s','r','content',NULL,'m','t');
+         INSERT INTO entity VALUES ('local1','r','file','app.ts','src','typescript',NULL);",
+    )
+    .unwrap();
+    conn
+}
+
+/// A well-formed active record with no claim key, which every refusal below is measured against.
+fn insert_active_memory(conn: &nerve_store::Connection, memory_id: &str) {
+    conn.execute(
+        MEMORY_INSERT,
+        rusqlite::params![
+            memory_id,
+            "local1",
+            None::<String>,
+            "active",
+            None::<String>,
+            None::<String>,
+            None::<String>
+        ],
+    )
+    .expect("a well-formed record must land");
+}
+
+/// **The upgrade path every existing database takes, and it must lose nothing.**
+///
+/// v9 adds three tables and touches no row, so the assertion is symmetric: memory appears empty, and
+/// every history and registry row a v8 database was holding is still there. Empty is the only
+/// correct state — memory is the one thing in this database a human authored, so a record appearing
+/// without anybody writing it would be a note nobody made.
+#[test]
+fn a_v8_database_upgrades_to_v9_and_every_earlier_row_survives() {
+    let conn = v8_database_from_the_written_out_steps();
+    for table in V9_TABLES {
+        assert!(
+            !table_names(&conn).contains(&table.to_string()),
+            "{table} exists before v9; the test would prove nothing"
+        );
+    }
+    let renames_before = rename_labels(&conn);
+    assert_eq!(renames_before.len(), 3, "or the count proves nothing");
+
+    migrate(&conn).unwrap();
+
+    assert_eq!(schema_version(&conn).unwrap(), Some(SCHEMA_VERSION));
+    for table in V9_TABLES {
+        assert!(
+            table_names(&conn).contains(&table.to_string()),
+            "v9 did not create {table}"
+        );
+        assert_eq!(scalar(&conn, &format!("SELECT count(*) FROM {table}")), 0);
+    }
+
+    // Every pre-existing row, still where it was.
+    assert_eq!(rename_labels(&conn), renames_before);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM git_commit"), 2);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM git_change"), 4);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM git_history_ingest"), 1);
+    assert_eq!(
+        scalar(&conn, &format!("SELECT count(*) FROM {V7_TABLE}")),
+        1
+    );
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM repo_registry"), 1);
+    assert_row_counts(&conn, &V5_ROW_COUNTS);
+    assert_eq!(
+        conn.query_row("SELECT framework_version FROM module_facts", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .unwrap(),
+        "2.0.0"
+    );
+}
+
+/// Re-migrating a v9 database changes nothing: no version row, no table, no row.
+#[test]
+fn re_migrating_a_v9_database_changes_nothing_and_appends_no_version_row() {
+    let conn = v9_database();
+    insert_active_memory(&conn, "m1");
+    let tables_before = table_names(&conn);
+    let versions_before = scalar(&conn, "SELECT count(*) FROM schema_version");
+    assert_eq!(versions_before, SCHEMA_VERSION);
+
+    migrate(&conn).unwrap();
+    migrate(&conn).unwrap();
+
+    assert_eq!(table_names(&conn), tables_before);
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM schema_version"),
+        versions_before,
+        "re-migrating must not append a version row"
+    );
+    assert_eq!(schema_version(&conn).unwrap(), Some(SCHEMA_VERSION));
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory"), 1);
+}
+
+/// **A failing v9 step commits nothing — including the table that was created first.**
+///
+/// The sabotage is on the migration's **last** object, `idx_memory_event_memory`, which runs after
+/// all three `CREATE TABLE`s and after six other indexes. Without a transaction the database would
+/// sit at v8 with every memory table already in it — a state no migration path could repair,
+/// because step 9 would never run again to finish the job and replaying it would collide on
+/// `CREATE TABLE memory`.
+#[test]
+fn an_interrupted_v9_migration_commits_nothing() {
+    let conn = v8_database_from_the_written_out_steps();
+    conn.execute_batch("CREATE TABLE idx_memory_event_memory (sabotage TEXT);")
+        .unwrap();
+
+    let err = migrate(&conn).unwrap_err();
+    assert!(
+        matches!(err, nerve_store::StoreError::Sqlite(_)),
+        "expected the CREATE INDEX to fail, got {err}"
+    );
+
+    assert_eq!(
+        schema_version(&conn).unwrap(),
+        Some(8),
+        "a failed step must not record its version"
+    );
+    for table in V9_TABLES {
+        assert!(
+            !table_names(&conn).contains(&table.to_string()),
+            "{table} survived a failed migration; step 9 is not transactional"
+        );
+    }
+    for index in [
+        "idx_memory_subject",
+        "idx_memory_scope",
+        "idx_memory_claim",
+        "idx_memory_supersedes",
+        "idx_memory_citation_memory",
+        "idx_memory_citation_path",
+    ] {
+        assert_eq!(
+            scalar(
+                &conn,
+                &format!("SELECT count(*) FROM sqlite_master WHERE name = '{index}'")
+            ),
+            0,
+            "{index} survived a failed migration"
+        );
+    }
+    // Nothing else moved, and the sabotaged name is exactly as it was.
+    assert_eq!(rename_labels(&conn).len(), 3);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM repo_registry"), 1);
+    assert_row_counts(&conn, &V5_ROW_COUNTS);
+    assert_eq!(
+        column_names(&conn, "idx_memory_event_memory"),
+        vec!["sabotage".to_string()]
+    );
+
+    // The control: the identical fixture without the sabotage reaches v9.
+    let clean = v8_database_from_the_written_out_steps();
+    migrate(&clean).unwrap();
+    assert_eq!(schema_version(&clean).unwrap(), Some(SCHEMA_VERSION));
+    for table in V9_TABLES {
+        assert!(table_names(&clean).contains(&table.to_string()));
+    }
+}
+
+/// **A memory record survives the deletion of its subject entity.**
+///
+/// The property row 14 was rewritten for, asserted at the schema level: with
+/// `PRAGMA foreign_keys=ON`, a `DELETE FROM entity` naming the subject must neither be refused nor
+/// take the record with it. A foreign key would give one of those two outcomes and both are
+/// unacceptable — a note blocking re-indexing of the file it is about, or a routine re-index
+/// silently destroying the human's note.
+///
+/// The same property is asserted against the **real indexer** in `nerve-index/tests/memory.rs`,
+/// where `prune_orphans` does the deleting; this is the unit-level half that says which constraint
+/// is responsible.
+#[test]
+fn a_memory_record_survives_the_deletion_of_its_subject_entity() {
+    let conn = v9_database();
+    insert_active_memory(&conn, "m1");
+
+    // The control: the subject is genuinely an entity, so the delete below is a real one.
+    assert_eq!(
+        scalar(
+            &conn,
+            "SELECT count(*) FROM entity WHERE entity_id = 'local1'"
+        ),
+        1
+    );
+
+    let deleted = conn
+        .execute("DELETE FROM entity WHERE entity_id = 'local1'", [])
+        .expect("a memory record must not block the deletion of its subject");
+    assert_eq!(deleted, 1);
+
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM memory WHERE memory_id = 'm1'"),
+        1,
+        "the record was destroyed with its subject"
+    );
+    // And it can still say what it was about, which is the whole point of the snapshot.
+    assert_eq!(
+        conn.query_row(
+            "SELECT subject_selector_snapshot || ' / ' || subject_name_snapshot
+               FROM memory WHERE memory_id = 'm1'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "file:src/app.ts / app.ts"
+    );
+}
+
+/// **An ending is a status and a moment, and neither may travel without the other.**
+///
+/// Four refusals, each with a control that lands, so every refusal is the constraint doing its job
+/// rather than a malformed statement:
+///
+/// - an `invalidated` record with no moment — it says it stopped being true and cannot say when;
+/// - an active record carrying an invalidation date — it contradicts itself;
+/// - a reason for an ending that never happened;
+/// - a record that replaces itself, which is the only cycle a `CHECK` can see.
+#[test]
+fn the_memory_checks_refuse_a_status_that_disagrees_with_its_timestamps() {
+    let conn = v9_database();
+    let when = "2026-02-01T00:00:00.000Z";
+
+    // The controls: both well-formed shapes land.
+    insert_active_memory(&conn, "m1");
+    conn.execute(
+        MEMORY_INSERT,
+        rusqlite::params![
+            "m2",
+            "local1",
+            None::<String>,
+            "invalidated",
+            None::<String>,
+            Some(when),
+            Some("the service it described was removed")
+        ],
+    )
+    .expect("an invalidated record with a moment and a reason must land");
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory"), 2);
+
+    let refused = |memory_id: &str,
+                   status: &str,
+                   supersedes: Option<&str>,
+                   invalidated_at: Option<&str>,
+                   reason: Option<&str>| {
+        let err = conn
+            .execute(
+                MEMORY_INSERT,
+                rusqlite::params![
+                    memory_id,
+                    "local1",
+                    None::<String>,
+                    status,
+                    supersedes,
+                    invalidated_at,
+                    reason
+                ],
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("constraint"),
+            "expected a constraint refusal for {memory_id}, got {err}"
+        );
+    };
+
+    // 1. Invalidated, with no moment. The ending cannot be reported.
+    refused("m3", "invalidated", None, None, None);
+    // 2. Active, carrying an ending it claims has not happened.
+    refused("m4", "active", None, Some(when), None);
+    // 3. A reason for an ending that never happened.
+    refused("m5", "active", None, None, Some("because"));
+    // 4. A record that replaces itself.
+    refused("m6", "active", Some("m6"), None, None);
+
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM memory"),
+        2,
+        "a refused row landed anyway"
+    );
+}
+
+/// **A row that names nothing, is about nothing, or says nothing is refused.**
+///
+/// The empty `claim_key` is the one worth its own case. An empty string is not a missing value, so
+/// it would gather every keyless record into a single competing claim group and report ordinary
+/// notes about one file as contradictions — the exact false claim the corrected §3 removes.
+#[test]
+fn the_memory_checks_refuse_a_record_that_names_or_says_nothing() {
+    let conn = v9_database();
+    insert_active_memory(&conn, "m1");
+
+    let refused = |label: &str, columns: &str, values: &str| {
+        let sql = format!(
+            "INSERT INTO memory
+                 (memory_id, repo_id, subject_entity_id_snapshot, subject_kind_snapshot,
+                  subject_name_snapshot, subject_path_snapshot, subject_selector_snapshot,
+                  anchor_state_id, scope, claim_key, content, author_label, created_at, status,
+                  supersedes_memory_id, invalidated_at, invalidation_reason)
+             VALUES ({values})"
+        );
+        let err = conn.execute(&sql, []).unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("constraint"),
+            "expected a constraint refusal for {label} ({columns}), got {err}"
+        );
+    };
+
+    let well_formed = "'x','r','local1','file','app.ts','src/app.ts','file:src/app.ts','s',\
+                       'file',NULL,'something','krish','t','active',NULL,NULL,NULL";
+    // The control: the shape every case below perturbs by one column does land.
+    conn.execute(&format!("INSERT INTO memory VALUES ({well_formed})"), [])
+        .expect("the well-formed control must land");
+
+    refused(
+        "an empty claim key",
+        "claim_key",
+        "'e1','r','local1','file','app.ts','src/app.ts','file:src/app.ts','s',\
+         'file','','something','krish','t','active',NULL,NULL,NULL",
+    );
+    refused(
+        "an empty subject id",
+        "subject_entity_id_snapshot",
+        "'e2','r','','file','app.ts','src/app.ts','file:src/app.ts','s',\
+         'file',NULL,'something','krish','t','active',NULL,NULL,NULL",
+    );
+    refused(
+        "an empty selector",
+        "subject_selector_snapshot",
+        "'e3','r','local1','file','app.ts','src/app.ts','','s',\
+         'file',NULL,'something','krish','t','active',NULL,NULL,NULL",
+    );
+    refused(
+        "an empty content",
+        "content",
+        "'e4','r','local1','file','app.ts','src/app.ts','file:src/app.ts','s',\
+         'file',NULL,'','krish','t','active',NULL,NULL,NULL",
+    );
+    refused(
+        "an empty author label",
+        "author_label",
+        "'e5','r','local1','file','app.ts','src/app.ts','file:src/app.ts','s',\
+         'file',NULL,'something','','t','active',NULL,NULL,NULL",
+    );
+    refused(
+        "an empty scope",
+        "scope",
+        "'e6','r','local1','file','app.ts','src/app.ts','file:src/app.ts','s',\
+         '',NULL,'something','krish','t','active',NULL,NULL,NULL",
+    );
+
+    // An empty *path* is deliberately legal: the repository entity is no file and says so honestly.
+    conn.execute(
+        "INSERT INTO memory VALUES
+             ('repo-note','r','repo1','repository','.','','repo:.','s',
+              'repository',NULL,'this project is offline-first','krish','t','active',
+              NULL,NULL,NULL)",
+        [],
+    )
+    .expect("a note about the repository itself must land with an empty path");
+
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory"), 3);
+}
+
+/// **At most one record may replace any given record**, so the derived inverse is a function.
+///
+/// There is no `superseded_by` column, and this uniqueness is what makes its absence safe: with two
+/// records claiming to replace one, "what replaced it" would have several answers and deriving the
+/// inverse would mean choosing between them.
+#[test]
+fn only_one_record_may_supersede_a_given_record() {
+    let conn = v9_database();
+    insert_active_memory(&conn, "m1");
+
+    let supersede = |memory_id: &str, target: &str| {
+        conn.execute(
+            MEMORY_INSERT,
+            rusqlite::params![
+                memory_id,
+                "local1",
+                None::<String>,
+                "active",
+                Some(target),
+                None::<String>,
+                None::<String>
+            ],
+        )
+    };
+
+    supersede("m2", "m1").expect("the first successor must land");
+    let err = supersede("m3", "m1").unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("unique"),
+        "a second record claims to replace m1: {err}"
+    );
+
+    // Two records superseding *different* predecessors is ordinary and must still land.
+    supersede("m4", "m2").expect("a chain must be recordable");
+    // And a record superseding nothing is the common case: the partial index must not refuse it.
+    insert_active_memory(&conn, "m5");
+    insert_active_memory(&conn, "m6");
+
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory"), 5);
+}
+
+/// A supersession, citation or event naming a record that does not exist is **refused**.
+///
+/// The foreign keys memory *can* have, and they are enforced: `PRAGMA foreign_keys=ON` is set on
+/// every connection. The contrast with the subject side — where no foreign key is possible and none
+/// is faked — is the shape of the whole table.
+#[test]
+fn a_citation_event_or_supersession_naming_no_record_is_refused() {
+    let conn = v9_database();
+    insert_active_memory(&conn, "m1");
+
+    let citation = "INSERT INTO memory_citation
+         (repo_id, memory_id, cited_entity_id_snapshot, cited_kind_snapshot, cited_name_snapshot,
+          cited_path_snapshot, cited_span_snapshot, cited_at_state, created_at)
+     VALUES ('r', ?1, NULL, NULL, NULL, 'src/app.ts', '3:9', 's', 't')";
+    let event = "INSERT INTO memory_event
+         (repo_id, memory_id, at, operation, from_status, to_status, note)
+     VALUES ('r', ?1, 't', 'confirm', 'proposed', 'active', NULL)";
+
+    // The controls: both land against the record that exists.
+    conn.execute(citation, ["m1"]).unwrap();
+    conn.execute(event, ["m1"]).unwrap();
+
+    for (label, sql) in [("citation", citation), ("event", event)] {
+        let err = conn.execute(sql, ["absent"]).unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("foreign key"),
+            "expected a foreign-key refusal for a {label} naming no record, got {err}"
+        );
+    }
+
+    let err = conn
+        .execute(
+            MEMORY_INSERT,
+            rusqlite::params![
+                "m2",
+                "local1",
+                None::<String>,
+                "active",
+                Some("absent"),
+                None::<String>,
+                None::<String>
+            ],
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("foreign key"),
+        "expected a foreign-key refusal for a supersession naming no record, got {err}"
+    );
+
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory_citation"), 1);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory_event"), 1);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory"), 1);
+}
+
+/// **A cited entity id with no snapshot beside it is the dangling pointer this table prevents.**
+///
+/// The same refusal `contract_link` makes for its target, one table over and for the same reason:
+/// once the entity is pruned there would be nothing left to name what was cited.
+#[test]
+fn the_citation_check_refuses_a_cited_entity_that_cannot_be_named() {
+    let conn = v9_database();
+    insert_active_memory(&conn, "m1");
+
+    let insert = |entity: Option<&str>, kind: Option<&str>, name: Option<&str>, path: &str| {
+        conn.execute(
+            "INSERT INTO memory_citation
+                 (repo_id, memory_id, cited_entity_id_snapshot, cited_kind_snapshot,
+                  cited_name_snapshot, cited_path_snapshot, cited_span_snapshot, cited_at_state,
+                  created_at)
+             VALUES ('r', 'm1', ?1, ?2, ?3, ?4, NULL, 's', 't')",
+            rusqlite::params![entity, kind, name, path],
+        )
+    };
+
+    // The controls: a citation that names a thing, and one that names only a place.
+    insert(Some("local1"), Some("file"), Some("app.ts"), "src/app.ts")
+        .expect("a fully named citation must land");
+    insert(None, None, None, "src/app.ts").expect("a citation naming only a place must land");
+
+    for (label, entity, kind, name, path) in [
+        (
+            "no kind",
+            Some("local1"),
+            None,
+            Some("app.ts"),
+            "src/app.ts",
+        ),
+        ("no name", Some("local1"), Some("file"), None, "src/app.ts"),
+        (
+            "an empty id",
+            Some(""),
+            Some("file"),
+            Some("app.ts"),
+            "src/app.ts",
+        ),
+        ("no path", None, None, None, ""),
+    ] {
+        let err = insert(entity, kind, name, path).unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("constraint"),
+            "expected a constraint refusal for a citation with {label}, got {err}"
+        );
+    }
+
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory_citation"), 2);
 }
 
 /// ADR-0006 consequence 3, made explicit rather than left to be discovered.

@@ -592,6 +592,95 @@ export function contractAmbiguityGloss(value: string): string {
   return CONTRACT_AMBIGUITY[value] ?? 'This build has no description for that ambiguity.';
 }
 
+/*
+ * ---- Slice 14a: the memory vocabularies -------------------------------------------------------
+ *
+ * Three tables, declared one sub-slice before any view imports them, exactly as Slice 12c-ii's
+ * Pass A and Slice 13a-i's four did. They sit on `DECLARED_NOT_RENDERED` in
+ * `crates/nerve-server/tests/ui_vocabulary.rs` until 14d ships the view, and a test proves that
+ * claim by checking their prose is absent from the shipped bundle — which is what stops the
+ * deferred list becoming a way to opt out of the staleness check.
+ *
+ * Declaring the gloss beside the vocabulary rather than waiting for the view is the point: a
+ * vocabulary that reaches a surface before its gloss does renders "this build has no description"
+ * to a real reader, and Slice 5d-iii found 120 sites doing exactly that.
+ */
+
+/**
+ * The four states a note is **stored** in.
+ *
+ * Four rather than six. `potentially_stale`, `conflicted` and `multiple_active` are worked out when
+ * a note is read and are never written down, because keeping a stored copy true would need
+ * something to keep writing it, and that something would be a question rather than an answer.
+ *
+ * Superseded and invalidated are the pair that must not be read as one: something replaced it, or
+ * nothing did.
+ */
+const MEMORY_STATUS: Record<string, string> = {
+  proposed:
+    'Written down and not yet confirmed by a person at the command line. It is on record, and nothing here treats it as settled.',
+  active:
+    'Confirmed, and the current note about its subject. Whether it is still true of the code today is worked out when you read it, never stored as a score.',
+  superseded:
+    'A later note replaced this one, and that note says so. The words here are kept exactly as they were, so what was once believed can still be read.',
+  invalidated:
+    'It stopped being true and nothing replaced it — which is a different thing from being superseded, and usually the one you need, because there is no successor to read instead.',
+};
+
+export function memoryStatusGloss(value: string): string {
+  return MEMORY_STATUS[value] ?? 'This build has no description for that memory status.';
+}
+
+/**
+ * What is true of a note *right now*, worked out at the moment it is read.
+ *
+ * None of these is stored. The distinction between the last two is the one that matters: several
+ * notes about one file is normal, and calling that a contradiction would be inventing a
+ * disagreement out of two unrelated sentences. A contradiction needs both notes to be answering the
+ * same named question.
+ */
+const MEMORY_VIEW: Record<string, string> = {
+  potentially_stale:
+    'The repository has moved on since this note was written, so nobody has checked it against the code as it is now. That is a reason to re-read it, not a sign that it is wrong.',
+  conflicted:
+    'Two confirmed notes answer the same named question about this subject and say different things. Nerve shows the disagreement and does not settle it; picking a winner would be inventing an answer neither note gave.',
+  multiple_active:
+    'Several notes are about this subject. That is ordinary — they answer no shared question, so nothing here says they disagree.',
+};
+
+export function memoryViewGloss(value: string): string {
+  return MEMORY_VIEW[value] ?? 'This build has no description for that memory view.';
+}
+
+/**
+ * What became of the thing a note is about.
+ *
+ * A note keeps a copy of its subject rather than a pointer to it, because indexing deletes entities
+ * when files go away — so the note outlives what it was written about, and can still say what that
+ * was. These five are how it says which of those situations you are in.
+ *
+ * "Could not check" is deliberately not "gone": reporting a subject as deleted when nothing was
+ * ever looked at would be claiming something nobody observed.
+ */
+const MEMORY_SUBJECT_RESOLUTION: Record<string, string> = {
+  resolved: 'The thing this note is about is in the index, so the note is attached to it directly.',
+  resolved_through_identity_link:
+    'The subject moved, and a recorded rename says where to. The note follows it because that record exists — never because two names looked similar.',
+  missing:
+    'The subject is no longer in the index and no recorded move leads anywhere. The note is kept and still readable: it carries a copy of what it was written about.',
+  ambiguous:
+    'More than one place the subject may have moved to, and none of them is preferred. Every candidate is shown, because choosing one would be deciding something nothing recorded.',
+  repository_state_unavailable:
+    'Nothing has been indexed here, so whether the subject is still there is unknown rather than answered. The note is readable either way.',
+};
+
+export function memorySubjectResolutionGloss(value: string): string {
+  return (
+    MEMORY_SUBJECT_RESOLUTION[value] ??
+    'This build has no description for that subject resolution.'
+  );
+}
+
 /**
  * A reading for a key/value pair inside an extractor's `details` blob, where one exists.
  *

@@ -80,6 +80,17 @@ no repair. See `docs/reports/restart-recovery-report.md`.
 - **Delegation hit a session limit** mid-12c-ii Pass B, after the agent had delivered its report.
   Recorded as a process deviation; the orchestrator verified and continued directly. Delegation
   recovered afterwards.
+- **Delegation hit a *weekly* limit on 2026-08-10, resetting Aug 12 07:00 America/Los_Angeles**,
+  immediately after Slice 14a's agent had delivered its full report and verification. Slice 14a was
+  reviewed, corrected and committed by the orchestrator working directly. **Slices 14b–14d and
+  everything after them are orchestrator-direct until the limit resets** — five agents were killed
+  by limits across this project, and the recorded fallback (inspect, preserve, verify in the
+  orchestrator) applied every time without losing work.
+- **Brief every implementation agent on *why* it must not commit and must not edit `docs/`.** Two
+  agents in a row raised alarms about an "unexplained concurrent actor" mutating the repository
+  mid-run — which was the orchestrator committing their own work and recording their findings. The
+  caution was correct discipline given what they could see; the cost was avoidable, and one sentence
+  of context removes it.
 
 ## Slice 12c-i-a — the derived queries, the wording hoist, and a defect in the plan itself
 

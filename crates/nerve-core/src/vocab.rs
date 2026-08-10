@@ -2136,6 +2136,297 @@ impl FromStr for ContractFreshness {
     }
 }
 
+/// The lifecycle a human-confirmed memory record is **stored** in. Exactly four values.
+///
+/// **Stored and derived are different kinds, and this enum is only the stored half.** Row 14's
+/// first draft listed six "statuses", two of which it also said were never written; the acceptance
+/// criterion then required all six as statuses and contradicted the design it was checking. The
+/// query-time half is [`MemoryView`], and nothing may write one of those into this column — a
+/// derived value kept true by a writer needs the writer to be a query, which is the failure
+/// [`HistoryFreshness`] and Slice 7c-i's `Unverified` both exist to avoid.
+///
+/// [`MemoryStatus::Superseded`] and [`MemoryStatus::Invalidated`] are **not** the same fact.
+/// Superseded means something replaced it; invalidated means it stopped being true and nothing
+/// replaced it. Collapsing them loses *"what did we once believe and no longer do, with no
+/// successor"* — the question a returning human actually asks.
+///
+/// Added in Slice 14a. `memory.status`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MemoryStatus {
+    /// Written down and not yet confirmed by a human at the CLI.
+    Proposed,
+    /// Confirmed, and the current statement about its subject.
+    Active,
+    /// Replaced by a later record, which names this one through `supersedes_memory_id`.
+    Superseded,
+    /// It stopped being true and **nothing** replaced it. `invalidated_at` says when.
+    Invalidated,
+}
+
+impl MemoryStatus {
+    /// Every value, in declaration order.
+    pub const ALL: [MemoryStatus; 4] = [
+        MemoryStatus::Proposed,
+        MemoryStatus::Active,
+        MemoryStatus::Superseded,
+        MemoryStatus::Invalidated,
+    ];
+
+    /// Canonical lower-case name, stored in `memory.status`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MemoryStatus::Proposed => "proposed",
+            MemoryStatus::Active => "active",
+            MemoryStatus::Superseded => "superseded",
+            MemoryStatus::Invalidated => "invalidated",
+        }
+    }
+
+    /// What each stored status means, in words.
+    ///
+    /// The last two sentences are the ones that carry the design: each says what the *other* one
+    /// would have claimed, because the whole reason there are two of them is that a reader asked to
+    /// tell them apart from a single label cannot.
+    pub fn note(self) -> &'static str {
+        match self {
+            MemoryStatus::Proposed => {
+                "written down and not yet confirmed by a human at the command line — it is on \
+                 record, and nothing in this product treats it as settled"
+            }
+            MemoryStatus::Active => {
+                "confirmed, and the current statement about its subject. Whether it is still true \
+                 of the tree is a separate, query-time question, answered against the repository \
+                 state it was anchored to rather than stored as a score"
+            }
+            MemoryStatus::Superseded => {
+                "a later record replaced it, and that record names this one. The content is kept \
+                 unchanged: superseding rewrites nothing and deletes nothing, so what was once \
+                 believed stays readable"
+            }
+            MemoryStatus::Invalidated => {
+                "it stopped being true and nothing replaced it — which is a different fact from \
+                 being superseded, and the one a returning reader most often needs, because there \
+                 is no successor to read instead"
+            }
+        }
+    }
+}
+
+impl fmt::Display for MemoryStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for MemoryStatus {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        MemoryStatus::ALL
+            .into_iter()
+            .find(|v| v.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("MemoryStatus", s))
+    }
+}
+
+/// Qualifications computed over stored memory rows **at query time**, and never written down.
+///
+/// Three values, and the third is the point of the other two.
+///
+/// [`MemoryView::Conflicted`] as row 14 first drafted it fired on any two `active` records sharing
+/// a subject *"whose content the resolver cannot order"* — and the content is free prose, so a
+/// resolver can **never** order it, so every second note about a file became a contradiction. That
+/// is a claim manufactured by a rule rather than read off evidence, which is what
+/// `ADR_DESCRIBES_COMPONENT` was refused for. So a conflict now requires the two records to agree on
+/// repository, subject, scope **and `claim_key`** — a caller-supplied label naming *what question
+/// this record answers* — or on a human having said so outright.
+///
+/// [`MemoryView::MultipleActive`] is what the ungated rule was actually seeing: several notes about
+/// one subject, which is ordinary, and is reported as what it is rather than as a disagreement.
+///
+/// Added in Slice 14a. Derived, not stored: a probe writing any of these into `memory.status` fails
+/// a named test, and [`MemoryStatus`] is the stored vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MemoryView {
+    /// Active, and anchored to a repository state that is no longer the current one.
+    PotentiallyStale,
+    /// More than one active record answers the same named claim about the same subject.
+    Conflicted,
+    /// More than one active record is about the same subject in the same scope. Not a disagreement.
+    MultipleActive,
+}
+
+impl MemoryView {
+    /// Every value, in declaration order.
+    pub const ALL: [MemoryView; 3] = [
+        MemoryView::PotentiallyStale,
+        MemoryView::Conflicted,
+        MemoryView::MultipleActive,
+    ];
+
+    /// Canonical lower-case name, carried on responses that report a record's standing.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MemoryView::PotentiallyStale => "potentially_stale",
+            MemoryView::Conflicted => "conflicted",
+            MemoryView::MultipleActive => "multiple_active",
+        }
+    }
+
+    /// What each view means, in words.
+    ///
+    /// [`MemoryView::PotentiallyStale`] says *potentially*, and the sentence has to keep saying it:
+    /// the repository moving on is not evidence that a human's sentence stopped being true, and
+    /// rendering it as "stale" would turn a re-index into a contradiction of the human.
+    pub fn note(self) -> &'static str {
+        match self {
+            MemoryView::PotentiallyStale => {
+                "the repository has moved on from the state this record was anchored to, so it has \
+                 not been checked against what is there now. That is a reason to re-read it, not \
+                 evidence that it stopped being true — nothing here contradicts the human"
+            }
+            MemoryView::Conflicted => {
+                "more than one active record answers the same named claim about the same subject, \
+                 so two confirmed statements disagree. Nerve reports the disagreement and does not \
+                 resolve it: the content is prose, and choosing a winner would be inventing an \
+                 answer neither record gave"
+            }
+            MemoryView::MultipleActive => {
+                "several active records are about this subject, which is ordinary rather than a \
+                 contradiction — they answer no shared named claim, so nothing here says they \
+                 disagree"
+            }
+        }
+    }
+}
+
+impl fmt::Display for MemoryView {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for MemoryView {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        MemoryView::ALL
+            .into_iter()
+            .find(|v| v.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("MemoryView", s))
+    }
+}
+
+/// What became of the thing a memory record is about, decided when the record is read.
+///
+/// **A memory record holds a subject *snapshot*, never a foreign key into `entity`.** Entity rows
+/// are routinely deleted — `prune_orphans` issues `DELETE FROM entity` and
+/// `deleting_a_file_removes_its_entities_assertions_and_observations` pins that as required
+/// behaviour — so with `PRAGMA foreign_keys=ON` a foreign key would leave two outcomes and both are
+/// unacceptable: the delete is refused, so a human note about a file blocks re-indexing that file;
+/// or the delete cascades, so a routine re-index silently destroys the note. The snapshot is what
+/// lets a subject that is gone still be **named**, and this vocabulary is what says so out loud
+/// instead of returning nothing.
+///
+/// [`MemorySubjectResolution::ResolvedThroughIdentityLink`] is the value that earns the design.
+/// Nerve already records a move as an `identity_link`, so a note about a file that moved can often
+/// still be attached honestly — **but only because a link says so.** No name similarity, no path
+/// heuristic: `CLAUDE.md` §3 forbids establishing identity by fuzzy matching, and a subject
+/// re-attached by resemblance would silently transfer a human's sentence onto a different file.
+///
+/// [`MemorySubjectResolution::RepositoryStateUnavailable`] is not a kind of missing. It says Nerve
+/// has no indexed state to check the subject against, so *"the subject is gone"* has not been
+/// established and must not be reported — the same `Stale` / `Unverified` separation Slice 7c-i
+/// made, one table over.
+///
+/// Added in Slice 14a. Derived, not stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MemorySubjectResolution {
+    /// The snapshot's entity id is in the current index. The record attaches to it directly.
+    Resolved,
+    /// The snapshot's entity is gone and an `identity_link` names exactly one live successor.
+    ResolvedThroughIdentityLink,
+    /// The snapshot's entity is gone and no link reaches a live one. The record is still readable.
+    Missing,
+    /// More than one live successor is linked, and none of them is preferred over another.
+    Ambiguous,
+    /// There is no indexed repository state to check the subject against. Unknown, not missing.
+    RepositoryStateUnavailable,
+}
+
+impl MemorySubjectResolution {
+    /// Every value, in declaration order.
+    pub const ALL: [MemorySubjectResolution; 5] = [
+        MemorySubjectResolution::Resolved,
+        MemorySubjectResolution::ResolvedThroughIdentityLink,
+        MemorySubjectResolution::Missing,
+        MemorySubjectResolution::Ambiguous,
+        MemorySubjectResolution::RepositoryStateUnavailable,
+    ];
+
+    /// Canonical lower-case name, carried on every response that reports a record's subject.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MemorySubjectResolution::Resolved => "resolved",
+            MemorySubjectResolution::ResolvedThroughIdentityLink => {
+                "resolved_through_identity_link"
+            }
+            MemorySubjectResolution::Missing => "missing",
+            MemorySubjectResolution::Ambiguous => "ambiguous",
+            MemorySubjectResolution::RepositoryStateUnavailable => "repository_state_unavailable",
+        }
+    }
+
+    /// What each verdict means, in words.
+    ///
+    /// Every sentence says the record is still readable, because that is the property the whole
+    /// snapshot design exists to give: the note outlives its subject.
+    pub fn note(self) -> &'static str {
+        match self {
+            MemorySubjectResolution::Resolved => {
+                "the subject this record names is in the current index, so the note attaches to it \
+                 directly"
+            }
+            MemorySubjectResolution::ResolvedThroughIdentityLink => {
+                "the subject moved, and a recorded identity link names exactly one successor — so \
+                 the note attaches because a link says so, never because two names looked alike"
+            }
+            MemorySubjectResolution::Missing => {
+                "the subject is no longer in the index and no link reaches a successor. The record \
+                 is kept and still readable: it holds a snapshot of what it was written about, \
+                 which is why a re-index that pruned the subject could not destroy it"
+            }
+            MemorySubjectResolution::Ambiguous => {
+                "more than one live successor is linked from the subject, and none is promoted over \
+                 another — every candidate is reported, because choosing one would be establishing \
+                 identity Nerve was not given"
+            }
+            MemorySubjectResolution::RepositoryStateUnavailable => {
+                "there is no indexed repository state to check the subject against, so whether it \
+                 is still there is unknown rather than answered. The record is readable; reporting \
+                 unknown as missing would be claiming a deletion nothing observed"
+            }
+        }
+    }
+}
+
+impl fmt::Display for MemorySubjectResolution {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for MemorySubjectResolution {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        MemorySubjectResolution::ALL
+            .into_iter()
+            .find(|v| v.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("MemorySubjectResolution", s))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3439,5 +3730,223 @@ mod tests {
         let before = notes.len();
         notes.dedup();
         assert_eq!(notes.len(), before, "two freshness situations share prose");
+    }
+
+    // ---- Slice 14a: the memory vocabularies --------------------------------------------------
+
+    /// **Four stored statuses, and the two derived vocabularies are not among them.**
+    ///
+    /// The plan's first draft listed six "statuses" of which two were also declared never stored,
+    /// so its own acceptance criterion contradicted its design. The split is the correction, and
+    /// this is where it is enforced: no [`MemoryView`] name may parse as a [`MemoryStatus`], which
+    /// is what makes "derived, never stored" checkable rather than asserted.
+    #[test]
+    fn the_stored_memory_lifecycle_is_four_values_and_holds_no_derived_view() {
+        let pinned: [(MemoryStatus, &str); 4] = [
+            (MemoryStatus::Proposed, "proposed"),
+            (MemoryStatus::Active, "active"),
+            (MemoryStatus::Superseded, "superseded"),
+            (MemoryStatus::Invalidated, "invalidated"),
+        ];
+        for (value, name) in pinned {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<MemoryStatus>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+            assert!(!value.note().is_empty());
+        }
+        let mut listed: Vec<MemoryStatus> = pinned.iter().map(|(value, _)| *value).collect();
+        listed.sort_unstable();
+        let mut all = MemoryStatus::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a memory status was added to the stored vocabulary without a name above"
+        );
+        assert_eq!(MemoryStatus::ALL.len(), 4);
+
+        // The derived views are not storable statuses. A writer that reached for one gets an
+        // error from `FromStr` rather than a column quietly holding a query's opinion.
+        for derived in MemoryView::ALL {
+            assert!(
+                derived.as_str().parse::<MemoryStatus>().is_err(),
+                "`{derived}` parsed as a stored MemoryStatus"
+            );
+        }
+        for absent in ["stale", "confirmed", "deleted", "removed", ""] {
+            assert!(
+                absent.parse::<MemoryStatus>().is_err(),
+                "{absent:?} parsed as a MemoryStatus"
+            );
+        }
+
+        // Superseded is not invalidated, and each sentence says what the other would have claimed.
+        assert_ne!(MemoryStatus::Superseded, MemoryStatus::Invalidated);
+        let superseded = MemoryStatus::Superseded.note();
+        assert!(
+            superseded.contains("later record replaced it"),
+            "{superseded}"
+        );
+        let invalidated = MemoryStatus::Invalidated.note();
+        assert!(invalidated.contains("nothing replaced it"), "{invalidated}");
+
+        // No two statuses share a sentence.
+        let mut notes: Vec<&str> = MemoryStatus::ALL.iter().map(|v| v.note()).collect();
+        notes.sort_unstable();
+        let before = notes.len();
+        notes.dedup();
+        assert_eq!(notes.len(), before, "two memory statuses share prose");
+    }
+
+    /// **A shared subject is not a contradiction, and the prose has to say so.**
+    ///
+    /// `conflicted` and `multiple_active` are the two a reader will file under one another, and the
+    /// difference between them is the whole reason `claim_key` exists: without it the conflict rule
+    /// fires on any two notes about one file, which is a disagreement the evidence — two English
+    /// sentences — cannot support.
+    #[test]
+    fn the_derived_memory_views_keep_a_shared_subject_apart_from_a_disagreement() {
+        let pinned: [(MemoryView, &str); 3] = [
+            (MemoryView::PotentiallyStale, "potentially_stale"),
+            (MemoryView::Conflicted, "conflicted"),
+            (MemoryView::MultipleActive, "multiple_active"),
+        ];
+        for (value, name) in pinned {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<MemoryView>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+            assert!(!value.note().is_empty());
+        }
+        let mut listed: Vec<MemoryView> = pinned.iter().map(|(value, _)| *value).collect();
+        listed.sort_unstable();
+        let mut all = MemoryView::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a derived memory view was added without a name above"
+        );
+
+        // The stored statuses are not views either: the separation holds in both directions.
+        for stored in MemoryStatus::ALL {
+            assert!(
+                stored.as_str().parse::<MemoryView>().is_err(),
+                "`{stored}` parsed as a derived MemoryView"
+            );
+        }
+
+        // `multiple_active` must say it is ordinary; `conflicted` must say Nerve does not resolve
+        // it. Between them that is the corrected §3, stated to the reader rather than only to the
+        // schema.
+        let several = MemoryView::MultipleActive.note();
+        assert!(several.contains("ordinary"), "{several}");
+        assert!(several.contains("no shared named claim"), "{several}");
+        let conflicted = MemoryView::Conflicted.note();
+        assert!(conflicted.contains("same named claim"), "{conflicted}");
+        assert!(conflicted.contains("does not resolve it"), "{conflicted}");
+
+        // And `potentially_stale` must keep saying *potentially*: a re-index is not a refutation.
+        let stale = MemoryView::PotentiallyStale.note();
+        assert!(
+            stale.contains("not evidence that it stopped being true"),
+            "{stale}"
+        );
+
+        let mut notes: Vec<&str> = MemoryView::ALL.iter().map(|v| v.note()).collect();
+        notes.sort_unstable();
+        let before = notes.len();
+        notes.dedup();
+        assert_eq!(notes.len(), before, "two memory views share prose");
+    }
+
+    /// **Five verdicts, and `missing` is never the answer to "I could not check".**
+    ///
+    /// The link verdict is the one that earns the snapshot design, and its sentence has to say the
+    /// attachment came from a recorded link rather than from two names looking alike — `CLAUDE.md`
+    /// §3 forbids the second, and a reader cannot tell which happened from the value alone.
+    #[test]
+    fn every_memory_subject_verdict_says_the_record_is_still_readable() {
+        let pinned: [(MemorySubjectResolution, &str); 5] = [
+            (MemorySubjectResolution::Resolved, "resolved"),
+            (
+                MemorySubjectResolution::ResolvedThroughIdentityLink,
+                "resolved_through_identity_link",
+            ),
+            (MemorySubjectResolution::Missing, "missing"),
+            (MemorySubjectResolution::Ambiguous, "ambiguous"),
+            (
+                MemorySubjectResolution::RepositoryStateUnavailable,
+                "repository_state_unavailable",
+            ),
+        ];
+        for (value, name) in pinned {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<MemorySubjectResolution>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+            assert!(!value.note().is_empty());
+        }
+        let mut listed: Vec<MemorySubjectResolution> =
+            pinned.iter().map(|(value, _)| *value).collect();
+        listed.sort_unstable();
+        let mut all = MemorySubjectResolution::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a subject verdict was added to the vocabulary without a name above"
+        );
+
+        // The link path says a link established it, and refuses the alternative by name.
+        let linked = MemorySubjectResolution::ResolvedThroughIdentityLink.note();
+        assert!(linked.contains("identity link"), "{linked}");
+        assert!(
+            linked.contains("never because two names looked alike"),
+            "{linked}"
+        );
+
+        // Unknown is not missing, and the sentence says which one is being claimed.
+        assert_ne!(
+            MemorySubjectResolution::RepositoryStateUnavailable,
+            MemorySubjectResolution::Missing
+        );
+        let unknown = MemorySubjectResolution::RepositoryStateUnavailable.note();
+        assert!(
+            unknown.contains("unknown rather than answered"),
+            "{unknown}"
+        );
+        assert!(
+            unknown.contains("claiming a deletion nothing observed"),
+            "{unknown}"
+        );
+
+        // A subject that is gone is still nameable, which is the property the snapshot exists for.
+        let missing = MemorySubjectResolution::Missing.note();
+        assert!(missing.contains("still readable"), "{missing}");
+        assert!(missing.contains("snapshot"), "{missing}");
+
+        for absent in ["renamed", "moved", "guessed", "similar", ""] {
+            assert!(
+                absent.parse::<MemorySubjectResolution>().is_err(),
+                "{absent:?} parsed as a MemorySubjectResolution"
+            );
+        }
+
+        let mut notes: Vec<&str> = MemorySubjectResolution::ALL
+            .iter()
+            .map(|v| v.note())
+            .collect();
+        notes.sort_unstable();
+        let before = notes.len();
+        notes.dedup();
+        assert_eq!(notes.len(), before, "two subject verdicts share prose");
     }
 }

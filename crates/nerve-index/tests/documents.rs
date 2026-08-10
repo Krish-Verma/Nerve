@@ -367,11 +367,12 @@ fn a_real_v3_database_migrates_to_exactly_what_the_current_build_produces() {
         // against a table that already exists. Both should be — a migration that tolerated
         // re-application would hide a real double-apply. So the downgrade has to be a real one.
         //
-        // The v6, v7 and v8 tables go in dependency order: `git_change`, `git_rename_hypothesis`
-        // and v7's `git_rename_analysis` carry a foreign key onto `git_commit`, and v8's
-        // `contract_link` carries one onto `repo_registry`, so dropping either parent first would
-        // leave a table referencing a table that is gone. v7's `summary_truncation` column goes
-        // with `git_commit` itself, so there is no separate column to rewind.
+        // The v6, v7, v8 and v9 tables go in dependency order: `git_change`,
+        // `git_rename_hypothesis` and v7's `git_rename_analysis` carry a foreign key onto
+        // `git_commit`, v8's `contract_link` carries one onto `repo_registry`, and v9's
+        // `memory_citation` and `memory_event` each carry one onto `memory`, so dropping any parent
+        // first would leave a table referencing a table that is gone. v7's `summary_truncation`
+        // column goes with `git_commit` itself, so there is no separate column to rewind.
         conn.execute("DELETE FROM schema_version WHERE version >= 4", [])
             .unwrap();
         conn.execute("ALTER TABLE module_facts DROP COLUMN framework_version", [])
@@ -384,6 +385,9 @@ fn a_real_v3_database_migrates_to_exactly_what_the_current_build_produces() {
             "git_commit",
             "contract_link",
             "repo_registry",
+            "memory_citation",
+            "memory_event",
+            "memory",
         ] {
             conn.execute(&format!("DROP TABLE {table}"), []).unwrap();
         }

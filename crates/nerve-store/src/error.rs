@@ -29,6 +29,14 @@ pub enum StoreError {
         supported: i64,
     },
 
+    /// A memory operation was asked for something the stored rows cannot support.
+    ///
+    /// Distinct from [`StoreError::Sqlite`] because these are refusals the *schema* cannot state:
+    /// superseding a record that was invalidated, or a supersession whose successor names no
+    /// predecessor. A `CHECK` sees one row and cannot reach either fact.
+    #[error("memory: {0}")]
+    Memory(String),
+
     /// Filesystem operation around the database file failed.
     #[error("io: {0}")]
     Io(#[from] std::io::Error),

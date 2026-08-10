@@ -1,5 +1,5 @@
 //! Schema v1 (ADR-0003), v2 (Slice 3), v3 (Slice 3b), v4 (Slice 5d-i), v5 (Slice 10a),
-//! v6 (Slice 12b), v7 (Slice 12c-ii), v8 (Slice 13a-i), and migrations.
+//! v6 (Slice 12b), v7 (Slice 12c-ii), v8 (Slice 13a-i), v9 (Slice 14a), and migrations.
 //!
 //! Migrations are append-only. `V1` is immutable: a database written by an older build must be
 //! upgradable by replaying the later steps, so editing an already-shipped step in place would
@@ -12,7 +12,7 @@ use nerve_core::ids;
 use crate::error::{Result, StoreError};
 
 /// The schema version this build writes and understands.
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 /// Human-readable description recorded in `schema_version`.
 pub const SCHEMA_V1_DESCRIPTION: &str =
@@ -52,6 +52,11 @@ pub const SCHEMA_V7_DESCRIPTION: &str =
 pub const SCHEMA_V8_DESCRIPTION: &str =
     "Slice 13a-i: repo_registry and contract_link — one repository's stated view of its \
      neighbours, with the target recorded as a snapshot because it lives in another database";
+
+/// Human-readable description recorded in `schema_version` for the Slice 14a upgrade.
+pub const SCHEMA_V9_DESCRIPTION: &str =
+    "Slice 14a: memory, memory_citation and memory_event — human-confirmed project memory, with \
+     the subject recorded as a snapshot because entity rows are routinely pruned";
 
 const V1: &str = r#"
 CREATE TABLE repository (
@@ -705,6 +710,236 @@ CREATE UNIQUE INDEX idx_contract_link_identity ON contract_link(
 CREATE INDEX idx_contract_link_registry ON contract_link(repo_id, registry_entry_id, status);
 "#;
 
+/// Schema v9 — Slice 14a. Three new tables, no `ALTER` of any existing one.
+///
+/// # `memory.subject_entity_id_snapshot` is deliberately **not** a foreign key
+///
+/// This is the correction row 14 was rewritten for, and it is mechanical rather than a matter of
+/// taste. `entity` rows are **routinely deleted**: [`crate::prune::prune_orphans`] issues
+/// `DELETE FROM entity WHERE …` (`prune.rs:376`, and again scoped at `:440`), and
+/// `deleting_a_file_removes_its_entities_assertions_and_observations`
+/// (`nerve-index/tests/incremental.rs:290`) pins that as required behaviour. With
+/// `PRAGMA foreign_keys=ON` set on every connection (`db.rs:37`), a memory row holding a foreign key
+/// into `entity` leaves exactly two outcomes and both are unacceptable:
+///
+/// - **the delete is refused** — a human note about a file now blocks re-indexing that file, so
+///   writing memory would break indexing; or
+/// - **the delete cascades** — a routine re-index silently destroys the human's note, which is the
+///   one thing a memory feature must never do.
+///
+/// So memory stores a **snapshot of its subject** and resolves the live one at query time, reporting
+/// `resolved` · `resolved_through_identity_link` · `missing` · `ambiguous` ·
+/// `repository_state_unavailable` (`nerve_core::vocab::MemorySubjectResolution`). The snapshot is
+/// what lets a pruned subject still be *named*: without the kind, name, path and selector the
+/// human used, a record whose subject is gone would be a note about nothing.
+///
+/// `contract_link` took exactly this shape at [`V8`] for exactly this reason, one table over. The
+/// difference is which constraint is impossible: there the target lives in another database, here
+/// the subject lives in a table this database prunes.
+///
+/// **`memory_citation` gets the identical treatment**, because a citation into a pruned entity has
+/// the identical problem. `cited_entity_id_snapshot` is nullable — a citation may name a path and a
+/// span with no entity at all — and the `CHECK` refuses an entity id with no snapshot beside it,
+/// which is the dangling pointer [`V8`]'s equivalent `CHECK` exists to prevent.
+///
+/// # What *is* a foreign key here, and why
+///
+/// `repo_id`, `anchor_state_id` and `cited_at_state` are real foreign keys, because nothing deletes
+/// `repository` or `repository_state` — no statement in this crate does, and the state a record was
+/// anchored to is the thing query-time staleness is measured against, so a dangling anchor would
+/// make `potentially_stale` unanswerable rather than merely imprecise.
+///
+/// `memory_citation` and `memory_event` carry composite foreign keys onto `(repo_id, memory_id)`,
+/// and `memory.supersedes_memory_id` carries one onto the same pair. Those are safe *because
+/// nothing deletes a memory row*: there is no `nerve memory delete`, and the row's retirement is a
+/// status plus a timestamp in the manner of [`V8`]'s tombstones. The composite form also states
+/// something worth stating — a citation, an event or a supersession may not cross repositories.
+///
+/// # Supersession is stored in **one** direction
+///
+/// The plan's sketch had both `supersedes` and `superseded_by`. Two independently writable
+/// directions of one fact can disagree with nothing in the schema to notice — the "two writable
+/// copies of one fact" row 13 §4.1 already rejected for cross-repository links. Only
+/// `supersedes_memory_id` exists; the inverse is a query. `idx_memory_supersedes` is unique, so at
+/// most one record supersedes any given record and the derived inverse is single-valued rather than
+/// a set a reader would have to interpret.
+///
+/// The `CHECK` refuses a record that supersedes itself, which would otherwise be a cycle of length
+/// one that every walk of the chain has to defend against. Longer cycles are **not** refused here
+/// and cannot be: a `CHECK` sees one row. They are detected and reported by the read model, in the
+/// manner supersession cycles are already *detected, counted and never suppressed*.
+///
+/// # `status` holds four values and none of them is derived
+///
+/// `proposed` · `active` · `superseded` · `invalidated` (`nerve_core::vocab::MemoryStatus`).
+/// `potentially_stale`, `conflicted` and `multiple_active` are `MemoryView`s computed at read time
+/// and never written: keeping a stored copy true would need a writer, and the writer would be a
+/// query. The vocabulary is closed in Rust rather than in SQL, as it is for every other vocabulary
+/// column in this schema; what the `CHECK`s enforce is the *correlation* between a status and its
+/// timestamps, which is the part a vocabulary cannot state.
+///
+/// # `author_label` is a local label, not an identity
+///
+/// Nerve has no accounts, no network and no identity provider. The column records what the caller
+/// said it was and nothing verified it, which is why it is named `author_label` rather than
+/// `author`: a field called `author` in a product with no accounts invites being read as
+/// authentication. Untrusted string on T7's terms, exactly like `repo_registry.display_name`.
+///
+/// # `memory_event` is append-only, and that is enforced by there being no writer
+///
+/// No `DELETE` and no `UPDATE` statement against `memory_event` exists in the workspace, and a
+/// source scan asserts it. The alternative — a `BEFORE DELETE … RAISE(ABORT)` trigger — was
+/// considered and declined: it would state the same thing less directly (a trigger can be dropped
+/// by a later migration, and a scan cannot be satisfied by anything except the absence of the code),
+/// and it would make any future whole-database purge require a v10 migration to remove it. The
+/// guarantee this row needs is *"no code path deletes an event"*, which the scan says outright.
+///
+/// `operation` is an **open** string, deliberately. Slice 14a is storage; the lifecycle commands
+/// that name the operations are 14b's, and inventing a closed vocabulary here would pin names to
+/// verbs that do not exist yet. `from_status` is `NULL` on the event that created a record and set
+/// on every later one; a status-preserving event (a citation added to an active record) is
+/// legitimate and is not refused.
+///
+/// No `IF NOT EXISTS`: no permanent table in this schema has it, and a migration that tolerated
+/// re-application would hide a real double-apply.
+const V9: &str = r#"
+CREATE TABLE memory (
+    memory_id                  TEXT NOT NULL,
+    repo_id                    TEXT NOT NULL REFERENCES repository(repo_id),
+
+    -- The subject, as it was when the human wrote it. NONE of these is a foreign key, and that is
+    -- the point of this table: entity rows are pruned on re-index, and a note must outlive its
+    -- subject. Contrast assertion.source_entity_id at schema.rs:97, which IS one.
+    subject_entity_id_snapshot TEXT NOT NULL,
+    subject_kind_snapshot      TEXT NOT NULL,
+    subject_name_snapshot      TEXT NOT NULL,
+    subject_path_snapshot      TEXT NOT NULL,   -- '' for the repository entity, which is no file
+    subject_selector_snapshot  TEXT NOT NULL,   -- how the human named it, kept verbatim
+    anchor_state_id            TEXT NOT NULL REFERENCES repository_state(state_id),
+
+    scope                      TEXT NOT NULL,   -- caller-supplied grouping label, never interpreted
+    claim_key                  TEXT,            -- NULL means this record answers no named claim
+
+    content                    TEXT NOT NULL,   -- the human's own sentence, never rewritten
+    author_label               TEXT NOT NULL,   -- a LOCAL LABEL, NOT AN IDENTITY (T7)
+    created_at                 TEXT NOT NULL,
+
+    status                     TEXT NOT NULL,   -- closed vocabulary: MemoryStatus, four values
+    supersedes_memory_id       TEXT,            -- one direction only; the inverse is derived
+
+    invalidated_at             TEXT,
+    invalidation_reason        TEXT,
+
+    PRIMARY KEY (repo_id, memory_id),
+    FOREIGN KEY (repo_id, supersedes_memory_id) REFERENCES memory(repo_id, memory_id),
+
+    -- **The four stored statuses, enumerated here and not only in Rust.** This schema usually closes
+    -- a vocabulary in `nerve-core` and stores the text (V4's doc comment states that), and the usual
+    -- way is right when the column merely *names* a value. It is wrong here, because an invariant
+    -- rests on the column's domain: `potentially_stale`, `conflicted` and `multiple_active` are
+    -- **derived at query time and must never be stored**, and a vocabulary closed only in Rust
+    -- leaves a raw-SQL writer free to store one. It would then fail on the next read through
+    -- `MemoryStatus::FromStr` -- loudly, but *after* the row is on disk, which is a repair job
+    -- rather than a refusal.
+    --
+    -- V7's `git_rename_hypothesis` set this precedent: it enumerates 'exact_content' and
+    -- 'similar_content' in SQL precisely because an invariant -- evidence is never blended --
+    -- depended on the domain rather than on the spelling. The cost is stated: a fifth *stored*
+    -- status needs a table rebuild in a later migration. That is the intended price. A fifth stored
+    -- status is a change to what a memory record can be, and it should not be reachable by adding a
+    -- Rust variant and finding the database already accepted it.
+    CHECK (status IN ('proposed', 'active', 'superseded', 'invalidated')),
+    -- An ending is a status and a moment. A record that says it stopped being true without saying
+    -- when cannot be reported as having ended, and a live record carrying an ending contradicts
+    -- itself -- the pairing repo_registry's tombstone CHECK refuses, one table over.
+    CHECK (
+        (status =  'invalidated' AND invalidated_at IS NOT NULL)
+     OR (status <> 'invalidated' AND invalidated_at IS NULL)
+    ),
+    -- A reason for an ending that never happened is not a fact about anything.
+    CHECK (invalidation_reason IS NULL OR invalidated_at IS NOT NULL),
+    -- A record cannot replace itself: that is a cycle of length one, and the only cycle a CHECK
+    -- can see. Longer ones are detected by the read model rather than refused here.
+    CHECK (supersedes_memory_id IS NULL OR supersedes_memory_id <> memory_id),
+    -- An empty claim key is not a claim key. It would silently gather every keyless record into
+    -- one competing claim and report ordinary notes as contradictions.
+    CHECK (claim_key IS NULL OR claim_key <> ''),
+    -- A row that names nothing, is about nothing, or says nothing. `subject_path_snapshot` is
+    -- deliberately absent: the repository entity has no file path and records '' honestly.
+    CHECK (
+        memory_id <> '' AND subject_entity_id_snapshot <> '' AND subject_kind_snapshot <> ''
+        AND subject_name_snapshot <> '' AND subject_selector_snapshot <> ''
+        AND scope <> '' AND content <> '' AND author_label <> '' AND status <> ''
+    )
+);
+
+CREATE INDEX idx_memory_subject ON memory(repo_id, subject_entity_id_snapshot, status);
+CREATE INDEX idx_memory_scope   ON memory(repo_id, scope, status);
+
+-- The grouping a conflict is decided over: repository + subject + scope + claim_key. Partial,
+-- because a record with no claim key competes with nothing and belongs in no claim group.
+CREATE INDEX idx_memory_claim ON memory(repo_id, subject_entity_id_snapshot, scope, claim_key)
+    WHERE claim_key IS NOT NULL;
+
+-- One direction is stored, so the inverse must be a function rather than a set: at most one record
+-- may supersede any given record. Without this, "what replaced it" would have several answers and
+-- deriving the inverse would mean choosing between them.
+CREATE UNIQUE INDEX idx_memory_supersedes ON memory(repo_id, supersedes_memory_id)
+    WHERE supersedes_memory_id IS NOT NULL;
+
+CREATE TABLE memory_citation (
+    -- Surrogate key, in the manner of `observation` and `contract_link`: a citation has no
+    -- content-derived identity of its own, and the same passage may honestly be cited twice.
+    citation_id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id                  TEXT NOT NULL REFERENCES repository(repo_id),
+    memory_id                TEXT NOT NULL,
+
+    -- A SNAPSHOT, for the reason the subject is one: the cited entity may be pruned.
+    cited_entity_id_snapshot TEXT,             -- NULL when the citation names a place, not a thing
+    cited_kind_snapshot      TEXT,
+    cited_name_snapshot      TEXT,
+    cited_path_snapshot      TEXT NOT NULL,
+    cited_span_snapshot      TEXT,             -- 'start_line:end_line', or NULL for a whole file
+    cited_at_state           TEXT NOT NULL REFERENCES repository_state(state_id),
+    created_at               TEXT NOT NULL,
+
+    FOREIGN KEY (repo_id, memory_id) REFERENCES memory(repo_id, memory_id),
+
+    -- An entity id with no snapshot beside it is the dangling pointer this table exists to
+    -- prevent: once the entity is pruned there would be nothing left to name what was cited.
+    CHECK (
+        cited_entity_id_snapshot IS NULL
+     OR (cited_entity_id_snapshot <> ''
+            AND cited_kind_snapshot IS NOT NULL AND cited_kind_snapshot <> ''
+            AND cited_name_snapshot IS NOT NULL AND cited_name_snapshot <> '')
+    ),
+    -- A citation with no place is not a citation.
+    CHECK (cited_path_snapshot <> '' AND (cited_span_snapshot IS NULL OR cited_span_snapshot <> ''))
+);
+
+CREATE INDEX idx_memory_citation_memory ON memory_citation(repo_id, memory_id);
+CREATE INDEX idx_memory_citation_path   ON memory_citation(repo_id, cited_path_snapshot);
+
+CREATE TABLE memory_event (
+    event_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id     TEXT NOT NULL REFERENCES repository(repo_id),
+    memory_id   TEXT NOT NULL,
+    at          TEXT NOT NULL,
+    operation   TEXT NOT NULL,   -- open string: 14b's commands own the verbs
+    from_status TEXT,            -- NULL on the event that created the record
+    to_status   TEXT NOT NULL,
+    note        TEXT,
+
+    FOREIGN KEY (repo_id, memory_id) REFERENCES memory(repo_id, memory_id),
+
+    -- An event that names no operation, no moment or no resulting status records nothing.
+    CHECK (at <> '' AND operation <> '' AND to_status <> ''),
+    CHECK (from_status IS NULL OR from_status <> '')
+);
+
+CREATE INDEX idx_memory_event_memory ON memory_event(repo_id, memory_id, event_id);
+"#;
+
 /// One migration step. Almost all of them are SQL; v3 is not, because it must recompute a
 /// BLAKE3 digest and SQLite has no such function.
 enum Step {
@@ -717,7 +952,7 @@ enum Step {
 /// Migration steps, in application order: `(version, description, step)`.
 ///
 /// Appending to this list is how the schema evolves. Editing an existing entry is prohibited.
-const MIGRATIONS: [(i64, &str, Step); 8] = [
+const MIGRATIONS: [(i64, &str, Step); 9] = [
     (1, SCHEMA_V1_DESCRIPTION, Step::Sql(V1)),
     (2, SCHEMA_V2_DESCRIPTION, Step::Sql(V2)),
     (3, SCHEMA_V3_DESCRIPTION, Step::Rust(migrate_v3)),
@@ -726,6 +961,7 @@ const MIGRATIONS: [(i64, &str, Step); 8] = [
     (6, SCHEMA_V6_DESCRIPTION, Step::Sql(V6)),
     (7, SCHEMA_V7_DESCRIPTION, Step::Sql(V7)),
     (8, SCHEMA_V8_DESCRIPTION, Step::Sql(V8)),
+    (9, SCHEMA_V9_DESCRIPTION, Step::Sql(V9)),
 ];
 
 /// Apply [`V3`], then restate every `occurrence_id` under the ADR-0006 tuple.

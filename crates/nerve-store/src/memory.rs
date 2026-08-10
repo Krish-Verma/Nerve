@@ -1,0 +1,874 @@
+//! Human-confirmed project memory: `memory`, `memory_citation` and `memory_event`
+//! (schema v9, Slice 14a).
+//!
+//! These three tables are **not** part of the evidence graph and are deliberately absent from the
+//! canonical dump. A memory record is a human sentence *about* one subject, which is not the shape
+//! of an `assertion`: an assertion is a relation between two entities, and `assertion_state` is
+//! defined as a pure function of machine observations. Putting a human's sentence in that table
+//! would be *"an unstructured agent-memory store that silently becomes truth"*, arrived at through
+//! the schema instead of through a feature — so memory is offered *beside* evidence and never mixed
+//! into it, the same placement decision `git_commit` took in 12b and `contract_link` in 13a-i.
+//! [`crate::schema`]'s `V9` doc comment carries the argument beside the DDL.
+//!
+//! **No `EvidenceSourceType`, no `Relation`, no row in `assertion_state`.** Inventing a relation for
+//! this (`HUMAN_NOTED_ABOUT`) would repeat the mistake `ADR_DESCRIBES_COMPONENT` was refused for.
+//! The invariant is stated as a test rather than as a convention: `assertion`, `observation`,
+//! `occurrence` and `assertion_state` are byte-identical across every operation in this module.
+//!
+//! Five properties of this module are load-bearing.
+//!
+//! 1. **A record's subject is a snapshot, never a live pointer.** `entity` rows are pruned on every
+//!    re-index ([`crate::prune::prune_orphans`], `prune.rs:376`), so a foreign key would either
+//!    block re-indexing a file a human wrote a note about, or let a routine re-index silently
+//!    destroy the note. The live subject is resolved at read time and the verdict is *reported* —
+//!    [`MemorySubjectResolution`] — never guessed.
+//! 2. **A moved subject re-attaches only when an `identity_link` says so.** `CLAUDE.md` §3 forbids
+//!    establishing identity by fuzzy name matching, and a subject re-attached by resemblance would
+//!    transfer a human's sentence onto a different file without saying it had.
+//! 3. **Supersession is stored in one direction.** `memory.supersedes_memory_id` is the only column
+//!    that holds it; [`superseded_by`] derives the inverse. Two independently writable directions of
+//!    one fact can disagree with nothing to notice — the shape row 13 §4.1 rejected.
+//! 4. **Nothing here deletes.** There is no delete verb, and `memory_event` is append-only: this
+//!    module contains no `DELETE` and no `UPDATE` against it, and a source scan asserts that.
+//! 5. **No lifecycle command lives here.** Confirming and invalidating are Slice 14b's, and this
+//!    module never authors an operation name — [`supersede_memory`] takes the caller's label,
+//!    because the store must not name the product's verbs.
+
+use std::collections::BTreeMap;
+
+use nerve_core::vocab::{MemoryStatus, MemorySubjectResolution, MemoryView};
+use rusqlite::{params, Connection, Row};
+
+use crate::error::{Result, StoreError};
+
+/// The subject of a memory record, as it was when the record was written.
+///
+/// **Every field is a copy, and none of them is a foreign key.** Together they are what lets a
+/// record whose subject has been pruned still *name* what it was about: without the kind, name,
+/// path and selector, a note about a deleted file would be a note about nothing.
+///
+/// `selector` is the string the human actually typed. It is kept verbatim rather than re-derived,
+/// because re-deriving it from the other fields would silently rewrite what the human asked about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemorySubject {
+    /// The subject's `entity_id` at the moment the record was written. **Not** a foreign key.
+    pub entity_id: String,
+    /// Its `EntityKind` then.
+    pub kind: String,
+    /// Its name then.
+    pub name: String,
+    /// Its repository-relative path then. Empty for the repository entity, which is no file.
+    pub path: String,
+    /// The selector the human named it with, verbatim.
+    pub selector: String,
+}
+
+/// One human-confirmed memory record.
+///
+/// `author_label` is a **local label, not an identity**. Nerve has no accounts, no network and no
+/// identity provider, so the column records what the caller said it was and nothing verified it.
+/// It is untrusted repository-adjacent content on T7's terms, exactly like
+/// [`crate::registry::RegistryEntryRow::display_name`].
+///
+/// `claim_key` is optional and it is what makes a conflict reportable. Only records agreeing on
+/// repository + subject + scope + `claim_key` may be reported [`MemoryView::Conflicted`]; records
+/// without one are [`MemoryView::MultipleActive`], because several notes about one file is ordinary
+/// and calling it a contradiction would be a claim the evidence — two English sentences — cannot
+/// support.
+///
+/// `status` holds one of exactly four stored values. `potentially_stale`, `conflicted` and
+/// `multiple_active` are [`MemoryView`]s computed by [`read_memory`] and never written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryRow {
+    /// Stable local id. Supplied by the caller, in the manner of `repo_registry.registry_id`.
+    pub memory_id: String,
+    /// What the record is about, as it was then.
+    pub subject: MemorySubject,
+    /// The repository state the record was confirmed against. A foreign key: nothing deletes one.
+    pub anchor_state_id: String,
+    /// A caller-supplied grouping label. The store never interprets it.
+    pub scope: String,
+    /// What named claim this record answers, if it answers one.
+    pub claim_key: Option<String>,
+    /// The human's own sentence. Never rewritten, including by supersession.
+    pub content: String,
+    /// What the caller said it was. **A label, not an identity.**
+    pub author_label: String,
+    /// When the record was written. Stamped by [`insert_memory`].
+    pub created_at: String,
+    /// The stored lifecycle. Four values.
+    pub status: MemoryStatus,
+    /// The record this one replaces. The **only** stored direction; the inverse is derived.
+    pub supersedes_memory_id: Option<String>,
+    /// When it stopped being true. `Some` exactly when `status` is [`MemoryStatus::Invalidated`].
+    pub invalidated_at: Option<String>,
+    /// Why it stopped being true, when a reason was given.
+    pub invalidation_reason: Option<String>,
+}
+
+/// One passage a memory record cites.
+///
+/// The **same durable-snapshot treatment as the subject**, for the identical reason: a citation into
+/// an entity that has since been pruned would otherwise be a dangling pointer with nothing left to
+/// name what was cited. `cited_entity_id_snapshot` is optional — a citation may name a path and a
+/// span and no entity at all — and the schema refuses an entity id that arrives without its
+/// snapshot beside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryCitationRow {
+    /// Surrogate key, assigned by SQLite. `None` before the row is written.
+    pub citation_id: Option<i64>,
+    /// The record that makes the citation.
+    pub memory_id: String,
+    /// The cited entity's id then, when the citation names a thing rather than only a place.
+    pub cited_entity_id: Option<String>,
+    /// Its kind then. Present exactly when `cited_entity_id` is.
+    pub cited_kind: Option<String>,
+    /// Its name then. Present exactly when `cited_entity_id` is.
+    pub cited_name: Option<String>,
+    /// Repository-relative path of the cited passage. Never empty.
+    pub cited_path: String,
+    /// Where in that file, as `start_line:end_line`, or `None` for a whole file.
+    pub cited_span: Option<String>,
+    /// The repository state the citation was taken at. A foreign key.
+    pub cited_at_state: String,
+    /// When the citation was recorded. Stamped by [`insert_memory_citation`].
+    pub created_at: String,
+}
+
+/// One entry in a record's audit history.
+///
+/// **Append-only, and never deleted — including on invalidation.** Nothing in this module updates or
+/// deletes a `memory_event` row, and that absence is the enforcement: a trigger was considered and
+/// declined because it can be dropped by a later migration, whereas a source scan for a `DELETE` or
+/// an `UPDATE` against this table cannot be satisfied by anything except the code not existing.
+///
+/// `operation` is an open string. Slice 14a is storage; the commands that name the operations are
+/// 14b's, and pinning a closed vocabulary here would fix verbs that do not exist yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryEventRow {
+    /// Surrogate key, assigned by SQLite. `None` before the row is written.
+    pub event_id: Option<i64>,
+    /// The record the event is about.
+    pub memory_id: String,
+    /// When it happened. Stamped by [`append_memory_event`].
+    pub at: String,
+    /// What was done, in the caller's own words.
+    pub operation: String,
+    /// The status before. `None` on the event that created the record.
+    pub from_status: Option<MemoryStatus>,
+    /// The status after. Equal to `from_status` for an event that changed no status.
+    pub to_status: MemoryStatus,
+    /// Anything the caller wanted recorded alongside.
+    pub note: Option<String>,
+}
+
+/// What became of a record's subject, and which live entity or entities it reaches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemorySubjectReport {
+    /// The verdict. Reported, never guessed.
+    pub resolution: MemorySubjectResolution,
+    /// The live entity ids the subject resolves to, ordered.
+    ///
+    /// One for [`MemorySubjectResolution::Resolved`] and
+    /// [`MemorySubjectResolution::ResolvedThroughIdentityLink`], several for
+    /// [`MemorySubjectResolution::Ambiguous`] — **every candidate, none promoted** — and empty for
+    /// the two verdicts that reach nothing.
+    pub live_entity_ids: Vec<String>,
+}
+
+/// One memory record with everything that is true of it *now*.
+///
+/// The stored row is `row`; everything else on this struct is computed by the read and stored
+/// nowhere. That split is the point of the type: a surface renders qualifications it did not have
+/// to keep true, and no writer exists that could let one go stale.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryReport {
+    /// The stored row, exactly as written.
+    pub row: MemoryRow,
+    /// What became of its subject.
+    pub subject: MemorySubjectReport,
+    /// Query-time qualifications, in [`MemoryView`] declaration order, without repeats.
+    pub views: Vec<MemoryView>,
+    /// The record that replaced this one, derived from the single stored direction.
+    pub superseded_by: Option<String>,
+    /// The repository state the record was compared against, or `None` if there is none.
+    pub current_state_id: Option<String>,
+}
+
+/// Every column of `memory`, in the order [`memory_from_row`] reads them.
+const MEMORY_COLUMNS: &str = "memory_id, subject_entity_id_snapshot, subject_kind_snapshot, \
+                              subject_name_snapshot, subject_path_snapshot, \
+                              subject_selector_snapshot, anchor_state_id, scope, claim_key, \
+                              content, author_label, created_at, status, supersedes_memory_id, \
+                              invalidated_at, invalidation_reason";
+
+fn memory_from_row(row: &Row<'_>) -> Result<MemoryRow> {
+    let status: String = row.get(12)?;
+    Ok(MemoryRow {
+        memory_id: row.get(0)?,
+        subject: MemorySubject {
+            entity_id: row.get(1)?,
+            kind: row.get(2)?,
+            name: row.get(3)?,
+            path: row.get(4)?,
+            selector: row.get(5)?,
+        },
+        anchor_state_id: row.get(6)?,
+        scope: row.get(7)?,
+        claim_key: row.get(8)?,
+        content: row.get(9)?,
+        author_label: row.get(10)?,
+        created_at: row.get(11)?,
+        status: status.parse()?,
+        supersedes_memory_id: row.get(13)?,
+        invalidated_at: row.get(14)?,
+        invalidation_reason: row.get(15)?,
+    })
+}
+
+/// Every column of `memory_citation`, in the order [`citation_from_row`] reads them.
+const CITATION_COLUMNS: &str = "citation_id, memory_id, cited_entity_id_snapshot, \
+                                cited_kind_snapshot, cited_name_snapshot, cited_path_snapshot, \
+                                cited_span_snapshot, cited_at_state, created_at";
+
+fn citation_from_row(row: &Row<'_>) -> Result<MemoryCitationRow> {
+    Ok(MemoryCitationRow {
+        citation_id: row.get(0)?,
+        memory_id: row.get(1)?,
+        cited_entity_id: row.get(2)?,
+        cited_kind: row.get(3)?,
+        cited_name: row.get(4)?,
+        cited_path: row.get(5)?,
+        cited_span: row.get(6)?,
+        cited_at_state: row.get(7)?,
+        created_at: row.get(8)?,
+    })
+}
+
+/// Every column of `memory_event`, in the order [`event_from_row`] reads them.
+const EVENT_COLUMNS: &str = "event_id, memory_id, at, operation, from_status, to_status, note";
+
+fn event_from_row(row: &Row<'_>) -> Result<MemoryEventRow> {
+    let from_status: Option<String> = row.get(4)?;
+    let to_status: String = row.get(5)?;
+    Ok(MemoryEventRow {
+        event_id: row.get(0)?,
+        memory_id: row.get(1)?,
+        at: row.get(2)?,
+        operation: row.get(3)?,
+        from_status: from_status.map(|value| value.parse()).transpose()?,
+        to_status: to_status.parse()?,
+        note: row.get(6)?,
+    })
+}
+
+// ---- writing -----------------------------------------------------------------------------------
+
+/// Record one memory. Returns the row as it was written, with `created_at` filled in.
+///
+/// **Plain `INSERT`, never `INSERT OR IGNORE`.** Slice 3b shipped a silent data-destruction bug in
+/// which `INSERT OR IGNORE` swallowed constraint violations and the process exited zero
+/// (`nerve-index/src/pipeline.rs:654-666`). A dropped memory row would read as a note the human
+/// never wrote, and memory is the only thing in this database that re-indexing cannot rebuild.
+///
+/// `created_at` is stamped here rather than supplied, in the manner of every other timestamp in this
+/// schema; [`MemoryRow::created_at`] is ignored on the way in and correct on the way out. Everything
+/// else is taken from the row, including `status`, so that a caller restoring an already-retired
+/// record can — the schema's `CHECK`s refuse the pairings that would make a status and its
+/// timestamps disagree.
+pub fn insert_memory(conn: &Connection, repo_id: &str, row: &MemoryRow) -> Result<MemoryRow> {
+    conn.execute(
+        "INSERT INTO memory
+             (memory_id, repo_id, subject_entity_id_snapshot, subject_kind_snapshot,
+              subject_name_snapshot, subject_path_snapshot, subject_selector_snapshot,
+              anchor_state_id, scope, claim_key, content, author_label, created_at, status,
+              supersedes_memory_id, invalidated_at, invalidation_reason)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                 strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?13, ?14, ?15, ?16)",
+        params![
+            row.memory_id,
+            repo_id,
+            row.subject.entity_id,
+            row.subject.kind,
+            row.subject.name,
+            row.subject.path,
+            row.subject.selector,
+            row.anchor_state_id,
+            row.scope,
+            row.claim_key,
+            row.content,
+            row.author_label,
+            row.status.as_str(),
+            row.supersedes_memory_id,
+            row.invalidated_at,
+            row.invalidation_reason,
+        ],
+    )?;
+    memory(conn, repo_id, &row.memory_id)?
+        .ok_or_else(|| StoreError::from(rusqlite::Error::QueryReturnedNoRows))
+}
+
+/// Record one citation. Returns its assigned `citation_id`.
+///
+/// The cited passage is stored as a snapshot for the reason the subject is: the entity may be
+/// pruned, and a citation that could no longer name what it cited would be worse than no citation.
+pub fn insert_memory_citation(
+    conn: &Connection,
+    repo_id: &str,
+    row: &MemoryCitationRow,
+) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO memory_citation
+             (repo_id, memory_id, cited_entity_id_snapshot, cited_kind_snapshot,
+              cited_name_snapshot, cited_path_snapshot, cited_span_snapshot, cited_at_state,
+              created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+        params![
+            repo_id,
+            row.memory_id,
+            row.cited_entity_id,
+            row.cited_kind,
+            row.cited_name,
+            row.cited_path,
+            row.cited_span,
+            row.cited_at_state,
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Append one event to a record's audit history. Returns its assigned `event_id`.
+///
+/// The only way anything is ever written to `memory_event`. There is no counterpart that removes or
+/// rewrites one: an audit history a later operation can edit is not an audit history, and *"history
+/// preserved"* stops being true the moment a delete verb exists.
+///
+/// `at` is stamped here; [`MemoryEventRow::at`] and [`MemoryEventRow::event_id`] are ignored on the
+/// way in.
+pub fn append_memory_event(conn: &Connection, repo_id: &str, row: &MemoryEventRow) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO memory_event
+             (repo_id, memory_id, at, operation, from_status, to_status, note)
+         VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?3, ?4, ?5, ?6)",
+        params![
+            repo_id,
+            row.memory_id,
+            row.operation,
+            row.from_status.map(|status| status.as_str()),
+            row.to_status.as_str(),
+            row.note,
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Write `successor` and retire the record it replaces, **in one transaction**.
+///
+/// The atomicity is the point rather than a convenience. A crash between the status change and the
+/// event append would leave a superseded record with no record of being superseded — a retirement
+/// that happened and cannot be reported, which is the failure the audit history exists to prevent.
+///
+/// Three refusals, and each is a fact the schema cannot reach on its own because a `CHECK` sees one
+/// row:
+///
+/// - a successor that names no predecessor is not a supersession;
+/// - a predecessor that is not in this repository does not exist for this call;
+/// - an **invalidated** predecessor may not be superseded. *"It stopped being true and nothing
+///   replaced it"* and *"this replaced it"* are contradictory claims about the same record, and
+///   accepting both would quietly turn one into the other.
+///
+/// Superseding an already-superseded record is refused by `idx_memory_supersedes` instead, as a
+/// uniqueness conflict: at most one record may replace any given record, which is what makes
+/// [`superseded_by`] single-valued.
+///
+/// `operation` is the caller's label for the event. The store does not author it — Slice 14a is
+/// storage, and naming the product's verbs is 14b's.
+pub fn supersede_memory(
+    conn: &Connection,
+    repo_id: &str,
+    successor: &MemoryRow,
+    operation: &str,
+    note: Option<&str>,
+) -> Result<MemoryRow> {
+    let predecessor_id = successor.supersedes_memory_id.clone().ok_or_else(|| {
+        StoreError::Memory(format!(
+            "{} supersedes nothing, so there is no record to retire",
+            successor.memory_id
+        ))
+    })?;
+
+    let tx = conn.unchecked_transaction()?;
+
+    let predecessor = memory(&tx, repo_id, &predecessor_id)?.ok_or_else(|| {
+        StoreError::Memory(format!(
+            "no memory record {predecessor_id} in this repository"
+        ))
+    })?;
+    if predecessor.status == MemoryStatus::Invalidated {
+        return Err(StoreError::Memory(format!(
+            "{predecessor_id} was invalidated, so nothing replaced it; superseding it now would \
+             turn one claim into the other"
+        )));
+    }
+
+    let written = insert_memory(&tx, repo_id, successor)?;
+
+    let changed = tx.execute(
+        "UPDATE memory SET status = ?3
+          WHERE repo_id = ?1 AND memory_id = ?2 AND status = ?4",
+        params![
+            repo_id,
+            predecessor_id,
+            MemoryStatus::Superseded.as_str(),
+            predecessor.status.as_str(),
+        ],
+    )?;
+    if changed == 0 {
+        return Err(StoreError::Memory(format!(
+            "{predecessor_id} changed status while it was being superseded"
+        )));
+    }
+
+    append_memory_event(
+        &tx,
+        repo_id,
+        &MemoryEventRow {
+            event_id: None,
+            memory_id: predecessor_id,
+            at: String::new(),
+            operation: operation.to_string(),
+            from_status: Some(predecessor.status),
+            to_status: MemoryStatus::Superseded,
+            note: note.map(str::to_string),
+        },
+    )?;
+
+    tx.commit()?;
+    Ok(written)
+}
+
+// ---- reading the stored rows -------------------------------------------------------------------
+
+/// One memory record by its id, whatever its status.
+///
+/// A retired record is returned like any other. Filtering one out here would make *"what did we once
+/// believe and no longer do"* unanswerable at exactly the moment it becomes the answer — the same
+/// rule [`crate::registry::registry_entry`] applies to a tombstone.
+pub fn memory(conn: &Connection, repo_id: &str, memory_id: &str) -> Result<Option<MemoryRow>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {MEMORY_COLUMNS} FROM memory WHERE repo_id = ?1 AND memory_id = ?2"
+    ))?;
+    let mut rows = stmt.query(params![repo_id, memory_id])?;
+    match rows.next()? {
+        Some(row) => Ok(Some(memory_from_row(row)?)),
+        None => Ok(None),
+    }
+}
+
+/// Every memory record in a repository, retired ones included, ordered by `memory_id`.
+pub fn list_memory(conn: &Connection, repo_id: &str) -> Result<Vec<MemoryRow>> {
+    collect_memory(
+        conn,
+        &format!("SELECT {MEMORY_COLUMNS} FROM memory WHERE repo_id = ?1 ORDER BY memory_id"),
+        params![repo_id],
+    )
+}
+
+/// Every record written about one subject, by the subject's **snapshot** id.
+///
+/// The lookup is on the snapshot rather than on a live entity, which is what makes it keep working
+/// after the subject is pruned. Callers holding a live entity id that the subject moved *to* will
+/// not find records written about the id it moved *from*; [`read_memory_for_subject`] reports the
+/// link verdict, and re-attaching by name is refused outright.
+pub fn memory_for_subject(
+    conn: &Connection,
+    repo_id: &str,
+    subject_entity_id: &str,
+) -> Result<Vec<MemoryRow>> {
+    collect_memory(
+        conn,
+        &format!(
+            "SELECT {MEMORY_COLUMNS} FROM memory
+              WHERE repo_id = ?1 AND subject_entity_id_snapshot = ?2 ORDER BY memory_id"
+        ),
+        params![repo_id, subject_entity_id],
+    )
+}
+
+/// Every record in one scope, ordered by `memory_id`.
+pub fn memory_in_scope(conn: &Connection, repo_id: &str, scope: &str) -> Result<Vec<MemoryRow>> {
+    collect_memory(
+        conn,
+        &format!(
+            "SELECT {MEMORY_COLUMNS} FROM memory
+              WHERE repo_id = ?1 AND scope = ?2 ORDER BY memory_id"
+        ),
+        params![repo_id, scope],
+    )
+}
+
+fn collect_memory(
+    conn: &Connection,
+    sql: &str,
+    args: impl rusqlite::Params,
+) -> Result<Vec<MemoryRow>> {
+    let mut stmt = conn.prepare(sql)?;
+    let mut rows = stmt.query(args)?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(memory_from_row(row)?);
+    }
+    Ok(out)
+}
+
+/// Every citation a record makes, ordered by `citation_id`.
+pub fn memory_citations(
+    conn: &Connection,
+    repo_id: &str,
+    memory_id: &str,
+) -> Result<Vec<MemoryCitationRow>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {CITATION_COLUMNS} FROM memory_citation
+          WHERE repo_id = ?1 AND memory_id = ?2 ORDER BY citation_id"
+    ))?;
+    let mut rows = stmt.query(params![repo_id, memory_id])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(citation_from_row(row)?);
+    }
+    Ok(out)
+}
+
+/// A record's whole audit history, oldest first.
+///
+/// Every event ever appended, including the ones that precede an invalidation. Nothing removes one,
+/// so this is the complete history by construction rather than by filtering.
+pub fn memory_events(
+    conn: &Connection,
+    repo_id: &str,
+    memory_id: &str,
+) -> Result<Vec<MemoryEventRow>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {EVENT_COLUMNS} FROM memory_event
+          WHERE repo_id = ?1 AND memory_id = ?2 ORDER BY event_id"
+    ))?;
+    let mut rows = stmt.query(params![repo_id, memory_id])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(event_from_row(row)?);
+    }
+    Ok(out)
+}
+
+/// The record that replaced this one, **derived** from the one stored direction.
+///
+/// There is no `superseded_by` column and there must not be: two independently writable directions
+/// of one fact can disagree with nothing in the schema to notice. `idx_memory_supersedes` is unique,
+/// so this query returns at most one row and the inverse is a function rather than a set.
+pub fn superseded_by(conn: &Connection, repo_id: &str, memory_id: &str) -> Result<Option<String>> {
+    let mut stmt = conn
+        .prepare("SELECT memory_id FROM memory WHERE repo_id = ?1 AND supersedes_memory_id = ?2")?;
+    let mut rows = stmt.query(params![repo_id, memory_id])?;
+    match rows.next()? {
+        Some(row) => Ok(Some(row.get(0)?)),
+        None => Ok(None),
+    }
+}
+
+// ---- the derived read --------------------------------------------------------------------------
+
+/// The repository state the database currently describes, if it describes one.
+///
+/// Read off the most recent extractor run, which is where [`crate::history::history_freshness`]
+/// reads it from too: since ADR-0006 no graph row carries a state, so there is nothing else to take
+/// it from. `None` means nothing has been indexed, and every subject verdict then becomes
+/// [`MemorySubjectResolution::RepositoryStateUnavailable`] rather than
+/// [`MemorySubjectResolution::Missing`] — unknown is not an absence.
+fn current_state_id(conn: &Connection, repo_id: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT s.state_id
+               FROM extractor_run r
+               JOIN repository_state s ON s.state_id = r.state_id
+              WHERE r.repo_id = ?1
+              ORDER BY r.run_id DESC LIMIT 1",
+            params![repo_id],
+            |row| row.get::<_, String>(0),
+        )
+        .ok())
+}
+
+/// How many active records share each `(subject, scope)` and each `(subject, scope, claim_key)`.
+///
+/// Two aggregates, computed once per read rather than once per record, so a list of a hundred
+/// records costs the same two queries as one.
+struct ActiveGroups {
+    by_subject_scope: BTreeMap<(String, String), i64>,
+    by_claim: BTreeMap<(String, String, String), i64>,
+}
+
+impl ActiveGroups {
+    fn load(conn: &Connection, repo_id: &str) -> Result<ActiveGroups> {
+        let mut by_subject_scope = BTreeMap::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT subject_entity_id_snapshot, scope, count(*)
+                   FROM memory WHERE repo_id = ?1 AND status = ?2
+                  GROUP BY subject_entity_id_snapshot, scope",
+            )?;
+            let mut rows = stmt.query(params![repo_id, MemoryStatus::Active.as_str()])?;
+            while let Some(row) = rows.next()? {
+                by_subject_scope.insert((row.get(0)?, row.get(1)?), row.get(2)?);
+            }
+        }
+
+        let mut by_claim = BTreeMap::new();
+        {
+            // `claim_key IS NOT NULL` is the whole gate. A record answering no named claim
+            // competes with nothing, so it may never be counted into a conflict group.
+            let mut stmt = conn.prepare(
+                "SELECT subject_entity_id_snapshot, scope, claim_key, count(*)
+                   FROM memory
+                  WHERE repo_id = ?1 AND status = ?2 AND claim_key IS NOT NULL
+                  GROUP BY subject_entity_id_snapshot, scope, claim_key",
+            )?;
+            let mut rows = stmt.query(params![repo_id, MemoryStatus::Active.as_str()])?;
+            while let Some(row) = rows.next()? {
+                by_claim.insert((row.get(0)?, row.get(1)?, row.get(2)?), row.get(3)?);
+            }
+        }
+
+        Ok(ActiveGroups {
+            by_subject_scope,
+            by_claim,
+        })
+    }
+
+    /// The qualifications true of one record right now, in declaration order and without repeats.
+    ///
+    /// Only an **active** record gets any of them. A proposed record is not yet a claim about the
+    /// world, and a superseded or invalidated one has already been answered — reporting either as
+    /// stale or as conflicting would be a qualification on a statement nobody is currently making.
+    ///
+    /// [`MemoryView::Conflicted`] and [`MemoryView::MultipleActive`] can both hold, and when they do
+    /// both are reported: *several records are about this subject* and *two of them answer the same
+    /// named claim* are both true, and collapsing them would lose which one the reader is looking at.
+    fn views(&self, row: &MemoryRow, current_state: Option<&str>) -> Vec<MemoryView> {
+        let mut views = Vec::new();
+        if row.status != MemoryStatus::Active {
+            return views;
+        }
+
+        // Only comparable against a state there is. With nothing indexed, "the anchor is not the
+        // current state" has no second operand, and reporting it anyway would be inventing one.
+        if let Some(current) = current_state {
+            if row.anchor_state_id != current {
+                views.push(MemoryView::PotentiallyStale);
+            }
+        }
+
+        let subject_scope = (row.subject.entity_id.clone(), row.scope.clone());
+        if self
+            .by_subject_scope
+            .get(&subject_scope)
+            .copied()
+            .unwrap_or(0)
+            > 1
+        {
+            views.push(MemoryView::MultipleActive);
+        }
+
+        if let Some(claim_key) = &row.claim_key {
+            let claim = (
+                row.subject.entity_id.clone(),
+                row.scope.clone(),
+                claim_key.clone(),
+            );
+            if self.by_claim.get(&claim).copied().unwrap_or(0) > 1 {
+                views.push(MemoryView::Conflicted);
+            }
+        }
+
+        views.sort_unstable();
+        views.dedup();
+        views
+    }
+}
+
+/// What became of one subject snapshot, resolved against the live index.
+///
+/// The order of the checks is the design:
+///
+/// 1. **No indexed state at all** → [`MemorySubjectResolution::RepositoryStateUnavailable`]. There
+///    is nothing to check the subject against, so *"the subject is gone"* has not been established
+///    and must not be reported. This is Slice 7c-i's `Stale` / `Unverified` separation.
+/// 2. **The snapshot's id is in `entity`** → [`MemorySubjectResolution::Resolved`].
+/// 3. **An `identity_link` reaches live successors** → one is
+///    [`MemorySubjectResolution::ResolvedThroughIdentityLink`], several are
+///    [`MemorySubjectResolution::Ambiguous`] with every candidate reported and none promoted.
+/// 4. Otherwise [`MemorySubjectResolution::Missing`] — and the record is still readable, which is
+///    the property the whole snapshot design exists to give.
+///
+/// **Exactly one link is followed, and links are followed forwards only.** A link records the
+/// identity before a move on the left and after it on the right, so walking right-to-left would
+/// attach a note about a new path to an entity that predates it. Chains are deliberately not
+/// chased: a subject moved twice across two separate indexing runs reports `missing` rather than
+/// being reached through a sequence of proposals whose combined strength nothing here measures.
+/// That bound is stated rather than hidden, and `missing` remains a true statement about the
+/// snapshot — the id genuinely is not in the index.
+///
+/// **No name matching anywhere.** `CLAUDE.md` §3: identity is never established by fuzzy name
+/// matching alone, and a subject re-attached by resemblance would move a human's sentence onto a
+/// different file without saying it had.
+pub fn resolve_memory_subject(
+    conn: &Connection,
+    repo_id: &str,
+    subject_entity_id: &str,
+) -> Result<MemorySubjectReport> {
+    let current = current_state_id(conn, repo_id)?;
+    resolve_with_state(conn, repo_id, subject_entity_id, current.as_deref())
+}
+
+fn resolve_with_state(
+    conn: &Connection,
+    repo_id: &str,
+    subject_entity_id: &str,
+    current_state: Option<&str>,
+) -> Result<MemorySubjectReport> {
+    if current_state.is_none() {
+        return Ok(MemorySubjectReport {
+            resolution: MemorySubjectResolution::RepositoryStateUnavailable,
+            live_entity_ids: Vec::new(),
+        });
+    }
+
+    let present: i64 = conn.query_row(
+        "SELECT count(*) FROM entity WHERE repo_id = ?1 AND entity_id = ?2",
+        params![repo_id, subject_entity_id],
+        |row| row.get(0),
+    )?;
+    if present > 0 {
+        return Ok(MemorySubjectReport {
+            resolution: MemorySubjectResolution::Resolved,
+            live_entity_ids: vec![subject_entity_id.to_string()],
+        });
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT l.right_entity_id
+           FROM identity_link l
+           JOIN entity e ON e.entity_id = l.right_entity_id AND e.repo_id = ?1
+          WHERE l.repo_id = ?1 AND l.left_entity_id = ?2
+          ORDER BY 1",
+    )?;
+    let mut rows = stmt.query(params![repo_id, subject_entity_id])?;
+    let mut live_entity_ids = Vec::new();
+    while let Some(row) = rows.next()? {
+        live_entity_ids.push(row.get::<_, String>(0)?);
+    }
+
+    let resolution = match live_entity_ids.len() {
+        0 => MemorySubjectResolution::Missing,
+        1 => MemorySubjectResolution::ResolvedThroughIdentityLink,
+        _ => MemorySubjectResolution::Ambiguous,
+    };
+    Ok(MemorySubjectReport {
+        resolution,
+        live_entity_ids,
+    })
+}
+
+/// One record with every query-time qualification computed.
+pub fn read_memory(
+    conn: &Connection,
+    repo_id: &str,
+    memory_id: &str,
+) -> Result<Option<MemoryReport>> {
+    let Some(row) = memory(conn, repo_id, memory_id)? else {
+        return Ok(None);
+    };
+    let current = current_state_id(conn, repo_id)?;
+    let groups = ActiveGroups::load(conn, repo_id)?;
+    Ok(Some(report(
+        conn,
+        repo_id,
+        row,
+        &groups,
+        current.as_deref(),
+    )?))
+}
+
+/// Every record in the repository, each with its qualifications. Ordered by `memory_id`.
+pub fn read_memory_all(conn: &Connection, repo_id: &str) -> Result<Vec<MemoryReport>> {
+    reports(conn, repo_id, list_memory(conn, repo_id)?)
+}
+
+/// Every record about one subject snapshot, each with its qualifications.
+pub fn read_memory_for_subject(
+    conn: &Connection,
+    repo_id: &str,
+    subject_entity_id: &str,
+) -> Result<Vec<MemoryReport>> {
+    reports(
+        conn,
+        repo_id,
+        memory_for_subject(conn, repo_id, subject_entity_id)?,
+    )
+}
+
+/// Every record in one scope, each with its qualifications.
+pub fn read_memory_in_scope(
+    conn: &Connection,
+    repo_id: &str,
+    scope: &str,
+) -> Result<Vec<MemoryReport>> {
+    reports(conn, repo_id, memory_in_scope(conn, repo_id, scope)?)
+}
+
+fn reports(conn: &Connection, repo_id: &str, rows: Vec<MemoryRow>) -> Result<Vec<MemoryReport>> {
+    let current = current_state_id(conn, repo_id)?;
+    let groups = ActiveGroups::load(conn, repo_id)?;
+    // One resolution per *distinct* subject, so a hundred notes about one file cost one lookup.
+    let mut resolved: BTreeMap<String, MemorySubjectReport> = BTreeMap::new();
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let subject = match resolved.get(&row.subject.entity_id) {
+            Some(cached) => cached.clone(),
+            None => {
+                let fresh =
+                    resolve_with_state(conn, repo_id, &row.subject.entity_id, current.as_deref())?;
+                resolved.insert(row.subject.entity_id.clone(), fresh.clone());
+                fresh
+            }
+        };
+        let views = groups.views(&row, current.as_deref());
+        let superseded_by = superseded_by(conn, repo_id, &row.memory_id)?;
+        out.push(MemoryReport {
+            row,
+            subject,
+            views,
+            superseded_by,
+            current_state_id: current.clone(),
+        });
+    }
+    Ok(out)
+}
+
+fn report(
+    conn: &Connection,
+    repo_id: &str,
+    row: MemoryRow,
+    groups: &ActiveGroups,
+    current: Option<&str>,
+) -> Result<MemoryReport> {
+    let subject = resolve_with_state(conn, repo_id, &row.subject.entity_id, current)?;
+    let views = groups.views(&row, current);
+    let superseded_by = superseded_by(conn, repo_id, &row.memory_id)?;
+    Ok(MemoryReport {
+        row,
+        subject,
+        views,
+        superseded_by,
+        current_state_id: current.map(str::to_string),
+    })
+}
