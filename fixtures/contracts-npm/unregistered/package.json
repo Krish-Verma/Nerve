@@ -1,0 +1,5 @@
+{
+  "name": "lib-unregistered",
+  "version": "9.9.9",
+  "main": "src/index.ts"
+}

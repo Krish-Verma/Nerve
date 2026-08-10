@@ -1,0 +1,32 @@
+[project]
+name = "service"
+version = "0.4.0"
+dependencies = [
+  "pkg-core @ file://{{PKG_CORE_PATH}}",
+  "pkg-rel @ file://../pkg-extra",
+  "pkg-remote @ https://example.invalid/pkg.tar.gz",
+  "pkg-vcs @ git+https://example.invalid/pkg.git",
+  "requests>=2.31",
+  "flask",
+]
+
+[tool.poetry]
+name = "service"
+version = "0.4.0"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+pkg-extra = { path = "../pkg-extra", develop = true }
+pkg-both = { path = "../pkg-core" }
+pkg-inside = { path = "./internal" }
+pkg-missing = { path = "../does-not-exist" }
+pkg-unregistered = { path = "../unregistered" }
+pkg-ranged = "^2.0"
+pkg-vcs2 = { git = "https://example.invalid/x.git" }
+pkg-url2 = { url = "https://example.invalid/x.tar.gz" }
+
+[tool.uv.sources]
+pkg-uv = { path = "../pkg-core" }
+pkg-both = { path = "../pkg-extra" }
+pkg-uv-ws = { workspace = true }
+pkg-uv-git = { git = "https://example.invalid/y.git" }

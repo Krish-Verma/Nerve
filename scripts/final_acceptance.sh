@@ -529,6 +529,192 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------
+section "4d. The two contract rules, and the links they refuse to invent"
+
+# Behaviour, not surface. Every check below runs the real extractor over a real fixture pair and
+# asks a question the answer to which would be wrong if the rule were guessing: does an explicit
+# `file:` declaration produce a link with the right resolution_method, does a specifier Nerve does
+# not read get *named* rather than dropped, do two same-named packages that declare nothing about
+# each other produce nothing at all, and is the neighbour's database identical afterwards.
+#
+# The two rules are exercised separately and their numbers are never added together.
+if [ -d "$ROOT/fixtures/contracts-npm" ] && [ -d "$ROOT/fixtures/contracts-python" ]; then
+  CWORK=$(mktemp -d)
+  trap 'rm -rf "${WORK:-}" "${HWORK:-}" "${RWORK:-}" "${CWORK:-}"' EXIT
+
+  contract_repo() {
+    local fixture="$1" name="$2" dest="$3"
+    cp -R "$ROOT/fixtures/$fixture/$name" "$dest" || return 1
+    rm -rf "$dest/.nerve"
+    "$NERVE" init "$dest" >/dev/null 2>&1 || return 1
+    "$NERVE" index "$dest" >/dev/null 2>&1 || return 1
+    return 0
+  }
+
+  if contract_repo contracts-npm app "$CWORK/app" &&
+     contract_repo contracts-npm lib-core "$CWORK/lib-core" &&
+     contract_repo contracts-npm lib-extra "$CWORK/lib-extra" &&
+     contract_repo contracts-npm unregistered "$CWORK/unregistered" &&
+     "$NERVE" repo add "$CWORK/lib-core" --path "$CWORK/app" --id lib-core >/dev/null 2>&1 &&
+     "$NERVE" repo add "$CWORK/lib-extra" --path "$CWORK/app" --id lib-extra >/dev/null 2>&1; then
+
+    # 1. C1: the declared links, each with the resolution_method its form implies. `file:` is a
+    #    path the manifest states; `workspace:` is a path the workspaces array states. Two stated
+    #    declarations, two different methods, and the response says which.
+    check "C1 records the declared npm links with the right resolution_method" bash -c "
+      '$NERVE' repo scan --path '$CWORK/app' --json | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+links = {(l[\"section\"], l[\"identity\"]): l for l in d[\"links\"]}
+assert d[\"links_recorded\"] == 5, d
+assert links[(\"dependencies\",\"lib-core\")][\"registry_id\"] == \"lib-core\", links
+assert links[(\"dependencies\",\"lib-core\")][\"resolution_method\"] == \"manifest_declared\", links
+assert links[(\"dependencies\",\"lib-extra\")][\"registry_id\"] == \"lib-extra\", links
+assert links[(\"dependencies\",\"lib-extra\")][\"resolution_method\"] == \"workspace_declared\", links
+assert links[(\"peerDependencies\",\"lib-peer\")][\"registry_id\"] == \"lib-extra\", links
+# One identity declared twice, naming two repositories. Both recorded, neither promoted.
+assert links[(\"dependencies\",\"ambiguous-dep\")][\"ambiguity\"] == \"conflicting_targets\", links
+assert links[(\"devDependencies\",\"ambiguous-dep\")][\"ambiguity\"] == \"conflicting_targets\", links
+assert links[(\"dependencies\",\"ambiguous-dep\")][\"registry_id\"] != links[(\"devDependencies\",\"ambiguous-dep\")][\"registry_id\"]
+'"
+
+    # 2. §9.1: an unsupported specifier is recorded with its form named, asserted by a tally.
+    #    A registry range, a git specifier, a URL and an alias are four different refusals and the
+    #    response says which is which — never one \"could not read that\".
+    check "an unsupported specifier is recorded with its form named, never dropped" bash -c "
+      '$NERVE' repo scan --path '$CWORK/app' --json | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+tally = {row[\"form\"]: row[\"count\"] for row in d[\"unsupported_tally\"]}
+for form in (\"npm_registry_range\",\"npm_git_specifier\",\"npm_url_specifier\",
+             \"npm_alias_specifier\",\"npm_unsupported_protocol\",\"npm_workspace_glob_pattern\"):
+    assert tally.get(form, 0) >= 1, (form, tally)
+assert sum(tally.values()) == len(d[\"unsupported\"]) == 9, (tally, d[\"unsupported\"])
+# Every declaration is accounted for: nothing was read and then forgotten.
+assert d[\"declarations\"] == len(d[\"links\"]) + len(d[\"unresolved\"]) + len(d[\"unsupported\"])
+'"
+
+    # 3. An explicit path to a real, indexed, adjacent repository that nobody registered produces
+    #    no link and registers nothing. This is the refusal the whole row is built on.
+    check "an unregistered neighbour is named as unresolved and never auto-registered" bash -c "
+      '$NERVE' repo scan --path '$CWORK/app' --json | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+reasons = {r[\"identity\"]: r[\"reason\"] for r in d[\"unresolved\"]}
+assert reasons[\"lib-unregistered\"] == \"target_not_registered\", reasons
+assert reasons[\"lib-missing\"] == \"declared_path_missing\", reasons
+assert reasons[\"lib-inside\"] == \"declared_path_in_same_repository\", reasons
+assert not any(l[\"identity\"] == \"lib-unregistered\" for l in d[\"links\"]), d[\"links\"]
+'
+      '$NERVE' repo list --path '$CWORK/app' --json | python3 -c '
+import json,sys
+ids = sorted(r[\"registry_id\"] for r in json.load(sys.stdin)[\"entries\"])
+assert ids == [\"lib-core\", \"lib-extra\"], ids
+'"
+
+    # 4. Re-running writes nothing new. The unique index on the logical identity is what makes a
+    #    re-scan a no-op rather than a duplicate, and a table that grew on every run would be a
+    #    registry that says a declaration was made twice.
+    check "re-running the scan records nothing new and duplicates nothing" bash -c "
+      '$NERVE' repo scan --path '$CWORK/app' --json | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+assert d[\"links_recorded\"] == 0, d
+assert d[\"links_unchanged\"] == 5, d
+'
+      python3 -c '
+import sqlite3
+rows = sqlite3.connect(\"$CWORK/app/.nerve/nerve.db\").execute(
+    \"select count(*), count(distinct link_id) from contract_link\").fetchone()
+assert rows == (5, 5), rows
+'"
+
+    # 5. The neighbour's database is byte-identical after extraction. Anti-vacuity first: the scan
+    #    really produced links through that neighbour, so \"unchanged\" is not \"nothing ran\".
+    check "the neighbour's database is byte-identical after extraction" bash -c "
+      before=\$(shasum -a 256 '$CWORK/lib-core/.nerve/nerve.db' | cut -d' ' -f1)
+      '$NERVE' repo scan --path '$CWORK/app' --json | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+assert any(l[\"registry_id\"] == \"lib-core\" for l in d[\"links\"]), d[\"links\"]
+'
+      after=\$(shasum -a 256 '$CWORK/lib-core/.nerve/nerve.db' | cut -d' ' -f1)
+      [ \"\$before\" = \"\$after\" ] || { echo \"\$before != \$after\"; exit 1; }"
+  else
+    skip "C1 npm contract extraction" "the fixture repositories could not be built"
+  fi
+
+  # 6. §9.7: fuzzy linking is asserted absent. Same package name on both sides, adjacent
+  #    directories, a registered neighbour — and no declaration between them.
+  if contract_repo contracts-fuzzy left "$CWORK/left" &&
+     contract_repo contracts-fuzzy right "$CWORK/right" &&
+     "$NERVE" repo add "$CWORK/right" --path "$CWORK/left" --id neighbour >/dev/null 2>&1; then
+    check "same-named packages that declare nothing produce zero links" bash -c "
+      '$NERVE' repo list --path '$CWORK/left' --json | python3 -c '
+import json,sys
+rows = json.load(sys.stdin)[\"entries\"]
+assert len(rows) == 1 and rows[0][\"availability\"] == \"available\", rows
+'
+      '$NERVE' repo scan --path '$CWORK/left' --json | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+assert d[\"manifests_read\"] == 2, d
+assert d[\"links\"] == [], d[\"links\"]
+assert d[\"links_recorded\"] == 0, d
+'
+      grep -q shared-name '$CWORK/left/package.json' &&
+      grep -q shared-name '$CWORK/right/package.json'"
+  else
+    skip "fuzzy linking is absent" "the fuzzy fixture pair could not be built"
+  fi
+
+  # 7. C3, on its own fixture and with its own methods. The PEP 621 direct reference is an
+  #    absolute URL, so the fixture ships a placeholder — an absolute path cannot be committed.
+  if cp -R "$ROOT/fixtures/contracts-python/service" "$CWORK/service" &&
+     cp -R "$ROOT/fixtures/contracts-python/pkg-core" "$CWORK/pkg-core" &&
+     cp -R "$ROOT/fixtures/contracts-python/pkg-extra" "$CWORK/pkg-extra" &&
+     cp -R "$ROOT/fixtures/contracts-python/unregistered" "$CWORK/py-unregistered"; then
+    CORE_PATH=$(cd "$CWORK/pkg-core" && pwd -P)
+    python3 - "$CWORK/service/pyproject.toml" "$CORE_PATH" <<'SUBST'
+import sys
+path, core = sys.argv[1], sys.argv[2]
+with open(path) as handle:
+    text = handle.read()
+with open(path, "w") as handle:
+    handle.write(text.replace("{{PKG_CORE_PATH}}", core))
+SUBST
+    for d in service pkg-core pkg-extra py-unregistered; do
+      "$NERVE" init "$CWORK/$d" >/dev/null 2>&1
+      "$NERVE" index "$CWORK/$d" >/dev/null 2>&1
+    done
+    "$NERVE" repo add "$CWORK/pkg-core" --path "$CWORK/service" --id pkg-core >/dev/null 2>&1
+    "$NERVE" repo add "$CWORK/pkg-extra" --path "$CWORK/service" --id pkg-extra >/dev/null 2>&1
+
+    check "C3 records PEP 621, Poetry and uv path dependencies, each by its own method" bash -c "
+      '$NERVE' repo scan --path '$CWORK/service' --json | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+links = {(l[\"section\"], l[\"identity\"]): l for l in d[\"links\"]}
+assert d[\"links_recorded\"] == 5, d
+assert links[(\"project.dependencies\",\"pkg-core\")][\"resolution_method\"] == \"manifest_declared\", links
+assert links[(\"tool.poetry.dependencies\",\"pkg-extra\")][\"resolution_method\"] == \"path_dependency_resolved\", links
+assert links[(\"tool.uv.sources\",\"pkg-uv\")][\"resolution_method\"] == \"path_dependency_resolved\", links
+assert links[(\"tool.uv.sources\",\"pkg-uv\")][\"registry_id\"] == \"pkg-core\", links
+tally = {row[\"form\"]: row[\"count\"] for row in d[\"unsupported_tally\"]}
+for form in (\"python_version_specifier\",\"python_unsupported_direct_reference\",
+             \"python_git_source\",\"python_url_source\",\"python_workspace_source\"):
+    assert tally.get(form, 0) >= 1, (form, tally)
+reasons = {r[\"identity\"]: r[\"reason\"] for r in d[\"unresolved\"]}
+assert reasons[\"pkg-unregistered\"] == \"target_not_registered\", reasons
+'"
+  else
+    skip "C3 python contract extraction" "the python fixture pair could not be built"
+  fi
+else
+  skip "contract extraction" "fixtures/contracts-npm or fixtures/contracts-python is missing"
+fi
+
+# ---------------------------------------------------------------------------------------------
 section "5. Supply chain"
 
 LOCKED=$(grep -c '^name = ' "$ROOT/Cargo.lock")

@@ -1,0 +1,6 @@
+[project]
+name = "pkg-core"
+version = "1.4.0"
+dependencies = [
+  "requests>=2.31",
+]

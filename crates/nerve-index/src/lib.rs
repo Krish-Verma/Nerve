@@ -48,6 +48,7 @@
 
 pub mod bind;
 pub mod config;
+pub mod contracts;
 pub mod coverage;
 pub mod coverage_ingest;
 pub mod discover;
@@ -84,12 +85,21 @@ pub mod tsframework;
 
 pub use bind::{Binding, BindingTable, ThisResolution};
 pub use config::Config;
+pub use contracts::{
+    link_freshness, scan_contracts, Ambiguity, ContractRule, ContractScan, ManifestRefusal,
+    RecordedLink, ScanOutcome, ScanRefusal, SupportedForm, UnresolvedDeclaration,
+    UnresolvedReason as ContractUnresolvedReason, UnsupportedDeclaration,
+    UnsupportedForm as ContractUnsupportedForm, CONTRACT_EXTRACTOR_VERSION,
+    MAX_DECLARATIONS_PER_MANIFEST, MAX_LINKS_PER_REPOSITORY, MAX_MANIFEST_BYTES,
+    NPM_EXTRACTOR_ID as NPM_CONTRACT_EXTRACTOR_ID,
+    PYTHON_EXTRACTOR_ID as PYTHON_CONTRACT_EXTRACTOR_ID,
+};
 pub use coverage::{
     parse_lcov, CoverageCounters, CoverageReport, FileCoverage, LineHit,
     EXTRACTOR_ID as COVERAGE_EXTRACTOR_ID, EXTRACTOR_VERSION as COVERAGE_EXTRACTOR_VERSION,
 };
 pub use coverage_ingest::{ingest_coverage, CoverageDegree, CoverageOutcome};
-pub use discover::{discover, DiscoveredFile, DiscoveryReport};
+pub use discover::{discover, discover_named, DiscoveredFile, DiscoveryReport, NamedFile};
 pub use docs::{
     extract_document, AdrFacts, AdrStatus, DocumentExtraction, SectionDef,
     EXTRACTOR_ID as DOCUMENT_EXTRACTOR_ID, EXTRACTOR_VERSION as DOCUMENT_EXTRACTOR_VERSION,

@@ -1,0 +1,31 @@
+{
+  "name": "app",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "../lib-extra",
+    "packages/*"
+  ],
+  "dependencies": {
+    "lib-core": "file:../lib-core",
+    "lib-extra": "workspace:^1.2.0",
+    "ambiguous-dep": "file:../lib-core",
+    "lib-inside": "file:./internal",
+    "lib-missing": "file:../does-not-exist",
+    "lib-unregistered": "file:../unregistered",
+    "react": "^18.2.0",
+    "left-pad": "1.3.0",
+    "from-git": "git+https://example.invalid/x.git",
+    "from-github": "github:owner/repo",
+    "from-url": "https://example.invalid/x.tgz",
+    "aliased": "npm:lib-core@1.0.0",
+    "linked": "link:../lib-core"
+  },
+  "devDependencies": {
+    "typescript": "~5.4.0",
+    "ambiguous-dep": "file:../lib-extra"
+  },
+  "peerDependencies": {
+    "lib-peer": "file:../lib-extra"
+  }
+}

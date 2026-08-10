@@ -1,0 +1,8 @@
+{
+  "name": "shared-name",
+  "version": "1.0.0",
+  "dependencies": {
+    "react": "^18.2.0",
+    "shared-name": "^1.0.0"
+  }
+}

@@ -640,6 +640,27 @@ enum RepoCommand {
         #[arg(long, default_value = ".")]
         path: PathBuf,
     },
+    /// Read this repository's manifests and record the contracts they declare.
+    ///
+    /// Its own command rather than a step inside `nerve index`, for the reason `nerve coverage` is
+    /// its own command: this one reads a **second repository**, and an ordinary re-index must not
+    /// open a directory the user pointed at only as a dependency. Registration is the opt-in, and
+    /// this is the command that acts on it.
+    ///
+    /// Two rules are read. `package.json` `dependencies`, `devDependencies` and `peerDependencies`
+    /// with a `file:` or `workspace:` specifier; `pyproject.toml` PEP 621 direct `file://`
+    /// references, Poetry `{ path = }` and uv `{ path = }` sources. Every other form — a registry
+    /// range, a `git:` or `https:` specifier, an `npm:` alias — is **recorded as unsupported with
+    /// its form named** and never fetched. Nerve does not run `npm`, `pip`, `poetry` or `git`.
+    ///
+    /// A declared path resolves to a neighbour by the repository id read out of that directory's
+    /// own index, never by package name and never by directory proximity. A path that reaches no
+    /// registered entry is reported with the reason named and is never auto-registered.
+    Scan {
+        /// Repository root to scan. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
 }
 
 /// `--direction` values.
@@ -811,6 +832,7 @@ fn main() {
             new_path,
             path,
         }) => run_repo_relocate(&output, &path, &registry_id, &new_path),
+        Command::Repo(RepoCommand::Scan { path }) => run_repo_scan(&output, &path),
         Command::Status { path, path_flag } => run_status(
             &output,
             &path.or(path_flag).unwrap_or_else(|| PathBuf::from(".")),
@@ -4443,6 +4465,145 @@ fn run_repo_relocate(output: &Output, path: &Path, registry_id: &str, new_path: 
         &opened.root,
         vec![registry_entry_json(&view)],
     );
+    exit::SUCCESS
+}
+
+/// One recorded link, as JSON.
+///
+/// Every string that came out of a manifest — the identity, the section — is repository content and
+/// goes through [`inert_text`] on exactly T7's terms. The resolution method, the form and the rule
+/// are closed vocabularies rendered by the service that owns them, never spelled here.
+fn contract_link_json(link: &nerve_index::RecordedLink) -> serde_json::Value {
+    json!({
+        "rule": link.rule.as_str(),
+        "manifest": inert_text(&link.manifest),
+        "section": inert_text(&link.section),
+        "identity": inert_text(&link.identity),
+        "form": link.form.as_str(),
+        "registry_id": inert_text(&link.registry_id),
+        "target_repository_id": link.target_repository_id,
+        "resolution_method": link.resolution_method.as_str(),
+        "source_span": link.source_span,
+        "expected_contract_version": link.expected_contract_version.as_deref().map(inert_text),
+        "observed_contract_version": link.observed_contract_version.as_deref().map(inert_text),
+        "ambiguity": link.ambiguity.map(|value| value.as_str()),
+        "inserted": link.inserted,
+    })
+}
+
+/// `nerve repo scan` — read the manifests, resolve what they declare, record the links.
+///
+/// The output is a **tally**, not a list to read by eye. §9.1 of the row plan requires that an
+/// unsupported form be recorded with its form named rather than silently dropped, *asserted by a
+/// tally*, so the counts per form are the point of the response rather than a summary of it.
+fn run_repo_scan(output: &Output, path: &Path) -> i32 {
+    let (opened, repo_id) = match open_registry(output, "repo scan", path, true) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    let outcome = match nerve_index::scan_contracts(&opened.conn, &repo_id, &opened.root) {
+        Ok(outcome) => outcome,
+        Err(err) => return output.failure("repo scan", error_exit_code(&err), &err.to_string()),
+    };
+    let scan = match outcome {
+        nerve_index::ScanOutcome::Done(scan) => scan,
+        nerve_index::ScanOutcome::Refused(reason) => {
+            return output.failure_detail(
+                "repo scan",
+                exit::NO_INDEX,
+                reason.statement(),
+                &["  nothing was scanned and nothing was written".to_string()],
+                json!({
+                    "refusal": reason.as_str(),
+                    "refusal_statement": reason.statement(),
+                }),
+            )
+        }
+    };
+
+    output.line(format!(
+        "Scanned {} manifest(s) in {} — {} declaration(s)",
+        scan.manifests_read,
+        opened.root.display(),
+        scan.declarations
+    ));
+    output.line(format!(
+        "  {:<14} {} recorded, {} already stored",
+        "links",
+        scan.inserted(),
+        scan.unchanged()
+    ));
+    for link in &scan.links {
+        output.line(format!(
+            "    {} {} -> {} ({})",
+            inert_text(&link.section),
+            inert_text(&link.identity),
+            inert_text(&link.registry_id),
+            link.resolution_method.as_str()
+        ));
+    }
+    for (form, count) in scan.unsupported_tally() {
+        output.line(format!("  {:<14} {} x {}", "unsupported", count, form));
+    }
+    for (reason, count) in scan.unresolved_tally() {
+        output.line(format!("  {:<14} {} x {}", "unresolved", count, reason));
+    }
+    for (manifest, refusal) in &scan.refusals {
+        output.line(format!(
+            "  {:<14} {} — {}",
+            "refused",
+            inert_text(manifest),
+            refusal
+        ));
+    }
+
+    output.object(json!({
+        "command": "repo scan",
+        "ok": true,
+        "root": opened.root.display().to_string(),
+        "source_state": scan.source_state,
+        "manifests_read": scan.manifests_read,
+        "declarations": scan.declarations,
+        "links_recorded": scan.inserted(),
+        "links_unchanged": scan.unchanged(),
+        "links": scan.links.iter().map(contract_link_json).collect::<Vec<_>>(),
+        "unsupported": scan
+            .unsupported
+            .iter()
+            .map(|row| json!({
+                "rule": row.rule.as_str(),
+                "manifest": inert_text(&row.manifest),
+                "section": inert_text(&row.section),
+                "identity": inert_text(&row.identity),
+                "form": row.form.as_str(),
+            }))
+            .collect::<Vec<_>>(),
+        "unsupported_tally": scan
+            .unsupported_tally()
+            .into_iter()
+            .map(|(form, count)| json!({ "form": form.as_str(), "count": count }))
+            .collect::<Vec<_>>(),
+        "unresolved": scan
+            .unresolved
+            .iter()
+            .map(|row| json!({
+                "rule": row.rule.as_str(),
+                "manifest": inert_text(&row.manifest),
+                "section": inert_text(&row.section),
+                "identity": inert_text(&row.identity),
+                "form": row.form.as_str(),
+                "reason": row.reason.as_str(),
+            }))
+            .collect::<Vec<_>>(),
+        "refusals": scan
+            .refusals
+            .iter()
+            .map(|(manifest, refusal)| json!({
+                "manifest": inert_text(manifest),
+                "refusal": refusal.as_str(),
+            }))
+            .collect::<Vec<_>>(),
+    }));
     exit::SUCCESS
 }
 

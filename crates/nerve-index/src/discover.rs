@@ -233,18 +233,66 @@ fn parent_directory(rel_path: &str) -> Option<String> {
         .map(|index| rel_path[..index].to_string())
 }
 
-/// Walk the repository and select files to index.
+/// A file found by **name** rather than by grammar.
 ///
-/// Ignore sources, in the order the `ignore` crate applies them: `.gitignore`, `.ignore`,
-/// `.git/info/exclude`, and `.nerveignore`. Parent-directory ignore files are deliberately not
-/// consulted, so a repository indexes the same way wherever it is checked out.
-pub fn discover(root: &Path, config: &Config) -> Result<DiscoveryReport> {
+/// [`DiscoveredFile`] carries a [`FileKind`], which is the answer to *"which parser reads this?"*.
+/// A package manifest has no parser in that sense — `package.json` and `pyproject.toml` are read by
+/// the contract rules, not by a grammar — so it is a different result type rather than a
+/// [`FileKind`] variant that no extractor would ever match on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedFile {
+    /// Repository-relative path, `/`-separated.
+    pub rel_path: String,
+    /// Canonical absolute path.
+    pub abs_path: PathBuf,
+}
+
+/// Every file whose file name is exactly one of `names`, under the same rules as [`discover`].
+///
+/// The walk, the ignore sources, the pruned directories, the symlink rule, the secret deny-list and
+/// [`canonical_child`] are shared with [`discover`] rather than restated, because a second walk with
+/// its own settings is a second answer to *"what is in this repository?"*. The one difference is the
+/// selection test: a name, not an extension with a grammar behind it.
+///
+/// `node_modules` is in `PRUNED_DIRECTORIES`, which is what keeps this from reading the thousands of
+/// vendored `package.json` files an npm install leaves behind — none of which is a declaration this
+/// repository made.
+pub fn discover_named(root: &Path, config: &Config, names: &[&str]) -> Result<Vec<NamedFile>> {
     let root = canonical_root(root)?;
     let deny_patterns = config.deny_patterns();
-    let mut report = DiscoveryReport::default();
-    let mut directories: BTreeSet<String> = BTreeSet::new();
+    let mut found = Vec::new();
 
-    let mut builder = WalkBuilder::new(&root);
+    for entry in walk_builder(&root).build() {
+        let Ok(entry) = entry else { continue };
+        let Some(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() || !file_type.is_file() {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str() else {
+            continue;
+        };
+        if !names.contains(&name) || is_denied(name, &deny_patterns) {
+            continue;
+        }
+        let Ok(canonical) = canonical_child(&root, entry.path()) else {
+            continue;
+        };
+        let rel_path = relative_path(&root, &canonical)?;
+        found.push(NamedFile {
+            rel_path,
+            abs_path: canonical,
+        });
+    }
+
+    found.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    Ok(found)
+}
+
+/// The one walk configuration, shared by [`discover`] and [`discover_named`].
+fn walk_builder(root: &Path) -> WalkBuilder {
+    let mut builder = WalkBuilder::new(root);
     builder
         .follow_links(false)
         .hidden(false)
@@ -267,8 +315,21 @@ pub fn discover(root: &Path, config: &Config) -> Result<DiscoveryReport> {
                 .map(|name| !PRUNED_DIRECTORIES.contains(&name))
                 .unwrap_or(false)
         });
+    builder
+}
 
-    for entry in builder.build() {
+/// Walk the repository and select files to index.
+///
+/// Ignore sources, in the order the `ignore` crate applies them: `.gitignore`, `.ignore`,
+/// `.git/info/exclude`, and `.nerveignore`. Parent-directory ignore files are deliberately not
+/// consulted, so a repository indexes the same way wherever it is checked out.
+pub fn discover(root: &Path, config: &Config) -> Result<DiscoveryReport> {
+    let root = canonical_root(root)?;
+    let deny_patterns = config.deny_patterns();
+    let mut report = DiscoveryReport::default();
+    let mut directories: BTreeSet<String> = BTreeSet::new();
+
+    for entry in walk_builder(&root).build() {
         let entry = match entry {
             Ok(entry) => entry,
             // A directory we cannot read is not a fatal condition; it contributes nothing.

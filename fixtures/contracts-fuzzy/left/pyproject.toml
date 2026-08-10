@@ -1,0 +1,6 @@
+[project]
+name = "shared-name"
+version = "1.0.0"
+dependencies = [
+  "shared-name>=1.0",
+]

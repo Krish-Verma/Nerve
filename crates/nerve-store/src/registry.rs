@@ -519,6 +519,84 @@ pub fn contract_links_for_registry_entry(
     Ok(out)
 }
 
+/// What makes a contract link *the same link*: exactly the columns `idx_contract_link_identity` is
+/// built on.
+///
+/// A struct rather than six positional parameters, because the whole value of the type is that it
+/// cannot drift from the index. If a column joins or leaves the unique index, this declaration is
+/// where the change is made and every caller is recompiled against it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContractLinkIdentity<'a> {
+    /// The registry entry the link resolves through.
+    pub registry_entry_id: &'a str,
+    /// The manifest family the declaration was read from.
+    pub contract_kind: &'a str,
+    /// What the contract calls itself.
+    pub contract_identity: &'a str,
+    /// Repository-relative path of the manifest.
+    pub source_path: &'a str,
+    /// Where in that manifest, as `start_line:end_line`.
+    pub source_span: &'a str,
+    /// Which stated declaration the link was drawn from.
+    pub resolution_method: ContractResolutionMethod,
+}
+
+/// The `link_id` of an already-recorded link with this logical identity, if there is one.
+///
+/// Re-running extraction over an unchanged tree must not append a second row, and the unique index
+/// is what makes a second row a conflict rather than a duplicate. A caller looks the identity up,
+/// [`touch_contract_link`]s what it finds and [`insert_contract_link`]s what it does not.
+///
+/// Withdrawn rows are found too. A withdrawn row still occupies the identity — the index carries no
+/// `status` column — so a caller that skipped it would insert and hit the conflict.
+pub fn contract_link_id(
+    conn: &Connection,
+    repo_id: &str,
+    identity: &ContractLinkIdentity<'_>,
+) -> Result<Option<i64>> {
+    let mut stmt = conn.prepare(
+        "SELECT link_id FROM contract_link
+          WHERE repo_id = ?1 AND registry_entry_id = ?2 AND contract_kind = ?3
+            AND contract_identity = ?4 AND source_path = ?5 AND source_span = ?6
+            AND resolution_method = ?7",
+    )?;
+    let mut rows = stmt.query(params![
+        repo_id,
+        identity.registry_entry_id,
+        identity.contract_kind,
+        identity.contract_identity,
+        identity.source_path,
+        identity.source_span,
+        identity.resolution_method.as_str(),
+    ])?;
+    match rows.next()? {
+        Some(row) => Ok(Some(row.get(0)?)),
+        None => Ok(None),
+    }
+}
+
+/// Record that an already-stored link was observed again. `Ok(true)` if a row changed.
+///
+/// Only `last_seen_at` moves, and only on an active row. `first_seen_at` is the date the
+/// declaration was first read and is not re-datable by reading it again — the same rule
+/// [`tombstone_registry_entry`] applies to `withdrawn_at`, one column over. The schema's
+/// `last_seen_at >= first_seen_at` therefore holds by construction: the new value is *now*, and
+/// `first_seen_at` was stamped by an earlier `now`.
+///
+/// A withdrawn row is deliberately not touched. *"This declaration is still being made"* and
+/// *"this declaration ended"* are contradictory claims, and a caller that finds a withdrawn row for
+/// a declaration it is reading again has a lifecycle decision to make rather than a timestamp to
+/// bump.
+pub fn touch_contract_link(conn: &Connection, repo_id: &str, link_id: i64) -> Result<bool> {
+    let changed = conn.execute(
+        "UPDATE contract_link
+            SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE repo_id = ?1 AND link_id = ?2 AND status = ?3",
+        params![repo_id, link_id, ContractLinkStatus::Active.as_str()],
+    )?;
+    Ok(changed > 0)
+}
+
 /// Retire one contract link without destroying it. `Ok(true)` if a row changed.
 ///
 /// The tombstone discipline of [`tombstone_registry_entry`], one table over: the row is kept so the

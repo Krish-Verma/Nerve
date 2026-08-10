@@ -83,10 +83,11 @@ pub use query::{
     SearchHit, StatusReport, SymbolSpanRow, UnresolvedEntity,
 };
 pub use registry::{
-    contract_links_for_registry_entry, insert_contract_link, insert_registry_entry,
-    list_contract_links, list_registry_entries, record_registry_observation, registry_entry,
-    relocate_registry_entry, tombstone_registry_entry, withdraw_contract_link,
-    withdraw_links_for_registry_entry, ContractLinkRow, RegistryEntryRow,
+    contract_link_id, contract_links_for_registry_entry, insert_contract_link,
+    insert_registry_entry, list_contract_links, list_registry_entries, record_registry_observation,
+    registry_entry, relocate_registry_entry, tombstone_registry_entry, touch_contract_link,
+    withdraw_contract_link, withdraw_links_for_registry_entry, ContractLinkIdentity,
+    ContractLinkRow, RegistryEntryRow,
 };
 pub use schema::{migrate, schema_version, SCHEMA_VERSION};
 pub use select::{

@@ -369,6 +369,30 @@ does not fit inside T2's path safety, which is about paths *within* one reposito
   in `third_party/LICENSES.md` before the code is written, per 12a's finding that the *measured* delta
   was +5 against an estimated +3.
 
+> ### Three corrections from implementing 13b (2026-08-09)
+>
+> 1. **`contract_link.unsupported_reason` is a dead letter for C1 and C3.** §9.1 requires an
+>    unsupported form to be *recorded*, and the corrected §4.2 lists the column — but
+>    `registry_entry_id` is `NOT NULL` with a foreign key to `repo_registry` (`schema.rs:634`,
+>    `:665`), and an unsupported specifier such as a registry range **names no repository at all**,
+>    so there is no entry to hang the row on. The tally therefore lives in the scan outcome and its
+>    response, which is what §9.1's own wording — *"asserted by a tally, not by inspection"* —
+>    actually asks for. The column stays for forms that *do* name a registered neighbour; it is not
+>    the general mechanism the plan implied.
+> 2. **`workspace:` resolution needs a mechanism the plan does not describe.** `workspace:*` carries
+>    a package **name** and no path, and matching a name against registered neighbours is exactly
+>    the *"package name with no registry and version context"* §1 refuses (line 31). Resolved
+>    instead through a **second stated declaration** — the source manifest's own `workspaces` array,
+>    with the member identified by the `name` its own `package.json` declares and the repository
+>    confirmed by `repo_id`. A glob `workspaces` entry is **declined** rather than expanded.
+> 3. **`contract_version_mismatch` is unreachable by construction, not unimplemented.** The
+>    corrected §4.2 justifies two version columns because "a mismatch is a disagreement" — true, but
+>    `^1.2.0` against `1.2.3` is **range satisfaction**, not string inequality, and deciding it needs
+>    a semver resolver: a new dependency, or a hand-written one in the expression that decides
+>    whether two repositories agree. Both versions are recorded and **no verdict is derived**.
+>    **Eleven of the twelve states are reachable after 13b**; this is the twelfth, and §9.3 must not
+>    require it until a resolver is justified on its own evidence.
+>
 > ### Two things this section missed, found while implementing 13a-i (2026-08-08)
 >
 > Neither required a deviation; both will recur at **v9**, so they are recorded here rather than in
@@ -395,7 +419,12 @@ does not fit inside T2's path safety, which is about paths *within* one reposito
    its form named**, never silently dropped. Asserted by a tally, not by inspection.
 2. Precision measured **per rule** (C1, C2, C3), ground truth written first, FP = 0, recall reported.
    No combined number exists anywhere in the output or the docs.
-3. All **twelve** freshness situations in §6 as corrected are producible **from a fixture** and
+3. **Eleven** of the twelve freshness situations in §6 as corrected are producible **from a fixture**
+   and individually pinned. `contract_version_mismatch` is **excluded until a semver resolver is
+   justified on its own evidence** — range satisfaction is not string inequality, and requiring a
+   state nothing can produce is the `generated_client_stale` mistake in a second place. Both version
+   columns are recorded; no verdict is derived from them. The original wording follows.
+3-original. All **twelve** freshness situations in §6 as corrected are producible **from a fixture** and
    individually pinned, with `target_repository_moved` and `target_partially_indexed` each
    distinguished from its neighbour. `generated_client_stale` is **not** required — §2.1 refuses the
    evidence it would rest on. A state that cannot be produced is not required; a state that is
