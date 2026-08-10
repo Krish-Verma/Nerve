@@ -561,9 +561,14 @@ enum HistoryCommand {
 
 /// `nerve repo` subcommands.
 ///
-/// Two writers, one reader and one re-pointer, following `nerve history`'s shape: the verbs are what
-/// the commands do, and the repository the registry belongs to is always `--path`, because the
+/// Three writers, two readers and one re-pointer, following `nerve history`'s shape: the verbs are
+/// what the commands do, and the repository the registry belongs to is always `--path`, because the
 /// positional argument here is the *neighbour* rather than the subject.
+///
+/// The two readers are not one command with a flag. `list` answers *which neighbours are
+/// registered*, which is a fact about this repository's registry; `links` answers *what this
+/// repository declares about them and how much of that is still true*, which is a fact about two
+/// repositories and is decided against the world as it is now.
 #[derive(Debug, Subcommand)]
 enum RepoCommand {
     /// Register a neighbouring repository, reading its identity from its own index.
@@ -605,6 +610,35 @@ enum RepoCommand {
     /// verdicts are: `nerve check` is the only command that may exit on staleness.
     List {
         /// Repository root whose registry this is. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Read the recorded cross-repository links back, each with **its own** freshness.
+    ///
+    /// The read half of `repo scan`, and a different question from it. A scan reports what that run
+    /// just wrote; this reports what is *stored*, re-decided against the world as it is now — the
+    /// registry entry's availability, the neighbour's current state, and whether the manifest the
+    /// declaration was quoted from is still here. Widening `scan` could not answer it, because a
+    /// repository that has not been scanned since its neighbour moved has nothing to report from
+    /// the scan it did not run.
+    ///
+    /// The verdict comes from the one service that decides it, which is the same call
+    /// `/api/contracts` and the `nerve_contracts` MCP tool make. Nothing is re-derived here, so the
+    /// four surfaces cannot answer this differently — `scripts/final_acceptance.sh` asserts the
+    /// agreement rather than asserting the command exists.
+    ///
+    /// Withdrawn links and retired entries are listed, marked. A link that ended is exactly the one
+    /// whose ending has to stay reportable.
+    ///
+    /// Human output carries each entry as its id, its name and its availability; `--json` carries
+    /// the entry in full, and `nerve repo list` prints every entry whether a link rests on it or
+    /// not. Exit `0` whatever the verdicts are: `nerve check` is the only command that may exit on
+    /// staleness.
+    Links {
+        /// Links listed. The total is counted separately, so truncation stays a fact.
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        /// Repository root whose links these are. Defaults to the current directory.
         #[arg(long, default_value = ".")]
         path: PathBuf,
     },
@@ -824,6 +858,7 @@ fn main() {
             path,
         }) => run_repo_add(&output, &path, &target, id.as_deref(), name.as_deref()),
         Command::Repo(RepoCommand::List { path }) => run_repo_list(&output, &path),
+        Command::Repo(RepoCommand::Links { limit, path }) => run_repo_links(&output, &path, limit),
         Command::Repo(RepoCommand::Remove { registry_id, path }) => {
             run_repo_remove(&output, &path, &registry_id)
         }
@@ -4465,6 +4500,320 @@ fn run_repo_relocate(output: &Output, path: &Path, registry_id: &str, new_path: 
         &opened.root,
         vec![registry_entry_json(&view)],
     );
+    exit::SUCCESS
+}
+
+// ---- reading the stored links back -------------------------------------------------------------
+//
+// `repo scan` renders what a scan produced. Everything below renders what is **stored**, with the
+// standing `nerve_index::contract_report` decided for it — the same call `/api/contracts` and the
+// `nerve_contracts` MCP tool make, on the same connection discipline. No verdict is computed here,
+// for the reason the registry handlers above give: a second derivation of a link's standing is a
+// second answer, and `crates/nerve-cli/tests/registry_guards.rs` scans this crate for the shapes one
+// would have to be written in.
+
+/// What a link with no qualification on it is, said rather than left as a blank.
+///
+/// The absence of a verdict is *no qualification*, never "unknown". A reader meeting an empty field
+/// would have that exactly backwards, which is why the state is printed in words.
+const LINK_IS_CURRENT: &str = "current — its registry entry is available, both recorded states \
+                               still match, and the manifest it was quoted from is still here";
+
+/// Why a repository with no registered neighbour has no links.
+///
+/// Distinct from [`NOTHING_WAS_DECLARED`] on purpose. Nothing is ever discovered, so "no neighbour
+/// was ever named" and "neighbours were named and no manifest declares a path into one" are
+/// different situations with different next steps, and an answer that let one be read as the other
+/// would be reporting *we never looked* as *we looked and there is nothing*.
+const NO_NEIGHBOUR_REGISTERED: &str =
+    "empty — no neighbour is registered, so no declaration in this repository could have resolved \
+     to one. `nerve repo add <path> --id <name>` names one; no sibling directory is ever registered \
+     on its own";
+
+/// Why a repository that *has* neighbours can still have no links.
+const NOTHING_WAS_DECLARED: &str =
+    "run `nerve repo scan` if none has been run since those neighbours were registered; otherwise \
+     no manifest in this repository declares a path into any of them";
+
+/// Which of the three answers this is, named inside the answer rather than inferred from a count.
+fn contract_links_result_kind(report: &nerve_index::ContractReport) -> &'static str {
+    if !report.links.is_empty() {
+        "contract_links"
+    } else if report.entries.is_empty() {
+        "no_registered_neighbours"
+    } else {
+        "no_contract_links"
+    }
+}
+
+/// One stored link and its standing, as JSON.
+///
+/// The keys are `/api/contracts`'s keys, deliberately: the same row read through two surfaces has to
+/// be recognisably the same row, and `scripts/final_acceptance.sh` compares the verdicts across them
+/// rather than asserting this command exists.
+///
+/// Every string that came out of a manifest or out of the *neighbour's* index goes through
+/// [`inert_text`] on T7's terms — a contract identity, a version, a manifest path and every target
+/// snapshot field are repository content, and the target fields were read from a checkout this
+/// repository does not control at all.
+fn contract_link_view_json(view: &nerve_index::ContractLinkView) -> serde_json::Value {
+    let link = &view.link;
+    let entry = nerve_index::RegistryEntryView {
+        entry: view.entry.clone(),
+        availability: view.availability.clone(),
+    };
+    json!({
+        "link_id": link.link_id,
+        // What the declaration says, in the words the manifest used.
+        "relation_semantics": inert_text(&link.relation_semantics),
+        "contract_kind": inert_text(&link.contract_kind),
+        "contract_identity": inert_text(&link.contract_identity),
+        "resolution_method": link.resolution_method.as_str(),
+        "resolution_method_note": link.resolution_method.note(),
+        // Both versions, and never a verdict: deciding whether `1.2.3` satisfies `^1.2.0` is range
+        // resolution, which needs a resolver this product does not have.
+        "expected_contract_version": link.expected_contract_version.as_deref().map(inert_text),
+        "observed_contract_version": link.observed_contract_version.as_deref().map(inert_text),
+        // The local end. Every one of these is a fact about this database.
+        "source_repository_id": link.source_repository_id,
+        "source_state_at_resolution": link.source_state_at_resolution,
+        "source_entity_id": link.source_entity_id,
+        "source_kind_snapshot": link.source_kind_snapshot.as_deref().map(inert_text),
+        "source_path": inert_text(&link.source_path),
+        "source_span": inert_text(&link.source_span),
+        "source_manifest_present": view.source_manifest_present,
+        // The far end, and it is a snapshot rather than a pointer.
+        "expected_target_repository_id": link.expected_target_repository_id,
+        "target_state_at_resolution": link.target_state_at_resolution,
+        "target_current_state": view.target_current_state,
+        "target_entity_id": link.target_entity_id.as_deref().map(inert_text),
+        "target_kind_snapshot": link.target_kind_snapshot.as_deref().map(inert_text),
+        "target_name_snapshot": link.target_name_snapshot.as_deref().map(inert_text),
+        "target_path_snapshot": link.target_path_snapshot.as_deref().map(inert_text),
+        "target_span_snapshot": link.target_span_snapshot.as_deref().map(inert_text),
+        // Who wrote the row, and what it could not resolve.
+        "extractor_id": link.extractor_id,
+        "extractor_version": link.extractor_version,
+        "evidence_details": link.evidence_details.as_deref().map(inert_text),
+        "ambiguity": link.ambiguity.as_deref().map(inert_text),
+        "unsupported_reason": link.unsupported_reason.as_deref().map(inert_text),
+        // Lifecycle. A withdrawn link is kept so that the ending can be reported at all.
+        "status": link.status.as_str(),
+        "status_note": link.status.note(),
+        "first_seen_at": link.first_seen_at,
+        "last_seen_at": link.last_seen_at,
+        "withdrawn_at": link.withdrawn_at,
+        // The verdict, carried off the service that decided it. `null` is *no qualification*, so
+        // `is_current` states it rather than leaving a consumer to read an absent field as unknown.
+        "freshness": view.freshness.map(|state| state.as_str()),
+        "freshness_note": view.freshness.map(|state| state.note()),
+        "is_current": view.freshness.is_none(),
+        // The entry it came through, in full, through the one renderer that exists for an entry.
+        "registry_entry": registry_entry_json(&entry),
+    })
+}
+
+/// One stored link and its standing, as lines.
+fn print_contract_link(output: &Output, view: &nerve_index::ContractLinkView) {
+    let link = &view.link;
+    output.line(format!(
+        "  #{}  {}  {}",
+        // A row read back out of the table always carries its key. Printing `0` for a `None` would
+        // name a row that does not exist, so the absence is said instead.
+        link.link_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "unassigned".to_string()),
+        inert_text(&link.contract_kind),
+        inert_text(&link.contract_identity)
+    ));
+    // First, because it is the question the command exists to answer.
+    match view.freshness {
+        Some(state) => output.line(format!(
+            "    {:<14} {} — {}",
+            "freshness",
+            state.as_str(),
+            state.note()
+        )),
+        None => output.line(format!("    {:<14} {LINK_IS_CURRENT}", "freshness")),
+    }
+    output.line(format!(
+        "    {:<14} {}",
+        "relation",
+        inert_text(&link.relation_semantics)
+    ));
+    output.line(format!(
+        "    {:<14} {} — {}",
+        "resolution",
+        link.resolution_method.as_str(),
+        link.resolution_method.note()
+    ));
+    output.line(format!(
+        "    {:<14} {} — {}",
+        "status",
+        link.status.as_str(),
+        link.status.note()
+    ));
+    if let Some(withdrawn_at) = &link.withdrawn_at {
+        output.line(format!("    {:<14} {withdrawn_at}", "withdrawn_at"));
+    }
+    output.line(format!(
+        "    {:<14} {}:{} — {}",
+        "manifest",
+        inert_text(&link.source_path),
+        inert_text(&link.source_span),
+        if view.source_manifest_present {
+            "still in this repository"
+        } else {
+            "no longer in this repository"
+        }
+    ));
+    output.line(format!(
+        "    {:<14} expects {}, target declares {} (both recorded, never compared)",
+        "versions",
+        link.expected_contract_version
+            .as_deref()
+            .map(inert_text)
+            .unwrap_or_else(|| "(none)".to_string()),
+        link.observed_contract_version
+            .as_deref()
+            .map(inert_text)
+            .unwrap_or_else(|| "(none)".to_string()),
+    ));
+    output.line(format!(
+        "    {:<14} {}",
+        "target_repo", link.expected_target_repository_id
+    ));
+    if let Some(path) = &link.target_path_snapshot {
+        output.line(format!(
+            "    {:<14} {} — {}",
+            "target",
+            inert_text(path),
+            match &link.target_entity_id {
+                Some(entity) => format!("entity {}", inert_text(entity)),
+                None => "the neighbour has the file and its index has never read it".to_string(),
+            }
+        ));
+    }
+    output.line(format!(
+        "    {:<14} source {} · target recorded {} · target now {}",
+        "states",
+        link.source_state_at_resolution,
+        link.target_state_at_resolution
+            .as_deref()
+            .unwrap_or("(none)"),
+        view.target_current_state.as_deref().unwrap_or("(not read)"),
+    ));
+    if let Some(ambiguity) = &link.ambiguity {
+        output.line(format!("    {:<14} {}", "ambiguity", inert_text(ambiguity)));
+    }
+    if let Some(reason) = &link.unsupported_reason {
+        output.line(format!("    {:<14} {}", "unsupported", inert_text(reason)));
+    }
+    output.line(format!(
+        "    {:<14} {}  {}",
+        "entry",
+        inert_text(&view.entry.registry_id),
+        inert_text(&view.entry.display_name)
+    ));
+    output.line(format!(
+        "    {:<14} {} — {}",
+        "entry_state",
+        view.availability.as_str(),
+        view.availability.statement()
+    ));
+}
+
+/// `nerve repo links` — read the stored links back, each with its freshness.
+///
+/// Bounded, and `truncated` is a comparison against a counted total rather than the guess
+/// `returned == limit`, which is false exactly when the answer ends on the boundary.
+fn run_repo_links(output: &Output, path: &Path, limit: usize) -> i32 {
+    if limit == 0 {
+        return output.failure("repo links", exit::USAGE, "--limit must be at least 1");
+    }
+    let (opened, repo_id) = match open_registry(output, "repo links", path, false) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    let report = match nerve_index::contract_report(&opened.conn, &repo_id, &opened.root) {
+        Ok(report) => report,
+        Err(err) => return output.failure("repo links", error_exit_code(&err), &err.to_string()),
+    };
+
+    let total = report.links.len();
+    let shown = total.min(limit);
+    let truncated = shown < total;
+    let result_kind = contract_links_result_kind(&report);
+
+    if total == 0 {
+        output.line(format!("No contract links in {}", opened.root.display()));
+        if report.entries.is_empty() {
+            output.line(format!("  {:<14} {NO_NEIGHBOUR_REGISTERED}", "registry"));
+        } else {
+            output.line(format!(
+                "  {:<14} {} registered neighbour(s), and no declaration resolved through any of \
+                 them",
+                "registry",
+                report.entries.len()
+            ));
+            output.line(format!("  {:<14} {NOTHING_WAS_DECLARED}", "next"));
+        }
+    } else {
+        output.line(format!(
+            "{total} contract link(s) in {}",
+            opened.root.display()
+        ));
+        output.line(format!(
+            "  {:<14} {}",
+            "source_state",
+            report.source_state.as_deref().unwrap_or("(never indexed)")
+        ));
+        output.line(format!(
+            "  {:<14} {} registered neighbour(s)",
+            "registry",
+            report.entries.len()
+        ));
+        output.line(format!(
+            "  {:<14} {shown} of {total}, limit {limit}{}",
+            "shown",
+            if truncated {
+                " — more beyond the limit"
+            } else {
+                ""
+            }
+        ));
+        // Structurally zero, and reported rather than assumed: a link dropped from an answer could
+        // not be reported as having been dropped.
+        if report.links_without_registry_entry > 0 {
+            output.line(format!(
+                "  {:<14} {} link(s) whose registry entry could not be found",
+                "unkeyed", report.links_without_registry_entry
+            ));
+        }
+        for view in report.links.iter().take(limit) {
+            print_contract_link(output, view);
+        }
+    }
+
+    output.object(json!({
+        "command": "repo links",
+        "ok": true,
+        "root": opened.root.display().to_string(),
+        "result_kind": result_kind,
+        "source_state": report.source_state,
+        "registry_entries_total": report.entries.len(),
+        "links_total": total,
+        "links_without_registry_entry": report.links_without_registry_entry,
+        "returned": shown,
+        "limit": limit,
+        "truncated": truncated,
+        "links": report
+            .links
+            .iter()
+            .take(limit)
+            .map(contract_link_view_json)
+            .collect::<Vec<_>>(),
+    }));
     exit::SUCCESS
 }
 

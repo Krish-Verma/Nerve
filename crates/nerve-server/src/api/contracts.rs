@@ -85,9 +85,19 @@ pub const BOUNDARY: &str =
      each of those is a command you run rather than a control on a page. Nothing is pending: a \
      button here would imply an implementation that is deliberately absent";
 
-/// The commands that change what these endpoints report, in the order a user meets them.
-pub const BOUNDARY_COMMANDS: [&str; 5] = [
+/// Every `nerve repo` verb, in name order.
+///
+/// Not only the writers: `nerve repo list` and `nerve repo links` read, and they are here because
+/// this list is what a reader who cannot press a button is given instead. `links` is the
+/// command-line answer to the question this endpoint answers, and a caller told only about the
+/// writers would be told there is no way to ask it offline.
+///
+/// `crates/nerve-cli/tests/registry.rs` compares this list against the verbs `nerve repo --help`
+/// prints, in both directions, so a verb added without a name here — or a name here with no verb
+/// behind it — fails rather than drifting.
+pub const BOUNDARY_COMMANDS: [&str; 6] = [
     "nerve repo add <path> --id <name>",
+    "nerve repo links",
     "nerve repo list",
     "nerve repo relocate <id> <path>",
     "nerve repo remove <id>",

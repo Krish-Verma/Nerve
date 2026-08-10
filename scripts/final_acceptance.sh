@@ -943,6 +943,50 @@ assert row['is_current'] is False, row
 assert row['freshness_note'], row
 assert row['target_state_at_resolution'] != row['target_current_state'], row
 PY"
+
+      # 1b. Slice 13d-ii. The CLI reports a link's freshness, and it AGREES with what
+      #     `/api/contracts` reports for the same link. Cross-surface agreement is the point of the
+      #     command, so it is asserted rather than the command's existence — a `repo links` that ran
+      #     and answered something else would pass an existence check and be worth nothing.
+      #
+      #     The comparison is keyed on `link_id`, which is the same row in the same table on both
+      #     sides, and it covers every link rather than a chosen one. It runs *after* the check
+      #     above re-indexed the neighbour, so the agreed verdicts include a real `target_changed`
+      #     rather than a column of nulls agreeing with a column of nulls.
+      check "the CLI reports a link's freshness, and agrees with /api/contracts" bash -c "
+        '$NERVE' repo links --path '$SWORK/host' --limit 500 --json > '$SWORK/cli-links.json' || exit 1
+        python3 - '$SWORK/serve.json' '$SWORK/cli-links.json' <<'PY'
+import json, sys, urllib.request
+meta = json.load(open(sys.argv[1]))
+request = urllib.request.Request(meta['base_url'] + '/api/contracts?limit=500',
+                                 headers={meta['token_header']: meta['token']})
+http = json.load(urllib.request.urlopen(request, timeout=20))['links']
+answer = json.load(open(sys.argv[2]))
+cli = answer['links']
+
+assert answer['result_kind'] == 'contract_links', answer['result_kind']
+assert answer['links_total'] == len(http) == len(cli), (answer['links_total'], len(http), len(cli))
+assert answer['truncated'] is False, answer
+
+# Anti-vacuity: two different real verdicts are present, so 'they agree' is not 'both answered
+# null for every row'.
+verdicts = {l['freshness'] for l in cli if l['freshness']}
+assert 'target_changed' in verdicts, verdicts
+assert 'target_partially_indexed' in verdicts, verdicts
+
+served = {l['link_id']: (l['freshness'], l['freshness_note'], l['is_current']) for l in http}
+reported = {l['link_id']: (l['freshness'], l['freshness_note'], l['is_current']) for l in cli}
+assert served == reported, [k for k in served if served[k] != reported.get(k)]
+
+# And the one link the row is about, named, so a failure says which verdict moved.
+row = next(l for l in cli if l['contract_identity'] == 'pkg-map/sub')
+assert row['freshness'] == 'target_changed', row
+assert row['is_current'] is False, row
+assert row['target_state_at_resolution'] != row['target_current_state'], row
+assert row['registry_entry']['registry_id'] == 'pkg-map', row['registry_entry']
+# The neighbour's display name is the hostile one, and it arrives inert rather than raw.
+assert '<img src=x onerror=alert(1)>' in row['registry_entry']['display_name'], row['registry_entry']
+PY"
     else
       skip "the contract HTTP surface" "nerve serve did not report a url"
     fi
