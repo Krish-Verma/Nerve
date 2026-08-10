@@ -376,10 +376,30 @@ body {
   border-color: var(--bone-4);
 }
 
+/*
+  The keyboard focus ring for a text input, restoring what `.field > input`'s `outline: none`
+  removes. Same values as the global `:focus-visible` rule, so this is the interface's existing
+  indicator applied where it had been switched off — not a new one.
+
+  `:focus-visible` rather than `:focus`: a pointer click keeps the quiet border-colour change, and
+  only keyboard focus draws the ring, which is the distinction the pseudo-class exists for.
+*/
+.field > input:focus-visible {
+  outline: 1px solid var(--bone);
+  outline-offset: 2px;
+}
+
 .field > input {
   flex: 1 1 auto;
   min-width: 0;
   outline: none;
+  /*
+    `outline: none` above removes the global `:focus-visible` ring, which left these inputs
+    indicated only by `.field:focus-within`'s border-colour change. Measured with real Tab presses
+    over CDP: rgb(46,40,34) → rgb(87,79,72), a contrast ratio between states of **1.81:1**, where
+    WCAG 2.4.11 requires 3:1. The ring is restored below for keyboard focus only, so a pointer
+    click still gets the quiet border treatment this input was designed with.
+  */
   font-family: var(--mono);
   font-size: 13px;
   color: var(--bone);
