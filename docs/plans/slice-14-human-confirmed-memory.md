@@ -271,7 +271,115 @@ agents.
 | **14c** | read-only HTTP and MCP, T7 and T13 | database byte-identical across a full MCP session |
 | **14d** | functional UI and the semantic acceptance checks that replace §6's existence loop | the UI displays a record, explains the boundary, prints the command |
 
+**14b is split in two (added 2026-08-10), for the reason this table already gives.** 14b as scoped
+above is a vocabulary decision, a schema migration, a store layer and a command family in one slice,
+which is the bundling that cost this project five agents.
+
+| | scope | independently testable at |
+|---|---|---|
+| **14b-i** | `MemoryScope` and `MemoryOperation`, schema **v10**, the transactional lifecycle writes | a lifecycle write that fails leaves neither the status change nor the event |
+| **14b-ii** | the `nerve memory` command family, citations, export, and the acceptance rows that replace §6's existence loop | `nerve memory export` is byte-identical twice and contains a record just written |
+
 ---
+
+## 6d. The `scope` domain, decided (added 2026-08-10, Slice 14b-i)
+
+14a stored `scope` as an opaque non-empty string and recorded that **14b decides the values**
+(§14a correction 1). This settles it, and it also settles the vocabulary 14a left open for
+`memory_event.operation` (§14a correction 5).
+
+### Why `scope` must be closed, and why the argument is not the one used for `status`
+
+`status` was closed in SQL because a *derived* view could be *stored*. `scope` has no such
+confusion, so that argument does not transfer and is not reused. The argument that does apply is
+narrower and it is about **what scope is load-bearing for**:
+
+```
+multiple_active   groups by (repo, subject, scope)
+conflicted        groups by (repo, subject, scope, claim_key)
+```
+
+Scope is in both grouping keys, so **a typo in a scope silently suppresses a conflict report.** Two
+records that genuinely answer the same named claim about the same subject — one written
+`operations`, one written `opertions` — land in different groups and are reported as unrelated
+notes. That is a **false negative on the one contradiction claim this feature makes**, produced by a
+spelling mistake, and no test can catch it because both spellings are legal.
+
+The second failure is the one this project already has a name for. `nerve memory list --scope
+opertions` against a free-form column returns **zero records**, which reads as *there are no notes*
+rather than *there is no such scope* — `absence is not zero`, the rule 7c-ii's `doctor` and 7b's
+unresolved account both exist to enforce.
+
+A closed domain turns both into a refusal at the point of entry, which is where a refusal is useful.
+
+### The values, and the axis they are on
+
+`scope` must not duplicate the two fields beside it, and a first draft of this section did:
+
+- it is **not** the kind of thing the subject is — `subject_kind_snapshot` holds that, and 14a's
+  test values `"file"` and `"repository"` are exactly that redundancy. They are placeholders, which
+  is what the plan says they are, and they are **not** the vocabulary;
+- it is **not** the question the record answers — `claim_key` holds that (`owner`,
+  `deprecation-status`, `retry-policy` are the plan's own examples).
+
+The axis left, and the one that makes the grouping do work, is **which facet of the subject the
+claim is about**. The worked case is the plan's own `owner`:
+
+> Subject `src/payments/charge.ts`, `claim_key = "owner"`, two active records: *"the payments team
+> owns this code"* and *"platform owns its deployment"*. Same subject, same named claim, **not a
+> contradiction.** Without a facet axis Nerve reports one, which is `ADR_DESCRIBES_COMPONENT`'s
+> refusal in a third place.
+
+Four values. Each is admitted only because a real note **in this repository** already needs it —
+the Slice 10 rule that *a vocabulary member with no producer is documentation, not a gate*:
+
+| value | what the claim is about | a real producer, from this repository |
+|---|---|---|
+| `implementation` | what the code does and why it is written this way | *"the 7/8 similarity threshold is an output of measurement, not a preference — `c5` measures exactly 4/5"* |
+| `interface` | what it promises to whoever calls or consumes it | *"`nerve affected` is refused, not unimplemented — ADR-0008 §A.2"* |
+| `operations` | how it behaves when it runs: configuration, deployment, environment | *"`cargo` is not on `PATH` in this shell, interactive or not"* |
+| `process` | how people work on it: ownership, review, convention | *"brief every implementation agent on why it must not commit"* |
+
+`ownership` is deliberately **not** a value: *owner* is a `claim_key` in the plan's own text, and
+promoting it to a scope would put one concept on two axes.
+
+The residual is stated rather than hidden: **a retry policy is `implementation` when it is coded and
+`operations` when it is configured**, and a human can reasonably file it either way. A misfiled
+record is not lost — it is found by subject and by search — it only fails to compete with a record
+filed elsewhere. That is the same trade `claim_key` already makes, and it is strictly better than
+the free-form column, where *every* record is misfiled with respect to every typo.
+
+### `memory_event.operation` is closed in the same migration
+
+14a left it an open string because *"14b's commands own the verbs"*. 14b owns them now, and the
+invariant that closes it is 14d's: **every event must be renderable**, and `ui_vocabulary.rs` can
+only guard a vocabulary it knows exists — 12c-iv found eight unmirrored vocabularies where the
+guard *could not fail* for them. Five values, one per mutating operation, and no more:
+
+```
+proposed · confirmed · superseded · invalidated · cited
+```
+
+`cited` is the one that is not a status transition. Its event carries `from_status = to_status`,
+which [`MemoryEventRow`] already documents as the shape of *an event that changed no status*.
+
+### Schema v10, and why it is not an edit to v9
+
+`V9` shipped in `2190643` and `MIGRATIONS`' doc comment states that **editing an existing entry is
+prohibited**; V1–V9 byte-identical is an asserted invariant with a passing test. So the two `CHECK`s
+arrive as **v10**, by SQLite's table-rebuild procedure, and the rebuild is cheap **now** and never
+cheaper: the feature has no command yet, so outside this repository's own tests no `memory` row
+exists anywhere.
+
+Unknown-value behaviour, in three places rather than one:
+
+1. **`MemoryScope::from_str` / `MemoryOperation::from_str`** refuse with `NerveError::unknown`, the
+   existing mechanism every closed vocabulary in `nerve-core` already uses.
+2. **The `CHECK`** refuses a raw-SQL writer, which is the reason it is in SQL at all.
+3. **The v10 migration refuses to run** against a database holding a `scope` outside the domain,
+   naming the offending values, rather than dropping the rows or rewriting them to a default. A
+   human's note is the one thing in this database re-indexing cannot rebuild (§6b), so a migration
+   that silently edits one is refused on the same ground as a delete verb.
 
 ## 7. Acceptance criteria
 
