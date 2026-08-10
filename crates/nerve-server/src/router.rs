@@ -169,6 +169,12 @@ fn route(target: &Target, ctx: &Context<'_>) -> Outcome {
         "/api/history/diff" => api::history::diff(ctx, target),
         "/api/history/frequency" => api::history::frequency(ctx, target),
         "/api/history/cochange" => api::history::cochange(ctx, target),
+        // Slice 13d. Read-only like every route above it: registering a neighbour and scanning
+        // this repository's manifests both write, so neither is a route — `api::contracts::BOUNDARY`
+        // is carried on every answer instead, with the exact commands.
+        "/api/contracts" => api::contracts::links(ctx, target),
+        "/api/contracts/registry" => api::contracts::registry(ctx, target),
+        "/api/contracts/vocabulary" => api::contracts::vocabulary(ctx),
         other => {
             return match assets::lookup(other) {
                 Some(asset) => Outcome::Asset(asset),
@@ -217,7 +223,7 @@ fn wrap(value: serde_json::Value) -> serde_json::Value {
 /// Nothing checked this before Slice 12c-iii-a. `no_api_route_answers_without_a_token` iterates this
 /// table, but the guard runs *before* dispatch, so an entry naming no arm still answered `401` and
 /// passed.
-pub const ROUTES: [&str; 18] = [
+pub const ROUTES: [&str; 21] = [
     "/api/overview",
     "/api/search",
     "/api/entity",
@@ -236,6 +242,9 @@ pub const ROUTES: [&str; 18] = [
     "/api/history/diff",
     "/api/history/frequency",
     "/api/history/cochange",
+    "/api/contracts",
+    "/api/contracts/registry",
+    "/api/contracts/vocabulary",
 ];
 
 #[cfg(test)]

@@ -16,6 +16,22 @@ export type EntityTab = 'relations' | 'evidence' | 'graph' | 'source';
 export const ENTITY_TABS: readonly EntityTab[] = ['relations', 'evidence', 'graph', 'source'];
 
 /**
+ * The three contract questions, which are three routes rather than one screen with a filter.
+ *
+ * `links` and `registry` are different questions with different evidence behind them — what this
+ * repository declares, and what it has been told exists — and `vocabulary` is neither: it is the
+ * closed set of forms Nerve reads and the closed set it declines, which a reader needs in order to
+ * know that an empty link list is a decision rather than a gap.
+ */
+export type ContractTab = 'links' | 'registry' | 'vocabulary';
+
+const CONTRACT_TAB_NAMES: readonly string[] = ['links', 'registry', 'vocabulary'];
+
+export function isContractTab(value: string | undefined): value is ContractTab {
+  return value !== undefined && CONTRACT_TAB_NAMES.includes(value);
+}
+
+/**
  * The screens.
  *
  * `unresolved` and `coverage` are deliberately two routes rather than one "gaps" route. They are
@@ -33,7 +49,8 @@ export type Route =
   | { view: 'entity'; id: string; tab: EntityTab; options: Record<string, string> }
   | { view: 'unresolved' }
   | { view: 'coverage' }
-  | { view: 'history'; tab: HistoryTab; options: Record<string, string> };
+  | { view: 'history'; tab: HistoryTab; options: Record<string, string> }
+  | { view: 'contracts'; tab: ContractTab; options: Record<string, string> };
 
 function parse(hash: string): Route {
   const raw = hash.startsWith('#') ? hash.slice(1) : hash;
@@ -67,6 +84,14 @@ function parse(hash: string): Route {
       });
       return { view: 'history', tab, options };
     }
+    case 'contracts': {
+      const tab = isContractTab(segments[1]) ? segments[1] : 'links';
+      const options: Record<string, string> = {};
+      search.forEach((value, key) => {
+        options[key] = value;
+      });
+      return { view: 'contracts', tab, options };
+    }
     default:
       return { view: 'overview' };
   }
@@ -98,6 +123,14 @@ export function href(route: Route): string {
     // path may hold a `#`, and a raw one would be dropped by the browser before the request left.
     case 'history':
       return historyFragment(route.tab, route.options);
+    // A registry id may hold characters a fragment would swallow, so the options are encoded the
+    // same way the history fragment encodes a path rather than concatenated by hand.
+    case 'contracts': {
+      const search = new URLSearchParams(route.options);
+      const text = search.toString();
+      const base = `#/contracts/${route.tab}`;
+      return text ? `${base}?${text}` : base;
+    }
   }
 }
 

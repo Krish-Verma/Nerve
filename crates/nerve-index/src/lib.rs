@@ -86,8 +86,9 @@ pub mod tsframework;
 pub use bind::{Binding, BindingTable, ThisResolution};
 pub use config::Config;
 pub use contracts::{
-    link_freshness, scan_contracts, Ambiguity, ContractRule, ContractScan, ManifestRefusal,
-    RecordedLink, ScanOutcome, ScanRefusal, SupportedForm, UnresolvedDeclaration,
+    contract_report, contract_vocabulary, link_freshness, scan_contracts, Ambiguity,
+    ContractLinkView, ContractReport, ContractRule, ContractScan, ContractTerm, ContractVocabulary,
+    ManifestRefusal, RecordedLink, ScanOutcome, ScanRefusal, SupportedForm, UnresolvedDeclaration,
     UnresolvedReason as ContractUnresolvedReason, UnsupportedDeclaration,
     UnsupportedForm as ContractUnsupportedForm, CONTRACT_EXTRACTOR_VERSION, EXPORT_CONDITION_ORDER,
     EXPORT_REFERENCE_SEMANTICS, LEGACY_ENTRY_FIELDS, MAX_DECLARATIONS_PER_MANIFEST,

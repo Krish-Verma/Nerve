@@ -415,14 +415,22 @@ fn every_advertised_route_is_served_and_every_served_route_is_advertised() {
     // arm is caught by the set comparison — the assertion that names both sides — rather than by
     // this one, which would only say "fewer than expected".
     assert!(
-        served.len() >= 11,
+        served.len() >= 14,
         "the dispatch scrape found only {} arms: {served:?}",
         served.len()
     );
-    assert!(
-        served.iter().any(|route| route == "/api/history"),
-        "{served:?}"
-    );
+    // One sentinel per family the scrape was extended for, so a scrape that silently stopped
+    // matching a whole group of arms fails by name rather than by an arithmetic floor.
+    for family in [
+        "/api/history",
+        "/api/contracts",
+        "/api/contracts/vocabulary",
+    ] {
+        assert!(
+            served.iter().any(|route| route == family),
+            "{family} is not in the scraped dispatch: {served:?}"
+        );
+    }
 
     let mut advertised: Vec<String> = nerve_server::router::ROUTES
         .iter()

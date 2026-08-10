@@ -101,16 +101,32 @@ observation is never presented as universal behaviour.
 is refused **as a refusal** and the containing path is never substituted. Relationship history would
 attribute today's edges to yesterday's commit, so it needs a historical graph that does not exist.
 
-## 6. Cross-repository contracts (row 13 — not started)
+## 6. Cross-repository contracts (row 13 — 13a–13d complete)
 
 | capability | Svc | CLI | JSON | HTTP | MCP | UI | Acc |
 |---|---|---|---|---|---|---|---|
-| Registry of neighbouring repositories | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| npm local/workspace + Python path dependencies | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| npm export resolution to a target file entity | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Registry of neighbouring repositories | ✅ | `repo add/list/remove/relocate` | ✅ | `/api/contracts/registry` | ✅ `nerve_contracts` | Contracts | ✅ |
+| Registration is explicit; nothing auto-discovered | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Target opened read-only, byte-identical after reads | ✅ | ✅ | n/a | ✅ | ✅ | n/a | ✅ |
+| C1 npm local/workspace dependency | ✅ | `repo scan` | ✅ | `/api/contracts` | ✅ | Contracts | ✅ |
+| C3 Python path dependency | ✅ | `repo scan` | ✅ | `/api/contracts` | ✅ | Contracts | ✅ |
+| C2 npm export resolution to a target **file entity** | ✅ | `repo scan` | ✅ | `/api/contracts` | ✅ | Contracts | ✅ |
+| **Is this link still current?** (link freshness) | ✅ | ⬜ **gap — 13d-ii** | ⬜ | ✅ | ✅ | ✅ | ✅ |
+| Unsupported form recorded with its form named | ✅ | ✅ (tally) | ✅ | ➖ names vocabulary only | ➖ | ➖ | ✅ |
 | Auto-discovery of sibling checkouts | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ |
 | Fetching a package or registry from the network | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ |
 | A cross-repository link as a **local** assertion | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ |
+| Local `path`/`impact` traversing a contract link | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ | ✅ (asserted negatively) |
+| `contract_version_mismatch` verdict | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ |
+
+**Two refusals with measured reasons.** `contract_version_mismatch` needs range satisfaction
+(`^1.2.0` against `1.2.3`), which is a semver resolver and therefore a new dependency; both versions
+are recorded and no verdict is derived. And a cross-repository link cannot be a local assertion
+because `assertion.target_entity_id` is a hard foreign key into the local `entity` table.
+
+**The one gap is a surface disagreement**, which is what this document exists to surface: after 13d,
+HTTP, MCP and the UI can answer *"is this link still current?"* and the CLI cannot — `repo scan`
+reports what a scan just wrote and carries no freshness field. `nerve repo links` closes it.
 
 **The refusal that shapes the row:** `assertion.target_entity_id` is `NOT NULL REFERENCES
 entity(entity_id)` (`schema.rs:97`, immutable since v1) with `foreign_keys=ON`, and a

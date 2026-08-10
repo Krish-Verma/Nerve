@@ -103,6 +103,139 @@ pub fn served() -> (tempfile::TempDir, PathBuf, Session) {
     (dir, root, session)
 }
 
+// ---- cross-repository contract fixtures --------------------------------------------------------
+
+/// A display name that is legal to register and is also an XSS payload.
+///
+/// `display_name` is untrusted repository content on exactly T7's terms — a neighbour is a checkout
+/// that may have been cloned from anywhere — so the contract surfaces have to carry it inside the
+/// envelope like any other repository string. It embeds [`PAYLOAD`] so the existing leak probe's
+/// marker works unchanged.
+pub const HOSTILE_DISPLAY_NAME: &str = "<img src=x onerror=alert(1)> neighbour";
+
+/// Six repositories, five registered in the first, with the contract links scanned.
+pub struct ContractWorld {
+    /// Kept so the temporary directory outlives the roots.
+    pub dir: tempfile::TempDir,
+    /// The repository the questions are asked of.
+    pub host: PathBuf,
+    /// The neighbour registered as `pkg-map`, and the one C2 reaches a **file entity** inside.
+    ///
+    /// Its database must be byte-identical after every read.
+    pub map: PathBuf,
+}
+
+/// The neighbours this world registers, in the order they are registered.
+///
+/// `pkg-unregistered` is deliberately absent from the tree as well as from the registry, so a
+/// declaration naming it resolves to nothing — which is what keeps "declared and unregistered"
+/// from being confused with "not declared".
+pub const CONTRACT_WORLD_NEIGHBOURS: [&str; 5] =
+    ["pkg-map", "pkg-string", "pkg-legacy", "twin-a", "twin-b"];
+
+/// Links this world records once the neighbours are registered and the manifests are scanned.
+///
+/// Asserted where the world is built, so a fixture change that quietly halved it fails here rather
+/// than in whichever test happened to count.
+pub const CONTRACT_WORLD_LINKS: usize = 15;
+
+/// Build `fixtures/contracts-exports` as six separate repositories, register five of them in the
+/// sixth, and scan.
+///
+/// **Each repository gets its own `project_id`**, because `repo_id` derives from it and resolution
+/// is *by repository id*: two checkouts sharing an identity would make every resolution assertion
+/// pass for the wrong reason. That habit is inherited from `crates/nerve-index/tests/contracts.rs`.
+///
+/// This fixture rather than `contracts-npm`, because it is the only one that produces a **C2**
+/// link: an import specifier resolved through a neighbour's own export map to a file entity inside
+/// it. That is the only link with a non-null target snapshot, and a target snapshot is what the
+/// whole surface exists to render — a link whose snapshot fields were all null would let a renderer
+/// omit them and still pass.
+pub fn contract_world(display_name: &str) -> ContractWorld {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/contracts-exports");
+    let dir = tempfile::tempdir().unwrap();
+    let host = dir.path().join("host");
+    let build = |name: &str, seed: usize| -> PathBuf {
+        let root = dir.path().join(name);
+        copy_tree(&fixtures.join(name), &root);
+        nerve_index::init_with_project_id(
+            &root,
+            Some(&format!("{:032x}", 0xc0000000u64 + seed as u64)),
+        )
+        .unwrap();
+        nerve_index::index_repository(&root).unwrap();
+        root
+    };
+    let mut roots = Vec::new();
+    for (offset, name) in CONTRACT_WORLD_NEIGHBOURS.into_iter().enumerate() {
+        roots.push((name, build(name, offset + 1)));
+    }
+    // A real, indexed, adjacent Nerve repository that is deliberately **not** registered, so that
+    // "a package a manifest names" and "a package Nerve may link to" stay distinguishable on this
+    // surface as well as in the precision fixture. Nothing auto-registers it.
+    build("pkg-unregistered", CONTRACT_WORLD_NEIGHBOURS.len() + 1);
+    copy_tree(&fixtures.join("host"), &host);
+    nerve_index::init_with_project_id(&host, Some("000000000000000000000000c0000000")).unwrap();
+    nerve_index::index_repository(&host).unwrap();
+
+    let conn = nerve_store::open(&nerve_index::config::db_path(&host)).unwrap();
+    let repo_id = nerve_store::repository(&conn).unwrap().unwrap().repo_id;
+    for (name, root) in &roots {
+        // Only the first neighbour carries the caller's display name. One is enough to prove the
+        // envelope holds, and giving every entry the same string would make a leak indistinguishable
+        // from a different entry's legitimate value.
+        let display = if *name == CONTRACT_WORLD_NEIGHBOURS[0] {
+            display_name
+        } else {
+            name
+        };
+        match nerve_index::add_registry_target(&conn, &repo_id, root, Some(name), Some(display))
+            .unwrap()
+        {
+            nerve_index::RegistryOutcome::Done(_) => {}
+            nerve_index::RegistryOutcome::Refused(reason) => {
+                panic!("the neighbour {name} was refused: {reason}")
+            }
+        }
+    }
+    match nerve_index::scan_contracts(&conn, &repo_id, &host).unwrap() {
+        nerve_index::ScanOutcome::Done(scan) => assert_eq!(
+            scan.inserted(),
+            CONTRACT_WORLD_LINKS,
+            "the fixture no longer records the links this world is built on"
+        ),
+        nerve_index::ScanOutcome::Refused(reason) => panic!("the scan refused: {reason}"),
+    }
+    drop(conn);
+
+    let map = roots[0].1.clone();
+    ContractWorld { dir, host, map }
+}
+
+/// A contract world with a server already running over the host repository.
+pub fn served_contracts(display_name: &str) -> (ContractWorld, Session) {
+    let world = contract_world(display_name);
+    let session = Session::start(&world.host);
+    (world, session)
+}
+
+/// A repository with an index and **no** registry at all.
+///
+/// "Nobody has registered a neighbour" and "a neighbour was registered and nothing declares it" are
+/// different answers, and a surface that rendered the first as the second would be reporting an
+/// absence as a finding.
+pub fn served_without_contracts() -> (tempfile::TempDir, PathBuf, Session) {
+    let (dir, root) = fixture_copy("ts-basic");
+    index(&root);
+    let session = Session::start(&root);
+    (dir, root, session)
+}
+
+/// BLAKE3 of a file, so "unchanged" is a hash comparison rather than a length comparison.
+pub fn digest(path: &Path) -> String {
+    nerve_core::ids::content_hash(&std::fs::read(path).unwrap())
+}
+
 // ---- history fixtures ------------------------------------------------------------------------
 
 /// A history fixture, copied and turned back into a repository.

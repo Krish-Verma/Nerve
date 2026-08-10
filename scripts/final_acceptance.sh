@@ -833,6 +833,225 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------
+section "4e. The contract surfaces: HTTP, MCP, and the bytes on both sides"
+
+# Behaviour on every surface Slice 13d ships. Not "the route exists" — a route that exists and
+# answers nothing is worth nothing — but: can a link be read over HTTP *with its freshness*, does
+# the MCP tool answer and refuse an argument its question does not take, does repository-derived
+# text stay inside the untrusted field, and are BOTH databases byte-identical afterwards.
+#
+# `fixtures/contracts-exports` rather than `contracts-npm`, because it is the only fixture that
+# produces a C2 link: an import specifier resolved through the neighbour's own export map to a file
+# inside it. That is the only link with a target snapshot, and a snapshot is what the freshness
+# verdict is read against.
+if [ -d "$ROOT/fixtures/contracts-exports" ] && command -v python3 >/dev/null 2>&1; then
+  SWORK=$(mktemp -d)
+  trap 'rm -rf "${WORK:-}" "${HWORK:-}" "${RWORK:-}" "${CWORK:-}" "${SWORK:-}"' EXIT
+
+  surface_repo() {
+    local name="$1"
+    cp -R "$ROOT/fixtures/contracts-exports/$name" "$SWORK/$name" || return 1
+    rm -rf "$SWORK/$name/.nerve"
+    "$NERVE" init "$SWORK/$name" >/dev/null 2>&1 || return 1
+    "$NERVE" index "$SWORK/$name" >/dev/null 2>&1 || return 1
+    return 0
+  }
+
+  # The display name is registered as an XSS payload on purpose. It is untrusted repository content
+  # on T7's terms — a neighbour is a checkout that may have been cloned from anywhere — so the
+  # question every surface has to answer is where it ends up, not whether it is accepted.
+  HOSTILE_NAME='<img src=x onerror=alert(1)> neighbour'
+
+  if surface_repo host && surface_repo pkg-map &&
+     "$NERVE" repo add "$SWORK/pkg-map" --path "$SWORK/host" --id pkg-map --name "$HOSTILE_NAME" >/dev/null 2>&1 &&
+     "$NERVE" repo scan --path "$SWORK/host" >/dev/null 2>&1; then
+
+    HOST_DB="$SWORK/host/.nerve/nerve.db"
+    MAP_DB="$SWORK/pkg-map/.nerve/nerve.db"
+    BEFORE_HOST=$(shasum -a 256 "$HOST_DB" | cut -d' ' -f1)
+    BEFORE_MAP=$(shasum -a 256 "$MAP_DB" | cut -d' ' -f1)
+
+    # 1. HTTP. The server is started on an ephemeral port and prints its own url and token as JSON,
+    #    so nothing here has to guess either.
+    "$NERVE" serve "$SWORK/host" --json >"$SWORK/serve.json" 2>"$SWORK/serve.err" &
+    SERVE_PID=$!
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      grep -q '"token"' "$SWORK/serve.json" 2>/dev/null && break
+      sleep 0.25
+    done
+
+    if grep -q '"token"' "$SWORK/serve.json" 2>/dev/null; then
+      check "a contract link is readable over HTTP with its freshness" bash -c "
+        python3 - '$SWORK/serve.json' <<'PY'
+import json, sys, urllib.request
+meta = json.load(open(sys.argv[1]))
+def get(route):
+    request = urllib.request.Request(meta['base_url'] + route,
+                                     headers={meta['token_header']: meta['token']})
+    return json.load(urllib.request.urlopen(request, timeout=20))
+
+answer = get('/api/contracts?limit=500')
+assert answer['ok'] is True, answer
+links = answer['links']
+assert links, 'no link was served'
+row = next(l for l in links
+           if l['contract_kind'] == 'npm_export_resolution' and l['contract_identity'] == 'pkg-map/sub')
+# The freshness verdict, and the snapshot it is read against.
+assert row['freshness'] is None, row
+assert row['is_current'] is True, row
+assert row['relation_semantics'] == 'REFERENCES', row
+assert row['resolution_method'] == 'export_map_resolved', row
+assert row['target_path_snapshot'] == 'src/sub.ts', row
+assert row['target_entity_id'], row
+assert row['target_state_at_resolution'], row
+assert row['observed_contract_version'] == '3.1.0', row
+assert row['registry_entry']['availability'] == 'available', row
+assert row['registry_entry']['availability_statement'], row
+# A file the neighbour has and never indexed is unknown, not stale and not missing.
+data = next(l for l in links if l['contract_identity'] == 'pkg-map/data')
+assert data['freshness'] == 'target_partially_indexed', data
+assert data['target_path_snapshot'] == 'src/data.json', data
+assert data['target_entity_id'] is None, data
+# The registry and the vocabulary answer too, and the declined forms are named rather than counted.
+entries = get('/api/contracts/registry')['entries']
+assert [e['registry_id'] for e in entries] == ['pkg-map'], entries
+forms = [t['name'] for t in get('/api/contracts/vocabulary')['vocabulary']['unsupported_forms']]
+assert len(forms) == 23, forms
+assert 'npm_export_wildcard_subpath' in forms, forms
+# Read-only: a POST is refused before anything is routed.
+try:
+    urllib.request.urlopen(urllib.request.Request(
+        meta['base_url'] + '/api/contracts', data=b'x',
+        headers={meta['token_header']: meta['token']}), timeout=20)
+    raise AssertionError('a POST was answered')
+except urllib.error.HTTPError as error:
+    assert error.code in (405, 413), error.code
+PY"
+
+      check "the neighbour moving on is visible over HTTP as target_changed" bash -c "
+        printf 'export function added(): number { return 3; }\n' > '$SWORK/pkg-map/src/added.ts'
+        '$NERVE' index '$SWORK/pkg-map' >/dev/null 2>&1 || exit 1
+        python3 - '$SWORK/serve.json' <<'PY'
+import json, sys, urllib.request
+meta = json.load(open(sys.argv[1]))
+request = urllib.request.Request(meta['base_url'] + '/api/contracts?limit=500',
+                                 headers={meta['token_header']: meta['token']})
+links = json.load(urllib.request.urlopen(request, timeout=20))['links']
+row = next(l for l in links if l['contract_identity'] == 'pkg-map/sub')
+assert row['freshness'] == 'target_changed', row
+assert row['is_current'] is False, row
+assert row['freshness_note'], row
+assert row['target_state_at_resolution'] != row['target_current_state'], row
+PY"
+    else
+      skip "the contract HTTP surface" "nerve serve did not report a url"
+    fi
+    kill "$SERVE_PID" >/dev/null 2>&1
+    wait "$SERVE_PID" 2>/dev/null
+
+    # The check above re-indexed the neighbour on purpose, which is a write to its database and the
+    # only one in this section. The byte comparison below therefore starts from the state that
+    # deliberate write left, so that "unchanged" means "no *read* wrote", which is the property.
+    AFTER_MOVE_MAP=$(shasum -a 256 "$MAP_DB" | cut -d' ' -f1)
+
+    # 2. MCP. Driven over the wire the way a client drives it, so the framing is part of what is
+    #    checked. An argument a question does not take must be REFUSED rather than ignored:
+    #    ignoring it would let a caller believe the registry list was narrowed when nothing narrowed
+    #    it.
+    check "the MCP contract tool answers, and refuses an argument its question does not take" bash -c "
+      {
+        printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"acceptance\",\"version\":\"1\"}}}'
+        printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}'
+        printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"nerve_contracts\",\"arguments\":{\"question\":\"links\",\"limit\":100}}}'
+        printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"nerve_contracts\",\"arguments\":{\"question\":\"registry\",\"registry_id\":\"pkg-map\"}}}'
+        printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"nerve_contracts\",\"arguments\":{\"question\":\"vocabulary\"}}}'
+      } | '$NERVE' mcp --path '$SWORK/host' > '$SWORK/mcp.jsonl' 2>'$SWORK/mcp.err'
+      python3 - '$SWORK/mcp.jsonl' <<'PY'
+import json, sys
+rows = {r['id']: r for r in (json.loads(line) for line in open(sys.argv[1]) if line.strip())}
+assert set(rows) == {1, 2, 3, 4, 5}, sorted(rows)
+names = [t['name'] for t in rows[2]['result']['tools']]
+assert 'nerve_contracts' in names, names
+assert len(names) == 7, names
+
+answered = rows[3]['result']
+assert answered['isError'] is False, answered
+payload = answered['structuredContent']
+contracts = payload['repository_content']['contracts']
+assert contracts['result_kind'] == 'contract_links', contracts['result_kind']
+assert contracts['links'], 'the tool answered with no link'
+assert contracts['boundary']['read_only'] is True, contracts['boundary']
+assert 'nerve repo scan' in contracts['boundary']['commands'], contracts['boundary']
+
+# The refusal: an argument this question does not take, named, with the question's own set.
+refused = rows[4]
+assert 'error' in refused, refused
+assert refused['error']['code'] == -32602, refused['error']
+assert refused['error']['data']['argument'] == 'registry_id', refused['error']['data']
+assert refused['error']['data']['question'] == 'registry', refused['error']['data']
+
+forms = rows[5]['result']['structuredContent']['repository_content']['contracts']['vocabulary']['unsupported_forms']
+assert len(forms) == 23, len(forms)
+PY"
+
+    check "repository-derived text stays inside repository_content" bash -c "
+      python3 - '$SWORK/mcp.jsonl' <<'PY'
+import json, sys
+rows = {r['id']: r for r in (json.loads(line) for line in open(sys.argv[1]) if line.strip())}
+payload = rows[3]['result']['structuredContent']
+content = payload['repository_content']
+
+def strings(value, at=''):
+    if isinstance(value, str):
+        yield at, value
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from strings(item, f'{at}/{index}')
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from strings(item, f'{at}/{key}')
+
+inside = {text for _, text in strings(content)}
+assert inside, 'nothing was labelled, so this check is vacuous'
+# The hostile display name really reached the answer, or the scan below proves nothing.
+payload_marker = '<img src=x onerror=alert(1)>'
+assert any(payload_marker in text for text in inside), 'the hostile name never reached the answer'
+# Every repository-derived field is present, and nothing outside the envelope repeats one.
+link = next(l for l in content['contracts']['links'] if l['contract_identity'] == 'pkg-map/sub')
+for field in ('contract_identity', 'observed_contract_version', 'source_path',
+              'target_path_snapshot', 'target_name_snapshot', 'target_span_snapshot'):
+    assert link[field], (field, link)
+assert link['registry_entry']['display_name'], link['registry_entry']
+assert link['registry_entry']['local_path'], link['registry_entry']
+
+outside = {key: payload[key] for key in payload if key != 'repository_content'}
+for at, text in strings(outside):
+    if at.startswith('/query'):
+        continue
+    assert text not in inside, (at, text)
+    assert payload_marker not in text, (at, text)
+PY"
+
+    check "both databases are byte-identical after every contract read" bash -c "
+      after_host=\$(shasum -a 256 '$HOST_DB' | cut -d' ' -f1)
+      after_map=\$(shasum -a 256 '$MAP_DB' | cut -d' ' -f1)
+      [ \"\$after_host\" = '$BEFORE_HOST' ] || { echo \"host db changed\"; exit 1; }
+      [ \"\$after_map\" = '$AFTER_MOVE_MAP' ] || { echo \"neighbour db changed\"; exit 1; }
+      # Anti-vacuity: the reads really produced links, so 'unchanged' is not 'nothing ran'.
+      python3 -c '
+import json,sys
+rows = {r[\"id\"]: r for r in (json.loads(l) for l in open(\"$SWORK/mcp.jsonl\") if l.strip())}
+links = rows[3][\"result\"][\"structuredContent\"][\"repository_content\"][\"contracts\"][\"links\"]
+assert len(links) >= 4, len(links)
+'"
+  else
+    skip "the contract surfaces" "the export fixture pair could not be built"
+  fi
+else
+  skip "the contract surfaces" "fixtures/contracts-exports is missing or python3 is unavailable"
+fi
+
+# ---------------------------------------------------------------------------------------------
 section "5. Supply chain"
 
 LOCKED=$(grep -c '^name = ' "$ROOT/Cargo.lock")

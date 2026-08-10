@@ -32,6 +32,7 @@ use nerve_core::vocab::{
     RenameAnalysisCompleteness, RenameEvidence, SimilarityUnmeasured, SummaryTruncation,
     UnresolvedCategory, WalkTermination,
 };
+use nerve_index::contracts::{Ambiguity, ContractRule};
 use nerve_index::docref;
 use nerve_index::docs::{AdrStatus, STATUS_UNPARSED};
 use nerve_index::refs::{UnresolvedReason, UNMODELLED_FORMS};
@@ -68,7 +69,7 @@ fn types_ts() -> String {
 ///
 /// One list, used by both the source-side vocabulary tests' companion below and the
 /// bundle-staleness check, so a new gloss table cannot be added to one and forgotten by the other.
-const GLOSS_TABLES: [(&str, &str); 22] = [
+const GLOSS_TABLES: [(&str, &str); 28] = [
     ("format.ts", "FRESHNESS"),
     ("format.ts", "SOURCE_TYPES"),
     ("format.ts", "DIRECTNESS"),
@@ -99,6 +100,17 @@ const GLOSS_TABLES: [(&str, &str); 22] = [
     ("vocab.ts", "RENAME_ANALYSIS_COMPLETENESS"),
     ("vocab.ts", "SUMMARY_TRUNCATION"),
     ("vocab.ts", "SIMILARITY_UNMEASURED"),
+    // Slice 13d. The four Slice 13a-i declared, moved here in the same change that made
+    // `views/Contracts.tsx` import them, plus the two 13d added for the vocabularies that view
+    // renders as bare tokens. A table left on the deferred list once a view imports it would make
+    // the bundle-staleness check stop covering a gloss that is now on screen — which is the whole
+    // reason the two lists exist rather than one.
+    ("vocab.ts", "REGISTRY_ENTRY_STATUS"),
+    ("vocab.ts", "CONTRACT_RESOLUTION_METHOD"),
+    ("vocab.ts", "CONTRACT_LINK_STATUS"),
+    ("vocab.ts", "CONTRACT_FRESHNESS"),
+    ("vocab.ts", "CONTRACT_KIND"),
+    ("vocab.ts", "CONTRACT_AMBIGUITY"),
 ];
 
 /// Gloss tables the interface **declares and does not yet render**.
@@ -109,20 +121,18 @@ const GLOSS_TABLES: [(&str, &str); 22] = [
 /// choose a side — a table on neither list fails by name — and because the honest way to declare a
 /// gloss ahead of the view that renders it is to record the gap as data rather than to omit it.
 ///
-/// **Slice 13a-i's four cross-repository vocabularies are here.** 13a-i is storage and vocabulary
-/// only: there is no CLI, no HTTP route, no MCP tool and no view for a registry yet, so nothing
-/// imports these tables and their prose is not in the bundle. They move to [`GLOSS_TABLES`] in the
-/// same change that makes a view render one, which is 13d.
+/// **The list is empty as of Slice 13d, and it stays.** Slice 13a-i's four cross-repository
+/// vocabularies sat here while the row had storage and no surface; 13d ships `views/Contracts.tsx`,
+/// which imports all four, so all four moved to [`GLOSS_TABLES`] in the same change — the rule this
+/// pair of lists exists to enforce. An empty list is not a dead one: it is what the next vocabulary
+/// declared ahead of its view is added to, and
+/// [`every_gloss_table_the_source_declares_is_on_exactly_one_list`] still fails a table that is on
+/// neither.
 ///
 /// A table listed here must be genuinely unrendered: the test proves it by asserting its prose is
 /// **absent** from the shipped bundle, which is what stops this becoming a way to opt out of the
 /// staleness check.
-const DECLARED_NOT_RENDERED: [(&str, &str); 4] = [
-    ("vocab.ts", "REGISTRY_ENTRY_STATUS"),
-    ("vocab.ts", "CONTRACT_RESOLUTION_METHOD"),
-    ("vocab.ts", "CONTRACT_LINK_STATUS"),
-    ("vocab.ts", "CONTRACT_FRESHNESS"),
-];
+const DECLARED_NOT_RENDERED: [(&str, &str); 0] = [];
 
 /// Every `const NAME: Record<…>` a gloss source declares, in declaration order.
 ///
@@ -1010,6 +1020,38 @@ fn every_contract_resolution_method_is_glossed() {
         "CONTRACT_RESOLUTION_METHOD (apps/nerve-web/src/vocab.ts)",
         &expected,
         &object_keys(&vocab_ts(), "CONTRACT_RESOLUTION_METHOD"),
+    );
+}
+
+/// Slice 13d. The rule is on every link card, so a missing gloss would render a bare
+/// `npm_export_resolution` beside a claim about a file in another repository.
+#[test]
+fn every_contract_rule_is_glossed() {
+    let expected: Vec<String> = ContractRule::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    covers(
+        "ContractRule::ALL",
+        "CONTRACT_KIND (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "CONTRACT_KIND"),
+    );
+}
+
+/// Slice 13d. Both values mean *this was declared twice*, and only one of them means the two
+/// declarations disagreed — which is the difference a bare token cannot carry.
+#[test]
+fn every_contract_ambiguity_is_glossed() {
+    let expected: Vec<String> = Ambiguity::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    covers(
+        "Ambiguity::ALL",
+        "CONTRACT_AMBIGUITY (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "CONTRACT_AMBIGUITY"),
     );
 }
 

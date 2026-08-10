@@ -19,6 +19,7 @@ import { count } from './format';
 import { useApi } from './hooks';
 import { href, useRoute, type Route } from './routing';
 import { Omnibox } from './ui/Omnibox';
+import { Contracts } from './views/Contracts';
 import { Coverage } from './views/Coverage';
 import { Entity } from './views/Entity';
 import { History } from './views/History';
@@ -182,6 +183,21 @@ export function App() {
           />
         </div>
 
+        {/*
+          Its own group, and the only screen in this interface that is about a repository other
+          than this one. There is no count beside it for the same reason History has none: a number
+          of links means nothing without the statement of how many of them still describe the
+          world, and that statement is on the screen itself.
+        */}
+        <div className="rail__group">
+          <div className="rail__label micro">other repositories</div>
+          <RailLink
+            to={{ view: 'contracts', tab: 'links', options: {} }}
+            current={route.view === 'contracts'}
+            label="Contracts"
+          />
+        </div>
+
         {data ? (
           <div className="rail__focus">
             <div className="micro">index state</div>
@@ -207,6 +223,8 @@ export function App() {
           <Coverage />
         ) : route.view === 'history' ? (
           <History tab={route.tab} options={route.options} />
+        ) : route.view === 'contracts' ? (
+          <Contracts tab={route.tab} options={route.options} />
         ) : (
           <Unresolved />
         )}

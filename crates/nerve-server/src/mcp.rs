@@ -62,6 +62,7 @@ use nerve_store::Connection;
 use crate::api;
 use crate::error::{Result, ServerError};
 
+pub mod contracts;
 pub mod gaps;
 pub mod history;
 pub mod impact;
@@ -78,7 +79,7 @@ pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Every tool this server advertises, in the order `tools/list` returns them.
 ///
-/// Six, and each earns its place by having a **materially different input/output contract**
+/// Seven, and each earns its place by having a **materially different input/output contract**
 /// (`docs/plans/slice-08-mcp.md`): a selector and its evidence; a free-text query and ranked
 /// hits; two selectors and an ordered chain; one selector and a reverse closure with an
 /// unresolved account; no selector at all, with a four-valued coverage verdict and a `totals`
@@ -91,13 +92,20 @@ pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// the rule is about contracts, and `nerve_history`'s seven questions share one — the block
 /// `docs/plans/slice-12c-historical-questions.md` §9 requires to be assembled in exactly one
 /// place. See `mcp/history.rs` for the trade that was accepted with it.
-pub const TOOL_NAMES: [&str; 6] = [
+///
+/// The seventh is Slice 13d's, and it answers about a **different repository** — what this one
+/// declares about its registered neighbours, and how much of each declaration is still true. Its
+/// three questions share one block for the same reason the sixth's seven do, and it is not
+/// `nerve_investigate` with a flag: no other tool on this surface reads anything outside the
+/// repository it was opened on.
+pub const TOOL_NAMES: [&str; 7] = [
     investigate::TOOL_NAME,
     search::TOOL_NAME,
     path::TOOL_NAME,
     impact::TOOL_NAME,
     gaps::TOOL_NAME,
     history::TOOL_NAME,
+    contracts::TOOL_NAME,
 ];
 
 /// The `tools/list` payload.
@@ -109,6 +117,7 @@ pub fn descriptors() -> Vec<Value> {
         impact::descriptor(),
         gaps::descriptor(),
         history::descriptor(),
+        contracts::descriptor(),
     ]
 }
 
@@ -561,7 +570,7 @@ fn initialize_result(params: &Map<String, Value>) -> Value {
 
 /// `tools/call`: validate the envelope, run the named tool, shape the result.
 ///
-/// Dispatch is a match on a closed table of six names. A name that is not one of them is
+/// Dispatch is a match on a closed table of seven names. A name that is not one of them is
 /// refused with the list, rather than falling through to a default tool — a client that
 /// mistypes `nerve_impact` must not silently receive an investigation.
 fn tools_call(session: &McpSession, id: Value, params: &Map<String, Value>) -> Value {
@@ -596,8 +605,9 @@ fn tools_call(session: &McpSession, id: Value, params: &Map<String, Value>) -> V
         impact::TOOL_NAME => impact::call(&ctx, repository, &arguments),
         gaps::TOOL_NAME => gaps::call(&ctx, repository, &arguments),
         history::TOOL_NAME => history::call(&ctx, repository, &arguments),
+        contracts::TOOL_NAME => contracts::call(&ctx, repository, &arguments),
         // `investigate` last: the guard above means only a name from `TOOL_NAMES` reaches here,
-        // and `tests/mcp.rs::every_advertised_tool_answers_over_the_wire` drives all six so a
+        // and `tests/mcp.rs::every_advertised_tool_answers_over_the_wire` drives all seven so a
         // name that was advertised but never wired up cannot pass unnoticed.
         _ => investigate::call(&ctx, repository, &arguments),
     };
@@ -736,11 +746,12 @@ mod tests {
             (impact::TOOL_NAME, impact::ACCEPTED_ARGUMENTS.into()),
             (gaps::TOOL_NAME, gaps::ACCEPTED_ARGUMENTS.into()),
             (history::TOOL_NAME, history::ACCEPTED_ARGUMENTS.into()),
+            (contracts::TOOL_NAME, contracts::ACCEPTED_ARGUMENTS.into()),
         ]
     }
 
     #[test]
-    fn tools_list_advertises_exactly_the_six_named_tools() {
+    fn tools_list_advertises_exactly_the_seven_named_tools() {
         let descriptors = descriptors();
         assert_eq!(descriptors.len(), TOOL_NAMES.len());
         let names: Vec<&str> = descriptors

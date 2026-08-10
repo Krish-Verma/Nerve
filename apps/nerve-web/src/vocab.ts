@@ -444,12 +444,15 @@ export function historyFreshnessGloss(value: string): string {
 /*
  * ---- Slice 13a-i: the cross-repository vocabularies ------------------------------------------
  *
- * Four tables, declared here one slice before any view imports them. Nothing renders them yet, so
- * each is on `DECLARED_NOT_RENDERED` in `crates/nerve-server/tests/ui_vocabulary.rs` rather than on
- * `GLOSS_TABLES`, and that test proves the claim by asserting this prose is *absent* from the
- * shipped bundle. Declaring the gloss beside the vocabulary rather than waiting for the view is
- * what Slice 12c-ii's Pass A did, and the reason is the same: a vocabulary that reaches a surface
- * before its gloss does renders "this build has no description" to a real reader.
+ * Four tables, declared one slice before any view imported them, and two more added in **13d** when
+ * the Contracts view began rendering the rule and the ambiguity as bare tokens. All six are now on
+ * `GLOSS_TABLES` in `crates/nerve-server/tests/ui_vocabulary.rs`, which is what makes the shipped
+ * bundle carry their prose; `DECLARED_NOT_RENDERED` is empty as a result, and it stays as a list so
+ * the next vocabulary declared ahead of its view has somewhere honest to sit.
+ *
+ * Declaring the gloss beside the vocabulary rather than waiting for the view is what Slice 12c-ii's
+ * Pass A did, and the reason is the same: a vocabulary that reaches a surface before its gloss does
+ * renders "this build has no description" to a real reader.
  */
 
 /**
@@ -549,6 +552,44 @@ const CONTRACT_FRESHNESS: Record<string, string> = {
 
 export function contractFreshnessGloss(value: string): string {
   return CONTRACT_FRESHNESS[value] ?? 'This build has no description for that contract freshness.';
+}
+
+/**
+ * Which rule read the declaration a link was drawn from.
+ *
+ * Three, and the split that matters is not the language. Two of them link one repository to
+ * another and name no file at either end; the third names a file inside the other repository, which
+ * is why it is the only one that carries a snapshot of anything over there.
+ */
+const CONTRACT_KIND: Record<string, string> = {
+  npm_local_dependency:
+    'A dependency in package.json that states a path — a file: specifier, or a workspace member this repository lists itself. It links the two repositories and names no file at either end.',
+  npm_export_resolution:
+    'An import specifier resolved through the export map the other package declares, so the file at the far end is the one that package says the specifier means. This is the only rule that names a file over there.',
+  python_path_dependency:
+    'A local path dependency in pyproject.toml — PEP 621, Poetry or uv. It links the two repositories and names no file at either end.',
+};
+
+export function contractKindGloss(value: string): string {
+  return CONTRACT_KIND[value] ?? 'This build has no description for that contract rule.';
+}
+
+/**
+ * What was ambiguous about a resolution, when something was.
+ *
+ * Recorded on **every** row of the ambiguous identity, and none of them is preferred over another.
+ * The evidence is that the manifest said the same thing twice; picking a winner would be inventing
+ * the answer it declined to give.
+ */
+const CONTRACT_AMBIGUITY: Record<string, string> = {
+  declared_more_than_once:
+    'The same name is declared more than once and every declaration points at the same place. Nothing disagrees; the repetition is recorded rather than hidden.',
+  conflicting_targets:
+    'The same name is declared more than once and the declarations point at different places. Every candidate is kept and none is chosen, because the manifest did not choose either.',
+};
+
+export function contractAmbiguityGloss(value: string): string {
+  return CONTRACT_AMBIGUITY[value] ?? 'This build has no description for that ambiguity.';
 }
 
 /**

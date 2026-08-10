@@ -110,7 +110,9 @@ use crate::discover::{canonical_child, canonical_root, discover_named};
 use crate::error::Result;
 use crate::facts::ModuleFacts;
 use crate::lang::Language;
-use crate::registry::{availability_of, probe_target, RegistryAvailability, RegistryTarget};
+use crate::registry::{
+    availability_of, probe_target, RegistryAvailability, RegistryEntryView, RegistryTarget,
+};
 
 /// The largest manifest this module will read, in bytes.
 ///
@@ -2896,6 +2898,293 @@ pub fn link_freshness(
         (true, false) => Some(ContractFreshness::SourceChanged),
         (false, true) => Some(ContractFreshness::TargetChanged),
         (false, false) => None,
+    }
+}
+
+// ---- the read side: one report, for every surface -----------------------------------------------
+
+/// One stored link, with everything a surface must render beside it already decided.
+///
+/// The point of the type is that a surface receives a **verdict** rather than the parts of one.
+/// Freshness needs four inputs — the registry entry's availability, the neighbour's current state,
+/// this repository's current state, and whether the manifest the link was quoted from is still
+/// there — and any surface assembling those itself would be a second derivation of the answer, which
+/// is what `crates/nerve-cli/tests/registry_guards.rs` refuses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractLinkView {
+    /// The stored row, exactly as it was written.
+    pub link: ContractLinkRow,
+    /// The registry entry it resolved through, tombstone included.
+    pub entry: RegistryEntryRow,
+    /// What that entry is right now, from [`crate::registry::availability_of`] and nowhere else.
+    pub availability: RegistryAvailability,
+    /// The state the neighbour's index is at right now, where one was read.
+    pub target_current_state: Option<String>,
+    /// Whether the manifest the link was quoted from is still in this repository.
+    pub source_manifest_present: bool,
+    /// The verdict, from [`link_freshness`]. `None` is *no qualification*, never "unknown".
+    pub freshness: Option<ContractFreshness>,
+}
+
+/// This repository's stated view of its neighbours, and of what it declares about them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractReport {
+    /// The state this repository's index is at right now. `None` when it has never been indexed.
+    pub source_state: Option<String>,
+    /// Every registry entry, tombstones included, each with its availability.
+    pub entries: Vec<RegistryEntryView>,
+    /// Every stored link, active and withdrawn, in `link_id` order.
+    pub links: Vec<ContractLinkView>,
+    /// Links whose registry entry could not be found.
+    ///
+    /// Structurally zero: `contract_link.registry_entry_id` is `NOT NULL` with a foreign key into
+    /// `repo_registry` and `PRAGMA foreign_keys=ON` is set on every connection. It is **counted
+    /// rather than assumed**, because the alternative to counting an impossible row is dropping it
+    /// silently, and a link that vanished from a report cannot be reported as having vanished.
+    pub links_without_registry_entry: usize,
+}
+
+/// Read the registry and every stored link, and decide each link's standing **once**.
+///
+/// This is the function every read-only surface calls. The order matters:
+///
+/// 1. Each registry entry is asked [`crate::registry::availability_of`] once. A tombstoned entry
+///    answers without anything at its path being opened.
+/// 2. A neighbour is probed for its *current* state only when its entry is not a tombstone —
+///    reading a directory on behalf of an entry the user retired is a read the user did not ask
+///    for, and the retirement already decides the verdict.
+/// 3. Each manifest named by a link is resolved once, through [`canonical_child`], which is the same
+///    choke point discovery and every query-time read use. A path that no longer resolves inside the
+///    root is *absent*, which is what `contract_file_missing` is made of.
+/// 4. [`link_freshness`] is asked per link. Nothing here re-derives what it decides.
+///
+/// Nothing is written, and the only file opened in the neighbour is its database.
+pub fn contract_report(conn: &Connection, repo_id: &str, root: &Path) -> Result<ContractReport> {
+    let root = canonical_root(root)?;
+    let source_state = nerve_store::status(conn)?.state_id;
+
+    let entries = crate::registry::list_registry(conn, repo_id)?;
+
+    // The neighbour's *current* state, once per entry rather than once per link. Opening the same
+    // database once per dependency would be a read of somebody else's repository performed for no
+    // new information — the same reason `scan_contracts` caches its resolutions.
+    let mut target_states: BTreeMap<String, Option<String>> = BTreeMap::new();
+    for view in &entries {
+        let state = match view.availability {
+            RegistryAvailability::EntryRemoved => None,
+            _ => probe_target(Path::new(&view.entry.local_path))
+                .ok()
+                .and_then(|target| target.state_id),
+        };
+        target_states.insert(view.entry.registry_id.clone(), state);
+    }
+
+    let mut manifests: BTreeMap<String, bool> = BTreeMap::new();
+    let mut links = Vec::new();
+    let mut links_without_registry_entry = 0usize;
+    for link in nerve_store::list_contract_links(conn, repo_id)? {
+        let Some(view) = entries
+            .iter()
+            .find(|view| view.entry.registry_id == link.registry_entry_id)
+        else {
+            links_without_registry_entry += 1;
+            continue;
+        };
+        let present = match manifests.get(&link.source_path) {
+            Some(present) => *present,
+            None => {
+                let present = canonical_child(&root, Path::new(&link.source_path)).is_ok();
+                manifests.insert(link.source_path.clone(), present);
+                present
+            }
+        };
+        let target_state = target_states
+            .get(&link.registry_entry_id)
+            .and_then(Option::as_deref);
+        let freshness = link_freshness(
+            &link,
+            &view.availability,
+            target_state,
+            source_state.as_deref().unwrap_or_default(),
+            present,
+        );
+        links.push(ContractLinkView {
+            entry: view.entry.clone(),
+            availability: view.availability.clone(),
+            target_current_state: target_state.map(str::to_string),
+            source_manifest_present: present,
+            freshness,
+            link,
+        });
+    }
+
+    Ok(ContractReport {
+        source_state,
+        entries,
+        links,
+        links_without_registry_entry,
+    })
+}
+
+// ---- the closed vocabularies, as data ------------------------------------------------------------
+
+/// One member of a closed contract vocabulary, with whatever it owns beside its name.
+///
+/// `note` is the value's **own** sentence, taken from the vocabulary that declares it and never
+/// written again — which is the rule `crates/nerve-cli/tests/registry_guards.rs` enforces on the
+/// registry's sentences and `crates/nerve-cli/tests/history_wording.rs` enforces on history's. A
+/// surface renders this; it does not compose it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContractTerm {
+    /// Canonical lower-case name, as it is stored and as a response carries it.
+    pub name: &'static str,
+    /// The sentence this value owns, where it has one.
+    pub note: Option<&'static str>,
+    /// The contract rule this value belongs to, where it belongs to one.
+    pub rule: Option<&'static str>,
+}
+
+impl ContractTerm {
+    fn named(name: &'static str) -> ContractTerm {
+        ContractTerm {
+            name,
+            note: None,
+            rule: None,
+        }
+    }
+
+    fn glossed(name: &'static str, note: &'static str) -> ContractTerm {
+        ContractTerm {
+            name,
+            note: Some(note),
+            rule: None,
+        }
+    }
+
+    fn of_rule(name: &'static str, rule: ContractRule) -> ContractTerm {
+        ContractTerm {
+            name,
+            note: None,
+            rule: Some(rule.as_str()),
+        }
+    }
+}
+
+/// Every closed vocabulary a contract answer can carry.
+///
+/// Assembled here rather than on each surface for the reason the whole row is built around: a
+/// surface that enumerated [`nerve_core::vocab::ContractFreshness`] itself would be naming the
+/// vocabulary in a second place, and `crates/nerve-cli/tests/registry_guards.rs` forbids exactly
+/// that shape in `nerve-cli` and `nerve-server`. Naming a form is also the whole of §9.1: an
+/// unsupported declaration must be reported **with its form named**, so the set of names a surface
+/// can show has to come from somewhere, and it comes from here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractVocabulary {
+    /// The three rules, each carrying the manifest file it reads.
+    pub rules: Vec<ContractTerm>,
+    /// The four resolution methods, each with its own note.
+    pub resolution_methods: Vec<ContractTerm>,
+    /// Whether a stored link is still claimed.
+    pub link_statuses: Vec<ContractTerm>,
+    /// Whether a registry entry still counts.
+    pub registry_entry_statuses: Vec<ContractTerm>,
+    /// The twelve ways a link can have stopped describing the world.
+    pub freshness: Vec<ContractTerm>,
+    /// What a re-check of a registered path can conclude.
+    pub availability: Vec<ContractTerm>,
+    /// Why a registry command refused.
+    pub registry_refusals: Vec<ContractTerm>,
+    /// How ambiguous a resolution was, when it was.
+    pub ambiguity: Vec<ContractTerm>,
+    /// The declaration shapes Nerve reads.
+    pub supported_forms: Vec<ContractTerm>,
+    /// The declaration shapes Nerve reads, recognises and **declines**, each named.
+    pub unsupported_forms: Vec<ContractTerm>,
+    /// Why a supported declaration reached no registered neighbour.
+    pub unresolved_reasons: Vec<ContractTerm>,
+    /// Why one manifest, or the rest of a scan, was stopped.
+    pub manifest_refusals: Vec<ContractTerm>,
+    /// Why a whole scan refused before reading anything.
+    pub scan_refusals: Vec<ContractTerm>,
+}
+
+/// One representative of every [`RegistryAvailability`] variant.
+///
+/// There is no `ALL` const because two variants carry a payload, so the list is built. The payloads
+/// are placeholders: only [`RegistryAvailability::as_str`] and
+/// [`RegistryAvailability::statement`] are read off them, and neither depends on what they carry.
+fn availability_terms() -> Vec<ContractTerm> {
+    [
+        RegistryAvailability::Available,
+        RegistryAvailability::PartiallyIndexed,
+        RegistryAvailability::EntryRemoved,
+        RegistryAvailability::Missing(crate::registry::RegistryRefusal::PathDoesNotExist),
+        RegistryAvailability::Moved {
+            observed_repository_id: String::new(),
+        },
+        RegistryAvailability::Refused(crate::registry::RegistryRefusal::SymlinkEscape),
+    ]
+    .iter()
+    .map(|value| ContractTerm::glossed(value.as_str(), value.statement()))
+    .collect()
+}
+
+/// Every closed contract vocabulary, with each value's own sentence.
+pub fn contract_vocabulary() -> ContractVocabulary {
+    ContractVocabulary {
+        rules: ContractRule::ALL
+            .iter()
+            .map(|rule| ContractTerm {
+                name: rule.as_str(),
+                note: None,
+                rule: Some(rule.manifest_file_name()),
+            })
+            .collect(),
+        resolution_methods: ContractResolutionMethod::ALL
+            .iter()
+            .map(|value| ContractTerm::glossed(value.as_str(), value.note()))
+            .collect(),
+        link_statuses: ContractLinkStatus::ALL
+            .iter()
+            .map(|value| ContractTerm::glossed(value.as_str(), value.note()))
+            .collect(),
+        registry_entry_statuses: nerve_core::vocab::RegistryEntryStatus::ALL
+            .iter()
+            .map(|value| ContractTerm::glossed(value.as_str(), value.note()))
+            .collect(),
+        freshness: ContractFreshness::ALL
+            .iter()
+            .map(|value| ContractTerm::glossed(value.as_str(), value.note()))
+            .collect(),
+        availability: availability_terms(),
+        registry_refusals: crate::registry::RegistryRefusal::ALL
+            .iter()
+            .map(|value| ContractTerm::glossed(value.as_str(), value.statement()))
+            .collect(),
+        ambiguity: Ambiguity::ALL
+            .iter()
+            .map(|value| ContractTerm::named(value.as_str()))
+            .collect(),
+        supported_forms: SupportedForm::ALL
+            .iter()
+            .map(|form| ContractTerm::of_rule(form.as_str(), form.rule()))
+            .collect(),
+        unsupported_forms: UnsupportedForm::ALL
+            .iter()
+            .map(|form| ContractTerm::of_rule(form.as_str(), form.rule()))
+            .collect(),
+        unresolved_reasons: UnresolvedReason::ALL
+            .iter()
+            .map(|value| ContractTerm::named(value.as_str()))
+            .collect(),
+        manifest_refusals: ManifestRefusal::ALL
+            .iter()
+            .map(|value| ContractTerm::named(value.as_str()))
+            .collect(),
+        scan_refusals: ScanRefusal::ALL
+            .iter()
+            .map(|value| ContractTerm::glossed(value.as_str(), value.statement()))
+            .collect(),
     }
 }
 

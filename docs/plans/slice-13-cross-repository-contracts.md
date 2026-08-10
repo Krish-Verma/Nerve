@@ -369,6 +369,31 @@ does not fit inside T2's path safety, which is about paths *within* one reposito
   in `third_party/LICENSES.md` before the code is written, per 12a's finding that the *measured* delta
   was +5 against an estimated +3.
 
+> ### Four corrections from implementing 13d (2026-08-10)
+>
+> 1. **§9.1's tally is unreachable on a read-only surface.** §9.1 requires an unsupported form to be
+>    *"asserted by a tally, not by inspection"*, and 13b's correction moved that tally into "the scan
+>    outcome and its response". But `ContractScan` is a **return value** and nothing persists it —
+>    there is no scan-outcome table. HTTP, MCP and the UI therefore cannot carry a tally at all; they
+>    can only name the closed vocabulary. **§9.1 holds on the CLI only**, and the plan must say so.
+> 2. **`contract_link.unsupported_reason` has no producer in any shipped build.** 13c said the column
+>    had "a producer available and no producer chosen". Measured over HTTP on the export fixture, it
+>    is `None` across all 15 links. The corrected §4.2 still lists it among what a link "needs",
+>    which reads as though it carries information; today every surface renders a permanently-null
+>    field.
+> 3. **§3's 13d row lists the CLI as a surface, and after 13d the CLI is the one that cannot
+>    answer.** `nerve repo scan` reports what a scan just wrote and carries **no freshness field**;
+>    `nerve repo list` prints entry-level availability only. So HTTP and MCP can answer *"is this
+>    link still current?"* and the CLI cannot — a real disagreement between surfaces, which is
+>    exactly what the capability matrix exists to catch. **Closed by 13d-ii (`nerve repo links`)**,
+>    not by widening `scan`, because reading stored links back is a different question from
+>    reporting what a scan produced.
+> 4. **The vocabulary answer cannot say which states are unreachable.** §9.3 excludes
+>    `contract_version_mismatch` until a semver resolver exists, but the twelve-value vocabulary is
+>    served flat, so a reader meets a name nothing in this build can produce. Marking it needs a
+>    per-term "producible" claim from `nerve-index` — a vocabulary-layer change, recorded rather than
+>    improvised at a surface.
+>
 > ### Three corrections from implementing 13c (2026-08-09)
 >
 > 1. **`target_partially_indexed` has two producers and §6 names only one.** 13a-ii produces it from

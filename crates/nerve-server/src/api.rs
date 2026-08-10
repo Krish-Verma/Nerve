@@ -11,6 +11,7 @@
 //! all have ceilings enforced before the query runs, so no request can ask this process to do
 //! unbounded work (THREAT-MODEL T8's discipline, applied early).
 
+pub mod contracts;
 pub mod history;
 
 use std::path::Path;

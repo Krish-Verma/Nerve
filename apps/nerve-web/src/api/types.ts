@@ -715,3 +715,174 @@ export const RELATIONS = [
   // Appended in Slice 11a.
   'TEST_OBSERVED_CALL',
 ] as const;
+
+/*
+ * ---- Slice 13d: the cross-repository contract surfaces -----------------------------------------
+ *
+ * Every string below originated in a repository — this one, or a *neighbouring* one whose index
+ * Nerve opened read-only. A display name, a contract identity, a version string, a manifest path
+ * and every target snapshot field are all repository content on exactly the terms the rest of this
+ * file sets, and none of them is ever treated as markup.
+ */
+
+/** One member of a closed contract vocabulary, with whatever it owns beside its name. */
+export interface ContractTerm {
+  name: string;
+  /** The sentence this value owns, where it has one. */
+  note: string | null;
+  /** The rule it belongs to, or — for a rule — the manifest file that rule reads. */
+  rule: string | null;
+}
+
+/** Where the registry is changed. Every contract answer carries it. */
+export interface ContractBoundary {
+  read_only: boolean;
+  statement: string;
+  commands: string[];
+}
+
+export interface ContractTruncation {
+  returned: number;
+  total: number;
+  truncated: boolean;
+  limit: number;
+}
+
+export interface ContractContinuation {
+  supported: boolean;
+  offset: number | null;
+  next_offset: number | null;
+  statement: string | null;
+}
+
+/** The block every `/api/contracts*` answer carries, assembled in one place on the server. */
+export interface ContractBlock {
+  repository_id: string | null;
+  source_state: string | null;
+  /** Which answer this is, including `no_registered_neighbours` and `no_contract_links`. */
+  result_kind: string;
+  registry_entries_total: number;
+  links_total: number;
+  /** Structurally zero. Counted rather than assumed, so a dropped row could be reported. */
+  links_without_registry_entry: number;
+  truncation: ContractTruncation | null;
+  continuation: ContractContinuation;
+  boundary: ContractBoundary;
+  limitations: {
+    link_is_directional_and_one_sided: string;
+    contract_version_verdict_is_not_derived: string;
+    no_link_is_reachable_from_a_local_graph_query: string;
+  };
+}
+
+/** One registered neighbour, and what re-checking its path found. */
+export interface RegistryEntry {
+  registry_id: string;
+  expected_repository_id: string;
+  display_name: string;
+  /** User-specific and absolute. Served only over the loopback API; never tracked by Git. */
+  local_path: string;
+  added_at: string;
+  /** A `RegistryEntryStatus` member. */
+  status: string;
+  status_note: string;
+  withdrawn_at: string | null;
+  last_seen_state: string | null;
+  last_seen_at: string | null;
+  availability_checked_at: string | null;
+  /** A `RegistryAvailability` verdict, re-derived from the filesystem on every read. */
+  availability: string;
+  availability_statement: string;
+  /** A `RegistryRefusal` member, where a check fired. */
+  refusal: string | null;
+  refusal_statement: string | null;
+  /** The repository id actually found at the path, when it was the wrong one. */
+  observed_repository_id: string | null;
+  usable: boolean;
+  /** A `ContractFreshness` member, or null where the entry puts no qualification on a link. */
+  freshness: string | null;
+  freshness_note: string | null;
+  /** Present on `/api/contracts/registry` only. Counted over every link, not over the page. */
+  links_through_this_entry?: number;
+}
+
+/** One recorded cross-repository link. */
+export interface ContractLink {
+  link_id: number | null;
+  /** `DEPENDS_ON` or `REFERENCES`. Never a row in the assertion graph. */
+  relation_semantics: string;
+  /** A `ContractRule` member. */
+  contract_kind: string;
+  contract_identity: string;
+  /** A `ContractResolutionMethod` member. */
+  resolution_method: string;
+  resolution_method_note: string;
+  /** Both recorded. Neither is compared: range satisfaction is not string inequality. */
+  expected_contract_version: string | null;
+  observed_contract_version: string | null;
+  source_repository_id: string;
+  source_state_at_resolution: string;
+  source_entity_id: string | null;
+  source_kind_snapshot: string | null;
+  source_path: string;
+  source_span: string;
+  source_manifest_present: boolean;
+  expected_target_repository_id: string;
+  /** The state the neighbour was at when the link was resolved. */
+  target_state_at_resolution: string | null;
+  /** The state it is at now, where one could be read. */
+  target_current_state: string | null;
+  target_entity_id: string | null;
+  target_kind_snapshot: string | null;
+  target_name_snapshot: string | null;
+  target_path_snapshot: string | null;
+  target_span_snapshot: string | null;
+  extractor_id: string;
+  extractor_version: string;
+  evidence_details: string | null;
+  /** An `Ambiguity` member. Recorded on every row of an ambiguous identity; none is promoted. */
+  ambiguity: string | null;
+  /** An `UnsupportedForm` member, where a declined form still named a registered neighbour. */
+  unsupported_reason: string | null;
+  /** A `ContractLinkStatus` member. A withdrawn link is kept so its ending can be reported. */
+  status: string;
+  status_note: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  withdrawn_at: string | null;
+  /** A `ContractFreshness` member, or null for *no qualification*. Never re-derived here. */
+  freshness: string | null;
+  freshness_note: string | null;
+  /** True only when nothing qualifies the link. Stated so a null is not read as "unknown". */
+  is_current: boolean;
+  registry_entry: RegistryEntry;
+}
+
+export interface ContractLinkList extends ContractBlock {
+  registry_id: string | null;
+  links_matching_filter: number;
+  links: ContractLink[];
+}
+
+export interface ContractRegistry extends ContractBlock {
+  nothing_is_auto_registered: boolean;
+  entries: RegistryEntry[];
+}
+
+export interface ContractVocabulary extends ContractBlock {
+  vocabulary: {
+    rules: ContractTerm[];
+    resolution_methods: ContractTerm[];
+    link_statuses: ContractTerm[];
+    registry_entry_statuses: ContractTerm[];
+    freshness: ContractTerm[];
+    availability: ContractTerm[];
+    registry_refusals: ContractTerm[];
+    ambiguity: ContractTerm[];
+    supported_forms: ContractTerm[];
+    unsupported_forms: ContractTerm[];
+    unresolved_reasons: ContractTerm[];
+    manifest_refusals: ContractTerm[];
+    scan_refusals: ContractTerm[];
+  };
+}
