@@ -668,6 +668,124 @@ assert d[\"links_recorded\"] == 0, d
     skip "fuzzy linking is absent" "the fuzzy fixture pair could not be built"
   fi
 
+  # 6b. C2 — the one rule in this row that reaches a file entity inside the target. Three
+  #     behaviours, each of which would be wrong if the rule were guessing: does an import
+  #     specifier resolve through the neighbour's own `exports` to a real file entity over there,
+  #     is every export shape Nerve declines *named* rather than dropped, and does an ordinary
+  #     local traversal stay out of the link entirely.
+  if contract_repo contracts-exports host "$CWORK/host" &&
+     contract_repo contracts-exports pkg-map "$CWORK/pkg-map" &&
+     contract_repo contracts-exports pkg-string "$CWORK/pkg-string" &&
+     contract_repo contracts-exports pkg-legacy "$CWORK/pkg-legacy" &&
+     contract_repo contracts-exports twin-a "$CWORK/twin-a" &&
+     contract_repo contracts-exports twin-b "$CWORK/twin-b" &&
+     contract_repo contracts-exports pkg-unregistered "$CWORK/pkg-unregistered" &&
+     "$NERVE" repo add "$CWORK/pkg-map" --path "$CWORK/host" --id pkg-map >/dev/null 2>&1 &&
+     "$NERVE" repo add "$CWORK/pkg-string" --path "$CWORK/host" --id pkg-string >/dev/null 2>&1 &&
+     "$NERVE" repo add "$CWORK/pkg-legacy" --path "$CWORK/host" --id pkg-legacy >/dev/null 2>&1 &&
+     "$NERVE" repo add "$CWORK/twin-a" --path "$CWORK/host" --id twin-a >/dev/null 2>&1 &&
+     "$NERVE" repo add "$CWORK/twin-b" --path "$CWORK/host" --id twin-b >/dev/null 2>&1; then
+
+    # 1. The entity-to-entity link, and the whole evidence chain behind it. The target entity id
+    #    is a row in pkg-map's database and in no row of host's, which is what `contract_link`
+    #    exists for: `assertion.target_entity_id` is a foreign key and would have refused it.
+    check "C2 resolves an import specifier to a file entity in the neighbour" bash -c "
+      '$NERVE' repo scan --path '$CWORK/host' --json | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+c2 = {l[\"identity\"]: l for l in d[\"links\"] if l[\"rule\"] == \"npm_export_resolution\"}
+assert len(c2) == 7, sorted(c2)
+sub = c2[\"pkg-map/sub\"]
+assert sub[\"resolution_method\"] == \"export_map_resolved\", sub
+assert sub[\"relation_semantics\"] == \"REFERENCES\", sub
+assert sub[\"registry_id\"] == \"pkg-map\", sub
+assert sub[\"target_path\"] == \"src/sub.ts\", sub
+assert sub[\"source_entity_id\"], sub
+assert sub[\"target_entity_id\"], sub
+# The condition order is documented and taken: import beats require.
+assert c2[\"pkg-map/cond\"][\"target_path\"] == \"src/esm.ts\", c2[\"pkg-map/cond\"]
+# The legacy order is documented and taken: module beats main.
+assert c2[\"pkg-legacy\"][\"form\"] == \"npm_legacy_module\", c2[\"pkg-legacy\"]
+assert c2[\"pkg-legacy\"][\"target_path\"] == \"src/mod.ts\", c2[\"pkg-legacy\"]
+# A file the neighbour has and never indexed: a path, no entity. Not a missing target.
+assert c2[\"pkg-map/data\"][\"target_path\"] == \"src/data.json\", c2[\"pkg-map/data\"]
+assert c2[\"pkg-map/data\"][\"target_entity_id\"] is None, c2[\"pkg-map/data\"]
+# An unregistered neighbour is imported by name and still produces nothing.
+reasons = {r[\"identity\"]: r[\"reason\"] for r in d[\"unresolved\"]}
+assert reasons[\"pkg-unregistered\"] == \"target_not_registered\", reasons
+assert reasons[\"pkg-aliased/thing\"] == \"package_name_not_declared\", reasons
+assert reasons[\"pkg-map/gone\"] == \"export_target_missing\", reasons
+'
+      python3 -c '
+import sqlite3
+host = sqlite3.connect(\"$CWORK/host/.nerve/nerve.db\")
+rows = host.execute(
+    \"select target_entity_id, target_path_snapshot from contract_link \"
+    \"where contract_kind = ?1 and target_entity_id is not null\", (\"npm_export_resolution\",)
+).fetchall()
+assert len(rows) == 7, rows
+for entity_id, path in rows:
+    local = host.execute(\"select count(*) from entity where entity_id = ?1\", (entity_id,)).fetchone()[0]
+    assert local == 0, (entity_id, path, \"a proxy entity was created for a foreign target\")
+found = sqlite3.connect(\"$CWORK/pkg-map/.nerve/nerve.db\").execute(
+    \"select count(*) from entity where entity_id = ?1\", (rows[0][0],)).fetchone()[0]
+# Anti-vacuity: at least one of those ids really is a row over there.
+ids = [r[0] for r in rows]
+hit = 0
+for db in (\"pkg-map\", \"pkg-string\", \"pkg-legacy\", \"twin-a\", \"twin-b\"):
+    conn = sqlite3.connect(\"$CWORK/\" + db + \"/.nerve/nerve.db\")
+    for i in ids:
+        hit += conn.execute(\"select count(*) from entity where entity_id = ?1\", (i,)).fetchone()[0]
+assert hit == len(ids), (hit, len(ids))
+'"
+
+    # 2. Every export shape the rule declines is named. A wildcard subpath, a null block, an
+    #    unsupported condition, an escaping path, an undeclared subpath and a legacy probe are six
+    #    different refusals and the response says which is which.
+    check "an unsupported export form is recorded with its form named, never dropped" bash -c "
+      '$NERVE' repo scan --path '$CWORK/host' --json | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+tally = {row[\"form\"]: row[\"count\"] for row in d[\"unsupported_tally\"]}
+for form in (\"npm_export_wildcard_subpath\",\"npm_export_blocked\",
+             \"npm_export_unsupported_condition\",\"npm_export_path_escapes_target\",
+             \"npm_export_subpath_not_declared\",\"npm_legacy_subpath_probe\"):
+    assert tally.get(form, 0) >= 1, (form, tally)
+c2 = [r for r in d[\"unsupported\"] if r[\"rule\"] == \"npm_export_resolution\"]
+assert len(c2) == 6, c2
+# The wildcard case names a file that really exists over there, so declining it is a published
+# false negative rather than an absence.
+assert any(r[\"identity\"] == \"pkg-map/deep\" for r in c2), c2
+'
+      test -f '$CWORK/pkg-map/src/deep.ts'"
+
+    # 3. §9.3b, asserted negatively: crossing repositories is opt-in at the contract surface, so an
+    #    ordinary local query answers identically with the links present and with them deleted.
+    check "a path and an impact query do not traverse a contract link" bash -c "
+      '$NERVE' repo scan --path '$CWORK/host' >/dev/null 2>&1
+      before_path=\$('$NERVE' path --path '$CWORK/host' src/app.ts src/local.ts --json)
+      before_impact=\$('$NERVE' impact --path '$CWORK/host' src/local.ts --relation IMPORTS --json)
+      printf '%s' \"\$before_path\" | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+assert d[\"paths\"], d
+' || exit 1
+      python3 -c '
+import sqlite3
+conn = sqlite3.connect(\"$CWORK/host/.nerve/nerve.db\")
+n = conn.execute(\"select count(*) from contract_link\").fetchone()[0]
+assert n >= 8, n
+conn.execute(\"delete from contract_link\")
+conn.commit()
+'
+      after_path=\$('$NERVE' path --path '$CWORK/host' src/app.ts src/local.ts --json)
+      after_impact=\$('$NERVE' impact --path '$CWORK/host' src/local.ts --relation IMPORTS --json)
+      [ \"\$before_path\" = \"\$after_path\" ] || { echo 'path traversed a contract link'; exit 1; }
+      [ \"\$before_impact\" = \"\$after_impact\" ] || { echo 'impact traversed a contract link'; exit 1; }"
+  else
+    skip "C2 npm export resolution" "the contracts-exports fixture repositories could not be built"
+  fi
+
   # 7. C3, on its own fixture and with its own methods. The PEP 621 direct reference is an
   #    absolute URL, so the fixture ships a placeholder — an absolute path cannot be committed.
   if cp -R "$ROOT/fixtures/contracts-python/service" "$CWORK/service" &&

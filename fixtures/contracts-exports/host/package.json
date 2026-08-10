@@ -1,0 +1,20 @@
+{
+  "name": "host",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "pkg-map": "file:../pkg-map",
+    "pkg-string": "file:../pkg-string",
+    "pkg-legacy": "file:../pkg-legacy",
+    "pkg-unregistered": "file:../pkg-unregistered",
+    "pkg-aliased": "file:../pkg-map",
+    "pkg-twin": "file:../twin-a",
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "pkg-twin": "file:../twin-b"
+  },
+  "peerDependencies": {
+    "pkg-string": "file:../pkg-string"
+  }
+}

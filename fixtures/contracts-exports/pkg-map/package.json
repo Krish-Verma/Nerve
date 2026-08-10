@@ -1,0 +1,20 @@
+{
+  "name": "pkg-map",
+  "version": "3.1.0",
+  "exports": {
+    ".": "./src/index.ts",
+    "./sub": "./src/sub.ts",
+    "./cond": {
+      "require": "./src/cjs.ts",
+      "import": "./src/esm.ts"
+    },
+    "./only-browser": {
+      "browser": "./src/browser.ts"
+    },
+    "./blocked": null,
+    "./escape": "../../outside.ts",
+    "./gone": "./src/gone.ts",
+    "./data": "./src/data.json",
+    "./*": "./src/*.ts"
+  }
+}

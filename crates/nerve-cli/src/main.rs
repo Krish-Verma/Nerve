@@ -4484,6 +4484,14 @@ fn contract_link_json(link: &nerve_index::RecordedLink) -> serde_json::Value {
         "target_repository_id": link.target_repository_id,
         "resolution_method": link.resolution_method.as_str(),
         "source_span": link.source_span,
+        // The two halves of a cross-repository link, and they are not symmetric. The source id is
+        // a foreign key into this database; the target id is a snapshot of a row in another one,
+        // and a target path with no target id means the neighbour has the file and has not
+        // indexed it.
+        "relation_semantics": link.relation_semantics,
+        "source_entity_id": link.source_entity_id,
+        "target_entity_id": link.target_entity_id,
+        "target_path": link.target_path.as_deref().map(inert_text),
         "expected_contract_version": link.expected_contract_version.as_deref().map(inert_text),
         "observed_contract_version": link.observed_contract_version.as_deref().map(inert_text),
         "ambiguity": link.ambiguity.map(|value| value.as_str()),

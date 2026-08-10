@@ -1,0 +1,7 @@
+{
+  "name": "pkg-legacy",
+  "version": "0.4.2",
+  "module": "./src/mod.ts",
+  "main": "./src/main.js",
+  "types": "./src/types.d.ts"
+}

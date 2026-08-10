@@ -369,6 +369,27 @@ does not fit inside T2's path safety, which is about paths *within* one reposito
   in `third_party/LICENSES.md` before the code is written, per 12a's finding that the *measured* delta
   was +5 against an estimated +3.
 
+> ### Three corrections from implementing 13c (2026-08-09)
+>
+> 1. **`target_partially_indexed` has two producers and §6 names only one.** 13a-ii produces it from
+>    `RegistryAvailability::PartiallyIndexed` — a **whole neighbour** that was never indexed. C2
+>    needs it for **a single file** the neighbour has and never looked at. Both are honest and they
+>    are not the same fact, yet a response carrying only the state name cannot tell them apart.
+>    Resolution taken: **availability outranks the per-file case** — a neighbour with no index at all
+>    beats one file inside an indexed neighbour. Recorded here because the ordering is a decision,
+>    not a detail.
+> 2. **13b's diagnosis of `unsupported_reason` was too broad.** 13b blamed `registry_entry_id
+>    NOT NULL`: an unsupported form names no repository. That holds for a registry range; it does
+>    **not** hold for C2, where a declined wildcard subpath both names a registered neighbour and
+>    satisfies the `CHECK` at `schema.rs:679-683`. So the column now has a producer *available* and
+>    no producer *chosen* — the tally still lives in the scan outcome, per §9.1. That is a decision
+>    the plan should state, rather than leaving it looking like the same impossibility.
+> 3. **§2's evidence chain is under-specified at step 3.** *"this `name`"* does not say what happens
+>    when the dependency **key** and the neighbour's declared `name` disagree — which is npm's own
+>    aliasing feature. Resolved as `package_name_not_declared`, no link, because a key is a name and
+>    §1 refuses names as evidence. That is a **real recall cost** the plan does not acknowledge, and
+>    the C2 fixture carries it as `pkg-aliased/thing`.
+>
 > ### Three corrections from implementing 13b (2026-08-09)
 >
 > 1. **`contract_link.unsupported_reason` is a dead letter for C1 and C3.** §9.1 requires an

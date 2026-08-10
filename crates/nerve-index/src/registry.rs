@@ -24,10 +24,11 @@
 //!    path — a path comparison is precisely the silent re-pointing that would make every link
 //!    through the entry describe the wrong repository.
 //! 4. **The database, and nothing else.** This module opens exactly one file in the neighbour:
-//!    `.nerve/nerve.db`. It does not index the target, does not walk its tree, writes no row into
-//!    it and modifies no file it finds there. Manifest reading arrives with contract detection in
-//!    13b/13c and will be a second named read, not a widening of this one. **One residual, measured
-//!    rather than assumed** — see *SQLite's sidecars*, below.
+//!    `.nerve/nerve.db`, through [`probe_target`] to establish identity and through
+//!    [`open_target_index`] when a caller must read a row out of it. It does not index the target,
+//!    does not walk its tree, writes no row into it and modifies no file it finds there. Manifest
+//!    reading is a second named read owned by [`crate::contracts`], not a widening of this one.
+//!    **One residual, measured rather than assumed** — see *SQLite's sidecars*, below.
 //! 5. **Everything read out is untrusted repository content**, on exactly T7's terms.
 //!    [`RegistryTarget::display_name`] is a directory name from a checkout that may have been cloned
 //!    from anywhere; it is stored verbatim, interpreted never, and rendered inert by the surface.
@@ -485,6 +486,32 @@ pub fn probe_target(path: &Path) -> std::result::Result<RegistryTarget, Registry
         entities_total: status.entities_total,
         default_display_name,
     })
+}
+
+/// Open a registered neighbour's index **read-only**, for a caller that must read a row out of it.
+///
+/// [`probe_target`] establishes *that* the neighbour is there and *which* repository it is, and then
+/// closes the connection. C2 needs one more thing: the entity at a path the neighbour's own
+/// `exports` map named. That is still a read of the same one file through the same guard chain, so
+/// it lives here rather than in the caller — `nerve_store::open_read_only` is spelled in this module
+/// and nowhere else in the product, which is what keeps the second-repository boundary a single
+/// place to audit.
+///
+/// The connection is read-only in the sense Slice 7c-i proved on the bytes: `query_only=ON`, no
+/// creation, no `journal_mode` write. The two WAL sidecars this module's header documents are the
+/// measured residual and are unchanged by this function.
+pub fn open_target_index(root: &Path) -> std::result::Result<Connection, RegistryRefusal> {
+    let db_path =
+        canonical_child(root, Path::new(TARGET_DB_RELATIVE)).map_err(|err| match err {
+            IndexError::PathEscapesRoot(_) => {
+                match root.join(TARGET_DB_RELATIVE).symlink_metadata() {
+                    Ok(_) => RegistryRefusal::SymlinkEscape,
+                    Err(_) => RegistryRefusal::NoNerveDatabase,
+                }
+            }
+            _ => RegistryRefusal::NoNerveDatabase,
+        })?;
+    nerve_store::open_read_only(&db_path).map_err(|_| RegistryRefusal::TargetUnreadable)
 }
 
 /// Derive what a stored registry entry is right now.

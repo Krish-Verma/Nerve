@@ -1,10 +1,14 @@
-//! C1 and C3 as behaviour: what the scan links, what it refuses, and what it must never invent
-//! (Slice 13b).
+//! C1, C2 and C3 as behaviour: what the scan links, what it refuses, and what it must never invent
+//! (Slices 13b and 13c).
 //!
 //! Precision is measured next door in `contract_precision.rs`, against ground truth written before
 //! the resolver existed. This file asserts the properties that are not a precision number:
-//! idempotency, the three bounds, the absence of fuzzy linking, the absence of auto-registration,
-//! the neighbour's bytes, and the freshness a stored link reports once the world moves under it.
+//! idempotency, the bounds, the absence of fuzzy linking, the absence of auto-registration, the
+//! neighbour's bytes, the freshness a stored link reports once the world moves under it — and, for
+//! C2, the two properties that only exist because it reaches a file entity in another repository:
+//! **no local proxy is created for a foreign target**, and **no ordinary `path` or `impact` query
+//! traverses the link**. The second is asserted negatively, by answering the same question with the
+//! links present and with them deleted.
 //!
 //! Two habits, both inherited from `registry.rs` one slice over.
 //!
@@ -638,4 +642,376 @@ fn the_python_rule_reads_pep621_poetry_and_uv() {
         .and_then(|link| link.observed_contract_version.clone());
     assert_eq!(core_version.as_deref(), Some("1.4.0"));
     assert!(world.core.join("pyproject.toml").exists());
+}
+
+// ---- C2: the export map, and the file entity on the far side -----------------------------------
+
+/// `host` with five neighbours registered and `pkg-unregistered` deliberately not.
+struct ExportWorld {
+    _dir: tempfile::TempDir,
+    host: PathBuf,
+    map: PathBuf,
+}
+
+fn export_world() -> ExportWorld {
+    let dir = tempfile::tempdir().unwrap();
+    let host = place(dir.path(), "contracts-exports", "host");
+    let mut roots = Vec::new();
+    for (offset, name) in [
+        "pkg-map",
+        "pkg-string",
+        "pkg-legacy",
+        "twin-a",
+        "twin-b",
+        "pkg-unregistered",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let root = place(dir.path(), "contracts-exports", name);
+        initialise(&root, 31 + offset as u8);
+        roots.push((name, root));
+    }
+    initialise(&host, 30);
+    for (name, root) in &roots[..5] {
+        register(&host, root, name);
+    }
+    let map = roots[0].1.clone();
+    ExportWorld {
+        _dir: dir,
+        host,
+        map,
+    }
+}
+
+/// Every entity id in a repository, so "this id is not local" is a scan rather than a claim.
+fn entity_ids(root: &Path) -> BTreeSet<String> {
+    let conn = conn_for(root);
+    let mut stmt = conn.prepare("SELECT entity_id FROM entity").unwrap();
+    let ids = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    ids
+}
+
+/// **The link the row exists for.** `host/src/app.ts` REFERENCES `pkg-map/src/sub.ts`, by
+/// `export_map_resolved`, with a local source entity and a foreign target that has no local row.
+#[test]
+fn an_export_link_names_a_file_entity_in_the_neighbour_and_no_local_proxy_for_it() {
+    let world = export_world();
+    let scan = scan(&world.host);
+
+    let link = scan
+        .links_of(ContractRule::NpmExportResolution)
+        .find(|link| link.identity == "pkg-map/sub")
+        .expect("pkg-map/sub produced no link");
+    assert_eq!(link.manifest, "src/app.ts");
+    assert_eq!(link.section, "pkg-map");
+    assert_eq!(link.registry_id, "pkg-map");
+    assert_eq!(link.resolution_method.as_str(), "export_map_resolved");
+    assert_eq!(link.relation_semantics, "REFERENCES");
+    assert_eq!(link.target_path.as_deref(), Some("src/sub.ts"));
+    let target_entity = link
+        .target_entity_id
+        .clone()
+        .expect("the neighbour indexed src/sub.ts, so the link must name its entity");
+    let source_entity = link.source_entity_id.clone().expect("the source is local");
+
+    // §9.3c, for the one rule that has a foreign entity to be tempted by: the source id is a row
+    // in this repository and the target id is a row in the neighbour's, and neither database
+    // gained the other's.
+    let local = entity_ids(&world.host);
+    assert!(local.contains(&source_entity));
+    assert!(
+        !local.contains(&target_entity),
+        "a proxy entity was created for a target this repository never indexed"
+    );
+    assert!(entity_ids(&world.map).contains(&target_entity));
+
+    // The stored row carries the whole snapshot, because a target that later moves must still be
+    // nameable. `assertion` would have refused this row outright; `contract_link` is where it goes.
+    let conn = conn_for(&world.host);
+    let stored = nerve_store::list_contract_links(&conn, &repo_id_of(&world.host))
+        .unwrap()
+        .into_iter()
+        .find(|row| row.contract_identity == "pkg-map/sub")
+        .unwrap();
+    assert_eq!(stored.relation_semantics, "REFERENCES");
+    assert_eq!(stored.contract_kind, "npm_export_resolution");
+    assert_eq!(stored.target_entity_id.as_deref(), Some(&*target_entity));
+    assert_eq!(stored.target_kind_snapshot.as_deref(), Some("module"));
+    assert_eq!(stored.target_path_snapshot.as_deref(), Some("src/sub.ts"));
+    assert!(stored.target_span_snapshot.is_some());
+    assert_eq!(stored.observed_contract_version.as_deref(), Some("3.1.0"));
+
+    // And no assertion row names either end of it. `assertion.target_entity_id` is
+    // `NOT NULL REFERENCES entity(entity_id)`, so this row could not have been inserted there —
+    // the scan is asserted not to have tried a proxy instead.
+    let named_in_assertions: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM assertion WHERE target_entity_id = ?1",
+            [&target_entity],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(named_in_assertions, 0);
+}
+
+/// **§9.3b, asserted negatively.** A `path` and an `impact` query answer identically with the
+/// contract links present and with them deleted.
+///
+/// Two anti-vacuity floors, because "the answers matched" is satisfied by two empty answers: there
+/// must really be C2 links naming a foreign entity, and the local queries must really find
+/// something. Only then does "the same result" mean the traversal did not cross.
+#[test]
+fn neither_path_nor_impact_traverses_a_contract_link() {
+    let world = export_world();
+    let scan = scan(&world.host);
+    let foreign: BTreeSet<String> = scan
+        .links_of(ContractRule::NpmExportResolution)
+        .filter_map(|link| link.target_entity_id.clone())
+        .collect();
+    assert!(
+        foreign.len() >= 5,
+        "only {} C2 links name a foreign entity; the comparison below would be vacuous",
+        foreign.len()
+    );
+
+    let conn = conn_for(&world.host);
+    let app = match nerve_store::resolve_selector(&conn, "src/app.ts").unwrap() {
+        nerve_store::Selection::Resolved { entity, .. } => *entity,
+        other => panic!("src/app.ts did not resolve: {other:?}"),
+    };
+    let local = match nerve_store::resolve_selector(&conn, "src/local.ts").unwrap() {
+        nerve_store::Selection::Resolved { entity, .. } => *entity,
+        other => panic!("src/local.ts did not resolve: {other:?}"),
+    };
+    let prober = nerve_index::RepositoryProber::new(&world.host).unwrap();
+    let path_query = nerve_store::PathQuery {
+        direction: nerve_store::Direction::Any,
+        ..nerve_store::PathQuery::default()
+    };
+    // `IMPORTS` rather than the default relation set: `src/app.ts` imports `src/local.ts`, so the
+    // closure has something in it and the comparison below is about a real answer.
+    let impact_query = nerve_store::ImpactQuery {
+        relations: vec![nerve_core::vocab::Relation::Imports],
+        ..nerve_store::ImpactQuery::default()
+    };
+
+    let path_before =
+        nerve_store::find_paths(&conn, &app.entity_id, &local.entity_id, &path_query).unwrap();
+    let impact_before =
+        nerve_store::impact(&conn, &local.entity_id, &impact_query, &prober).unwrap();
+    assert!(
+        !path_before.paths.is_empty(),
+        "the two local modules are not connected, so this comparison proves nothing"
+    );
+    assert!(
+        impact_before.totals.entities > 0 || impact_before.results_total > 0,
+        "the impact closure is empty, so this comparison proves nothing: {impact_before:?}"
+    );
+
+    // No foreign endpoint appears anywhere in either answer.
+    for hop in path_before.paths.iter().flat_map(|path| &path.hops) {
+        assert!(!foreign.contains(&hop.to.entity_id), "{hop:?}");
+        assert!(!foreign.contains(&hop.from.entity_id), "{hop:?}");
+    }
+    for row in &impact_before.results {
+        assert!(!foreign.contains(&row.entity.entity_id), "{row:?}");
+    }
+
+    // And the answers do not change when the links are gone, which is the strong form: a
+    // traversal that read `contract_link` at all would have to answer differently.
+    let deleted = conn.execute("DELETE FROM contract_link", []).unwrap();
+    assert!(deleted >= 8, "only {deleted} links were deleted");
+    let path_after =
+        nerve_store::find_paths(&conn, &app.entity_id, &local.entity_id, &path_query).unwrap();
+    let impact_after =
+        nerve_store::impact(&conn, &local.entity_id, &impact_query, &prober).unwrap();
+    assert_eq!(path_before, path_after, "`path` traversed a contract link");
+    assert_eq!(
+        impact_before, impact_after,
+        "`impact` traversed a contract link"
+    );
+}
+
+/// A file the neighbour has and never indexed is `target_partially_indexed`, not a missing target.
+///
+/// The two are the same absence from the *index* and different facts about the *world*, which is
+/// Slice 7c-i's `Stale` / `Unverified` distinction in its fourth place. The fixture produces both
+/// from one manifest so the pair is asserted together rather than one at a time.
+#[test]
+fn a_file_the_neighbour_never_indexed_is_partially_indexed_and_a_file_it_lacks_is_unresolved() {
+    let world = export_world();
+    let scan = scan(&world.host);
+
+    let data = scan
+        .links_of(ContractRule::NpmExportResolution)
+        .find(|link| link.identity == "pkg-map/data")
+        .expect("pkg-map/data produced no link");
+    assert_eq!(data.target_path.as_deref(), Some("src/data.json"));
+    assert_eq!(data.target_entity_id, None);
+    assert!(
+        world.map.join("src/data.json").exists(),
+        "the file must really be there, or this is a missing target wearing the wrong name"
+    );
+
+    // `./src/gone.ts` is named by the same map and is not in the tree at all.
+    let gone = scan
+        .unresolved_of(ContractRule::NpmExportResolution)
+        .find(|row| row.identity == "pkg-map/gone")
+        .expect("pkg-map/gone was not reported");
+    assert_eq!(gone.reason, UnresolvedReason::ExportTargetMissing);
+    assert!(!world.map.join("src/gone.ts").exists());
+
+    // And the stored link reports the distinction rather than a clean bill.
+    let reported = freshness_of(&world.host, "pkg-map");
+    assert!(
+        reported
+            .iter()
+            .filter(|freshness| **freshness == Some(ContractFreshness::TargetPartiallyIndexed))
+            .count()
+            == 1,
+        "{reported:?}"
+    );
+    assert!(
+        reported
+            .iter()
+            .filter(|freshness| freshness.is_none())
+            .count()
+            >= 4,
+        "every link is qualified, so `target_partially_indexed` is not distinguishing anything: \
+         {reported:?}"
+    );
+}
+
+/// Every export shape the rule declines is tallied with its own name, and the tally is complete.
+#[test]
+fn every_declined_export_shape_is_named_in_the_tally() {
+    let world = export_world();
+    let scan = scan(&world.host);
+    let tally = scan.unsupported_tally();
+    for form in [
+        "npm_export_unsupported_condition",
+        "npm_export_blocked",
+        "npm_export_path_escapes_target",
+        "npm_export_subpath_not_declared",
+        "npm_legacy_subpath_probe",
+        "npm_export_wildcard_subpath",
+    ] {
+        assert!(
+            tally
+                .iter()
+                .any(|(declined, count)| declined.as_str() == form && *count >= 1),
+            "{form} was not tallied: {tally:?}"
+        );
+    }
+    // Nothing was read and then forgotten, per rule.
+    for rule in [
+        ContractRule::NpmLocalDependency,
+        ContractRule::NpmExportResolution,
+    ] {
+        assert!(scan.links_of(rule).count() > 0, "{rule} produced nothing");
+    }
+    assert_eq!(
+        scan.declarations,
+        scan.links_of(ContractRule::NpmLocalDependency).count()
+            + scan.links_of(ContractRule::NpmExportResolution).count()
+            - 1 // `pkg-twin` is one declaration and two links; both are counted above, once here.
+            + scan.unresolved.len()
+            + scan.unsupported.len(),
+        "a declaration was read and landed in none of the three buckets"
+    );
+}
+
+/// Re-running writes nothing new, and the neighbour's bytes are the same afterwards.
+#[test]
+fn re_running_the_export_scan_records_nothing_new_and_leaves_the_neighbour_untouched() {
+    let world = export_world();
+    let map_db = nerve_index::registry::target_database_path(&world.map);
+
+    let first = scan(&world.host);
+    let exports_first = first.links_of(ContractRule::NpmExportResolution).count();
+    assert_eq!(exports_first, 8, "{:?}", first.links);
+
+    let before = digest(&map_db);
+    let second = scan(&world.host);
+    assert_eq!(second.inserted(), 0, "{:?}", second.links);
+    assert_eq!(
+        second.links_of(ContractRule::NpmExportResolution).count(),
+        exports_first
+    );
+    assert_eq!(
+        digest(&map_db),
+        before,
+        "the neighbour's database changed while its exports were read"
+    );
+
+    let stored = stored_links(&world.host);
+    // The whole logical identity, exactly as `idx_contract_link_identity` spells it — one
+    // dependency declared in two sections is two declarations and legitimately two rows, so a
+    // narrower tuple here would fail on a fixture that is behaving correctly.
+    let identities: BTreeSet<(String, String, String, String, String, &str)> = stored
+        .iter()
+        .map(|row| {
+            (
+                row.registry_entry_id.clone(),
+                row.contract_kind.clone(),
+                row.contract_identity.clone(),
+                row.source_path.clone(),
+                row.source_span.clone(),
+                row.resolution_method.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        identities.len(),
+        stored.len(),
+        "two stored links share a logical identity"
+    );
+}
+
+/// A cached module with no entity at its path is passed over **by name**, never silently.
+///
+/// Produced by writing a `module_facts` row for a path that has no entity, which is the only way
+/// the two can disagree — and the reason the refusal exists rather than a silent `continue`.
+#[test]
+fn a_module_with_cached_imports_and_no_entity_is_refused_by_name() {
+    let world = export_world();
+    let conn = conn_for(&world.host);
+    let repo_id = repo_id_of(&world.host);
+    let facts = nerve_index::ModuleFacts {
+        import_specifiers: vec!["pkg-map/sub".to_string()],
+        ..nerve_index::ModuleFacts::default()
+    };
+    nerve_store::upsert_module_facts(
+        &conn,
+        &repo_id,
+        &nerve_store::ModuleFactsRow {
+            rel_path: "src/never-indexed.ts".to_string(),
+            content_hash: nerve_core::ids::content_hash(b"never indexed"),
+            language: "typescript".to_string(),
+            structural_version: "0".to_string(),
+            reference_version: "0".to_string(),
+            framework_version: String::new(),
+            facts: facts.to_json().unwrap(),
+        },
+    )
+    .unwrap();
+    drop(conn);
+
+    let scan = scan(&world.host);
+    assert!(
+        scan.refusals.iter().any(|(path, refusal)| {
+            path == "src/never-indexed.ts" && *refusal == ManifestRefusal::SourceModuleNotIndexed
+        }),
+        "{:?}",
+        scan.refusals
+    );
+    // And nothing was written for it: a link with no local end is not storable and is not stored.
+    assert!(stored_links(&world.host)
+        .iter()
+        .all(|row| row.source_path != "src/never-indexed.ts"));
 }

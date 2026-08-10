@@ -1,0 +1,5 @@
+{
+  "name": "pkg-unregistered",
+  "version": "9.9.9",
+  "exports": "./src/index.ts"
+}

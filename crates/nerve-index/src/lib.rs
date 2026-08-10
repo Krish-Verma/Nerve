@@ -89,8 +89,11 @@ pub use contracts::{
     link_freshness, scan_contracts, Ambiguity, ContractRule, ContractScan, ManifestRefusal,
     RecordedLink, ScanOutcome, ScanRefusal, SupportedForm, UnresolvedDeclaration,
     UnresolvedReason as ContractUnresolvedReason, UnsupportedDeclaration,
-    UnsupportedForm as ContractUnsupportedForm, CONTRACT_EXTRACTOR_VERSION,
-    MAX_DECLARATIONS_PER_MANIFEST, MAX_LINKS_PER_REPOSITORY, MAX_MANIFEST_BYTES,
+    UnsupportedForm as ContractUnsupportedForm, CONTRACT_EXTRACTOR_VERSION, EXPORT_CONDITION_ORDER,
+    EXPORT_REFERENCE_SEMANTICS, LEGACY_ENTRY_FIELDS, MAX_DECLARATIONS_PER_MANIFEST,
+    MAX_EXPORT_CONDITION_DEPTH, MAX_EXPORT_ENTRIES, MAX_EXPORT_SUBPATH_DEPTH,
+    MAX_LINKS_PER_REPOSITORY, MAX_MANIFEST_BYTES,
+    NPM_EXPORT_EXTRACTOR_ID as NPM_EXPORT_CONTRACT_EXTRACTOR_ID,
     NPM_EXTRACTOR_ID as NPM_CONTRACT_EXTRACTOR_ID,
     PYTHON_EXTRACTOR_ID as PYTHON_CONTRACT_EXTRACTOR_ID,
 };
@@ -166,9 +169,9 @@ pub use refs::{
     EXTRACTOR_ID as REFERENCE_EXTRACTOR_ID, EXTRACTOR_VERSION as REFERENCE_EXTRACTOR_VERSION,
 };
 pub use registry::{
-    add_registry_target, availability_of, list_registry, probe_target, relocate_registry_target,
-    remove_registry_target, target_database_path, RegistryAvailability, RegistryEntryView,
-    RegistryOutcome, RegistryRefusal, RegistryTarget,
+    add_registry_target, availability_of, list_registry, open_target_index, probe_target,
+    relocate_registry_target, remove_registry_target, target_database_path, RegistryAvailability,
+    RegistryEntryView, RegistryOutcome, RegistryRefusal, RegistryTarget,
 };
 pub use similarity::{
     admits as similarity_admits, analyse as analyse_similarity, SimilarityAnalysis,
