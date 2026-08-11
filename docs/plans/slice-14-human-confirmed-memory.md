@@ -447,8 +447,25 @@ and when the full contract is met.
    repository-mismatch import is refused.
 5. `invalidated` and `superseded` distinguishable in every surface's output.
 6. `memory_event` append-only: after supersede and invalidate, every prior event still readable.
-   No delete verb exists — asserted by the CLI-surface test that already fails if a forbidden command
-   appears, which is how `nerve affected` and `nerve trace-tests` are held refused.
+   No delete verb exists — ~~asserted by the CLI-surface test that already fails if a forbidden
+   command appears, which is how `nerve affected` and `nerve trace-tests` are held refused.~~
+
+   > **Corrected 2026-08-11, during 14b-ii — that test does not exist.** The criterion named a
+   > mechanism to reuse, and building on it found there is nothing to reuse: `affected` appears in
+   > **no** test under `crates/nerve-cli/tests/` at all, and `trace-tests` only in doc comments and
+   > in `scripts/final_acceptance.sh`. So the only thing holding those two commands refused is the
+   > acceptance script's `refused` helper — **a script a developer may not run, not a gate**. The
+   > same false claim was in `CONTINUATION.md` and is corrected there too.
+   >
+   > 14b-ii therefore built both halves for its own verb rather than inheriting the assumption:
+   > `there_is_no_delete_verb` (a real `cargo test` assertion that rejects `delete`, `remove`,
+   > `purge` and `forget`, checks the help listing, and confirms the record survives) **and** a
+   > `refused_verb` row in the acceptance script, proved non-vacuous by pointing it at `memory
+   > show`, which makes it FAIL.
+   >
+   > **Carried forward as a defect worth its own corrective slice:** `nerve affected` and
+   > `nerve trace-tests` — two of this product's most load-bearing refusals — are still held only
+   > by the acceptance script. They deserve the test this criterion assumed they already had.
 7. HTTP surface read-only: `POST /api/memory` → 405, database hash unchanged.
 8. Memory text confined to `repository_content` in MCP by the existing walk-the-whole-response
    property test.
