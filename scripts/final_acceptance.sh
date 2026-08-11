@@ -1024,7 +1024,11 @@ rows = {r['id']: r for r in (json.loads(line) for line in open(sys.argv[1]) if l
 assert set(rows) == {1, 2, 3, 4, 5}, sorted(rows)
 names = [t['name'] for t in rows[2]['result']['tools']]
 assert 'nerve_contracts' in names, names
-assert len(names) == 7, names
+# The whole advertised set rather than one tool, so a tool that stopped being advertised fails
+# here as well as in cargo test. The number is mcp::TOOL_NAMES.len(), which a shell script cannot
+# read, so it moves with the table: five in 8b-ii, six in 12c-iii-b, seven in 13d, eight in 14c.
+assert 'nerve_memory' in names, names
+assert len(names) == 8, names
 
 answered = rows[3]['result']
 assert answered['isError'] is False, answered
@@ -1269,6 +1273,195 @@ assert d[\"count\"] == 0, d
     printf '%s' \"\$out\" | grep -q 'derived at read time'"
 else
   skip "human-confirmed memory" "the indexed checkout from section 4 is unavailable, or python3 is"
+fi
+
+# ---------------------------------------------------------------------------------------------
+section "4g. The memory read surfaces, and whether they agree with the command line"
+
+# Slice 14c. The HTTP API reads memory and cannot write it, and what it reads is what `nerve memory`
+# reads. Cross-surface agreement is the point of a second surface, so it is asserted on the values
+# rather than on the routes existing — a `/api/memory` that answered something else would pass an
+# existence check and be worth nothing. This is the shape 13d-ii used for a link's freshness, and it
+# needs both surfaces running at once, which is why it lives here rather than in `cargo test`.
+#
+# It runs against section 4f's records, which is deliberate: `acc1` is superseded and `acc2` is
+# invalidated, so the comparison covers the two retirements that must never collapse into one.
+if [ -n "${WORK:-}" ] && [ -f "$WORK/.nerve/nerve.db" ] && command -v python3 >/dev/null 2>&1 &&
+   "$NERVE" memory show acc1 --path "$WORK" >/dev/null 2>&1; then
+
+  MEM_BEFORE=$(shasum -a 256 "$WORK/.nerve/nerve.db" | cut -d' ' -f1)
+  "$NERVE" serve "$WORK" --json >"$WORK/memory-serve.json" 2>"$WORK/memory-serve.err" &
+  MEM_SERVE_PID=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    grep -q '"token"' "$WORK/memory-serve.json" 2>/dev/null && break
+    sleep 0.25
+  done
+
+  if grep -q '"token"' "$WORK/memory-serve.json" 2>/dev/null; then
+    check "every memory record is served, and the CLI and /api/memory agree field for field" bash -c "
+      '$NERVE' memory list --path '$WORK' --json > '$WORK/cli-memory.json' || exit 1
+      '$NERVE' memory show acc1 --path '$WORK' --json > '$WORK/cli-memory-one.json' || exit 1
+      python3 - '$WORK/memory-serve.json' '$WORK/cli-memory.json' '$WORK/cli-memory-one.json' <<'PY'
+import json, sys, urllib.request
+meta = json.load(open(sys.argv[1]))
+def get(route):
+    request = urllib.request.Request(meta['base_url'] + route,
+                                     headers={meta['token_header']: meta['token']})
+    return json.load(urllib.request.urlopen(request, timeout=20))
+
+served = get('/api/memory?limit=200')
+assert served['ok'] is True, served
+assert served['result_kind'] == 'memory_records', served['result_kind']
+http = {r['memory_id']: r for r in served['records']}
+cli = {r['memory_id']: r for r in json.load(open(sys.argv[2]))['records']}
+
+# Anti-vacuity: two different real stored statuses are present, so 'they agree' is not 'both
+# answered the same thing about nothing'.
+assert set(cli) == {'acc1', 'acc2'}, sorted(cli)
+assert cli['acc1']['status'] == 'superseded', cli['acc1']
+assert cli['acc2']['status'] == 'invalidated', cli['acc2']
+assert cli['acc1']['status'] != cli['acc2']['status']
+assert len(cli['acc1']['events']) == 4, cli['acc1']['events']
+assert cli['acc1']['citations'], cli['acc1']
+
+# Every record, every field, both directions.
+assert http == cli, [k for k in set(http) | set(cli) if http.get(k) != cli.get(k)]
+assert served['records_in_repository'] == len(cli) == served['records_matching']
+
+# And one record read on its own is the same record again, not a summary of it.
+one = get('/api/memory/record?memory_id=acc1')
+assert one['result_kind'] == 'memory_record', one['result_kind']
+assert one['records'] == [cli['acc1']], one['records']
+
+# The derived half is served and marked as derived rather than stored.
+assert served['records'][0]['views_are_derived'] is True, served['records'][0]
+assert cli['acc1']['superseded_by_memory_id'] == 'acc2', cli['acc1']
+assert cli['acc1']['superseded_by_is_derived'] is True, cli['acc1']
+
+# The boundary is on the answer, and it names commands rather than offering a control.
+assert served['boundary']['read_only'] is True, served['boundary']
+commands = served['boundary']['commands']
+assert any(c.startswith('nerve memory propose') for c in commands), commands
+assert any(c.startswith('nerve memory confirm') for c in commands), commands
+assert not any('delete' in c for c in commands), commands
+PY"
+
+    # `absence is not zero`, on the second surface. The CLI exits 10 for a misspelled scope; HTTP
+    # answers 400 with the admitted set, and neither answers an empty list.
+    check "an unknown scope or status is refused over HTTP with the admitted set" bash -c "
+      python3 - '$WORK/memory-serve.json' <<'PY'
+import json, sys, urllib.request
+meta = json.load(open(sys.argv[1]))
+def refusal(route):
+    request = urllib.request.Request(meta['base_url'] + route,
+                                     headers={meta['token_header']: meta['token']})
+    try:
+        urllib.request.urlopen(request, timeout=20)
+    except urllib.error.HTTPError as error:
+        return error.code, json.load(error)
+    raise AssertionError(route + ' was answered')
+
+code, body = refusal('/api/memory?scope=opertions')
+assert code == 400, code
+assert body['error']['code'] == 'unknown_scope', body
+assert body['error']['detail']['allowed'] == \
+       ['implementation', 'interface', 'operations', 'process'], body['error']['detail']
+assert body['error']['detail']['this_is_not_an_empty_list'] is True, body
+assert 'records' not in body, body
+
+code, body = refusal('/api/memory?status=potentially_stale')
+assert code == 400, code
+assert body['error']['detail']['named_a_derived_view'] is True, body
+
+# A record that is not here is a refusal too, and it is not an empty record.
+code, body = refusal('/api/memory/record?memory_id=nope')
+assert code == 404, code
+assert body['error']['detail']['this_is_not_an_empty_record'] is True, body
+
+# And a legal filter that matches nothing is not a refusal, which is the other half.
+request = urllib.request.Request(meta['base_url'] + '/api/memory?scope=process',
+                                 headers={meta['token_header']: meta['token']})
+answer = json.load(urllib.request.urlopen(request, timeout=20))
+assert answer['records'] == [], answer['records']
+assert answer['result_kind'] == 'no_memory_matches', answer['result_kind']
+assert answer['records_in_repository'] == 2, answer
+PY"
+
+    # Acceptance criterion 7. Read-only is proved on the bytes, across a session that includes the
+    # write attempts — not on the routes being absent.
+    check "no memory route accepts a write verb, and the database is byte-identical after" bash -c "
+      python3 - '$WORK/memory-serve.json' <<'PY'
+import json, sys, urllib.request
+meta = json.load(open(sys.argv[1]))
+refused = 0
+for route in ('/api/memory', '/api/memory/record?memory_id=acc1'):
+    for method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        request = urllib.request.Request(meta['base_url'] + route, data=b'x', method=method,
+                                         headers={meta['token_header']: meta['token']})
+        try:
+            urllib.request.urlopen(request, timeout=20)
+            raise AssertionError(method + ' ' + route + ' was answered')
+        except urllib.error.HTTPError as error:
+            assert error.code in (405, 413), (method, route, error.code)
+            refused += 1
+assert refused == 8, refused
+PY
+      after=\$(shasum -a 256 '$WORK/.nerve/nerve.db' | cut -d' ' -f1)
+      [ \"\$after\" = '$MEM_BEFORE' ] || { echo \"the database changed: $MEM_BEFORE != \$after\"; exit 1; }"
+  else
+    skip "the memory HTTP surface" "nerve serve did not report a url"
+  fi
+  kill "$MEM_SERVE_PID" >/dev/null 2>&1
+  wait "$MEM_SERVE_PID" 2>/dev/null
+
+  # The agent surface, driven as an agent drives it. What is asserted is the boundary rather than
+  # the tool: the notes are readable, and the answer names the command a human runs instead of
+  # offering a confirmation the surface must not have.
+  check "the MCP surface reads memory, cannot write it, and prints the command instead" bash -c "
+    printf '%s\n' \
+      '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"acceptance\",\"version\":\"1\"}}}' \
+      '{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}' \
+      '{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}' \
+      '{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"nerve_memory\",\"arguments\":{\"limit\":100}}}' \
+      '{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"nerve_memory\",\"arguments\":{\"memory_id\":\"acc1\"}}}' \
+      '{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"nerve_memory_confirm\",\"arguments\":{\"memory_id\":\"acc1\"}}}' |
+    '$NERVE' mcp '$WORK' > '$WORK/mcp-memory.jsonl' || exit 1
+    python3 - '$WORK/mcp-memory.jsonl' <<'PY'
+import json, sys
+lines = [json.loads(line) for line in open(sys.argv[1]) if line.strip()]
+answers = {line['id']: line for line in lines}
+assert len(lines) == 5, lines
+
+tools = [t['name'] for t in answers[2]['result']['tools']]
+assert 'nerve_memory' in tools, tools
+# No confirmation tool exists to call, and the name is refused with the closed set rather than
+# defaulted into some other tool's answer.
+assert not any('confirm' in name for name in tools), tools
+assert answers[5]['error']['code'] == -32602, answers[5]
+assert 'nerve_memory_confirm' not in answers[5]['error']['data']['tools'], answers[5]
+
+listed = answers[3]['result']['structuredContent']
+memory = listed['repository_content']['memory']
+rows = {r['memory_id']: r for r in memory['records']}
+assert set(rows) == {'acc1', 'acc2'}, sorted(rows)
+assert rows['acc1']['status'] == 'superseded', rows['acc1']
+assert rows['acc2']['status'] == 'invalidated', rows['acc2']
+assert listed['evidence']['carries_assertions'] is False, listed['evidence']
+
+# The substitute for proposing: the exact command, as static text a human runs.
+commands = memory['boundary']['commands']
+assert memory['boundary']['read_only'] is True, memory['boundary']
+assert any(c.startswith('nerve memory confirm') for c in commands), commands
+
+# Every hostile-in-principle string a human typed is inside the labelled field and nowhere else.
+one = answers[4]['result']['structuredContent']
+outside = json.dumps({k: v for k, v in one.items() if k != 'repository_content'})
+note = one['repository_content']['memory']['records'][0]['content']
+assert note, one['repository_content']['memory']['records'][0]
+assert note not in outside, note
+PY"
+else
+  skip "the memory read surfaces" "the indexed checkout from section 4 holds no memory record, or python3 is unavailable"
 fi
 
 # ---------------------------------------------------------------------------------------------

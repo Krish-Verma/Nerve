@@ -29,7 +29,7 @@ use serde_json::{json, Value};
 
 use nerve_core::vocab::{EntityKind, Relation};
 use nerve_server::mcp::{
-    self, contracts, gaps, history, impact, investigate, path, search, tool, McpSession,
+    self, contracts, gaps, history, impact, investigate, memory, path, search, tool, McpSession,
 };
 
 /// Injection prose a repository author controls. It is a heading, so it becomes a section name.
@@ -329,9 +329,9 @@ fn a_real_client_transcript_is_answered_in_order() {
     assert_eq!(
         tools.len(),
         mcp::TOOL_NAMES.len(),
-        "8b-ii shipped five, 12c-iii-b adds the sixth and 13d the seventh"
+        "8b-ii shipped five, 12c-iii-b adds the sixth, 13d the seventh and 14c the eighth"
     );
-    assert_eq!(tools.len(), 7);
+    assert_eq!(tools.len(), 8);
     assert_eq!(tools[0]["name"], investigate::TOOL_NAME);
     assert_eq!(tools[0]["inputSchema"]["required"], json!(["selector"]));
 
@@ -344,7 +344,7 @@ fn a_real_client_transcript_is_answered_in_order() {
 
 /// Acceptance criterion 1: every tool states its bounds and the trust label.
 #[test]
-fn tools_list_returns_seven_tools_each_stating_its_bounds_and_the_trust_label() {
+fn tools_list_returns_every_named_tool_each_stating_its_bounds_and_the_trust_label() {
     let (_dir, root) = hostile_repository();
     let responses = responses(&drive(
         &root,
@@ -354,7 +354,10 @@ fn tools_list_returns_seven_tools_each_stating_its_bounds_and_the_trust_label() 
         ],
     ));
     let tools = responses[1]["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 7, "{tools:#?}");
+    assert_eq!(tools.len(), mcp::TOOL_NAMES.len(), "{tools:#?}");
+    // A floor as well as an equality, so a table that lost an entry fails here rather than
+    // agreeing with itself about a shorter list.
+    assert!(tools.len() >= 8, "{tools:#?}");
 
     let names: Vec<&str> = tools
         .iter()
@@ -395,6 +398,10 @@ fn every_advertised_tool_answers_over_the_wire() {
         // reports an empty registry and says that nothing is ever auto-registered, which is the
         // difference between "no neighbour was named" and "this project has no dependencies".
         (contracts::TOOL_NAME, json!({ "question": "registry" })),
+        // No note was ever written here, which is itself an answer rather than a failure: nothing
+        // is ever discovered, so the tool reports which absence this is instead of an empty list
+        // that would read as "there is nothing worth knowing about this project".
+        (memory::TOOL_NAME, json!({})),
     ];
     assert_eq!(calls.len(), mcp::TOOL_NAMES.len());
 
@@ -2197,6 +2204,10 @@ fn every_tool_enforces_the_answer_byte_ceiling() {
             contracts::TOOL_NAME,
             json!({ "question": "links", "limit": 100 }),
         ),
+        // And this fixture holds no note, so the ceiling is unreachable here too — nothing is ever
+        // discovered, so a repository nobody wrote in has nothing to cut. The cut is proved in
+        // `mcp::memory::tests`, where an oversized answer is built directly.
+        (memory::TOOL_NAME, json!({ "limit": 100 })),
     ];
     assert_eq!(calls.len(), mcp::TOOL_NAMES.len());
 
@@ -2753,6 +2764,71 @@ fn no_repository_derived_string_appears_outside_the_untrusted_field() {
             );
         }
     }
+
+    // Slice 14c. `nerve_memory` is the tool whose untrusted content a human *typed*, which makes it
+    // the one where the vector is certain rather than incidental: a note's own words, the label of
+    // whoever wrote it, its claim key, its reason for ending, an event's note and every field of
+    // the subject snapshot are all free text, and every one of them is on every answer. The marker
+    // on each case is what makes the walk non-vacuous here;
+    // `every_hostile_field_of_a_note_is_confined_to_the_untrusted_field_and_the_count_proves_it`
+    // counts the occurrences field by field.
+    let (_memory_dir, memory_root) = common::memory_repository();
+    for (arguments, marker) in [
+        (json!({ "limit": 100 }), common::HOSTILE_NOTE),
+        (json!({ "limit": 100 }), common::PAYLOAD),
+        (json!({ "memory_id": "m1" }), common::HOSTILE_AUTHOR),
+        (json!({ "memory_id": "m1" }), common::HOSTILE_EVENT_NOTE),
+        (json!({ "memory_id": "m6" }), common::HOSTILE_REASON),
+        (json!({ "query": "DISREGARD" }), common::HOSTILE_NOTE),
+        (json!({ "subject": "src/math.ts" }), ""),
+        // A refusal is inside the envelope too, and carries the id the caller named.
+        (json!({ "memory_id": "nope" }), ""),
+    ] {
+        assert_labelled(&memory_root, memory::TOOL_NAME, &arguments, marker);
+    }
+
+    // And the half a general scan cannot give, for this tool: a payload that carried none of these
+    // fields would satisfy it. Each is located by pointer inside the envelope and required to be
+    // absent everywhere else.
+    let answer = result_of(
+        &memory_root,
+        memory::TOOL_NAME,
+        json!({ "memory_id": "m1" }),
+    );
+    let payload = &answer["structuredContent"];
+    for field in [
+        "content",
+        "author_label",
+        "claim_key",
+        "subject/name",
+        "subject/path",
+        "subject/selector",
+        "subject/entity_id",
+        "status",
+        "status_note",
+        "scope",
+        "scope_note",
+        "subject_resolution",
+        "anchor_state_id",
+        "citations/0/cited_path",
+        "events/1/note",
+    ] {
+        let pointer = format!("/memory/records/0/{field}");
+        let found = payload
+            .pointer(&format!("{inside}{pointer}"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{pointer} is not inside `{}`",
+                    tool::UNTRUSTED_CONTENT_FIELD
+                )
+            });
+        assert!(!found.is_null(), "{pointer} reached the answer as null");
+        assert!(
+            payload.pointer(&pointer).is_none(),
+            "{pointer} also exists outside `{}`",
+            tool::UNTRUSTED_CONTENT_FIELD
+        );
+    }
 }
 
 #[test]
@@ -3028,4 +3104,293 @@ fn a_contract_session_leaves_both_databases_byte_identical() {
         (common::digest(&host_db), common::digest(&map_db)),
         "an MCP session wrote to a database"
     );
+}
+
+// ---- nerve_memory (Slice 14c) ------------------------------------------------------------------
+
+/// Every question row 14 §1 leaves an agent, answered by one tool with one shape.
+///
+/// The corrected surface matrix gives the agent five things and no writes: list, search, inspect
+/// one record, read its event history, and read the staleness and conflict views. They are asserted
+/// together here because they are one answer rather than five — if any of them needed a different
+/// output contract, the admission rule would have made it a different tool.
+#[test]
+fn the_memory_tool_lists_searches_inspects_and_carries_the_history_and_the_views() {
+    let (_dir, root) = common::memory_repository();
+
+    let listed = result_of(&root, memory::TOOL_NAME, json!({ "limit": 100 }));
+    assert_eq!(listed["isError"], false, "{listed}");
+    let answer = &listed["structuredContent"][tool::UNTRUSTED_CONTENT_FIELD]["memory"];
+    assert_eq!(answer["result_kind"], "memory_records");
+    let ids: Vec<&str> = answer["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| record["memory_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, common::MEMORY_WORLD_IDS.to_vec());
+    assert_eq!(
+        listed["structuredContent"]["evidence"]["state"],
+        memory::STATE_RECORDED
+    );
+    // Named rather than implied: a note is not a measurement, and an agent that read one as
+    // evidence would be reading a sentence as a finding.
+    assert_eq!(
+        listed["structuredContent"]["evidence"]["carries_assertions"],
+        false
+    );
+
+    // Search is a filter on the same shape rather than a second contract.
+    let searched = result_of(&root, memory::TOOL_NAME, json!({ "query": "retry budget" }));
+    let found = &searched["structuredContent"][tool::UNTRUSTED_CONTENT_FIELD]["memory"];
+    assert_eq!(found["records_matching"], 1);
+    assert_eq!(found["records"][0]["memory_id"], "m6");
+    // The denominator survives the filter, so a narrow answer is never read as "this is everything".
+    assert_eq!(
+        found["records_in_repository"],
+        common::MEMORY_WORLD_IDS.len()
+    );
+
+    // One record, whole: its complete audit history, its citation, and its derived views.
+    let one = result_of(&root, memory::TOOL_NAME, json!({ "memory_id": "m1" }));
+    let record = &one["structuredContent"][tool::UNTRUSTED_CONTENT_FIELD]["memory"]["records"][0];
+    assert_eq!(record["status"], "active");
+    let operations: Vec<&str> = record["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["operation"].as_str().unwrap())
+        .collect();
+    assert_eq!(operations, vec!["proposed", "confirmed", "cited"]);
+    assert_eq!(record["citations"][0]["cited_span"], "1:2");
+    let views: Vec<&str> = record["views"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|view| view["view"].as_str().unwrap())
+        .collect();
+    assert!(views.contains(&"conflicted"), "{views:?}");
+    assert!(views.contains(&"multiple_active"), "{views:?}");
+    // And the views are measured rather than constant: a record answering no named claim carries
+    // none, which is what makes the two above a report about this pair.
+    let plain = result_of(&root, memory::TOOL_NAME, json!({ "memory_id": "m3" }));
+    let plain = &plain["structuredContent"][tool::UNTRUSTED_CONTENT_FIELD]["memory"]["records"][0];
+    assert_eq!(plain["views"], json!([]));
+
+    // The substitute for proposing: the exact command a human runs, carried as static helper text.
+    let boundary = &one["structuredContent"][tool::UNTRUSTED_CONTENT_FIELD]["memory"]["boundary"];
+    assert_eq!(boundary["read_only"], true);
+    let commands: Vec<&str> = boundary["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|command| command.as_str().unwrap())
+        .collect();
+    assert!(
+        commands
+            .iter()
+            .any(|command| command.starts_with("nerve memory propose")),
+        "{commands:?}"
+    );
+    assert!(
+        commands
+            .iter()
+            .any(|command| command.starts_with("nerve memory confirm")),
+        "{commands:?}"
+    );
+    assert!(
+        !commands.iter().any(|command| command.contains("delete")),
+        "{commands:?}"
+    );
+}
+
+/// An unknown scope or status is refused **with the admitted set**, never answered with nothing.
+///
+/// The refusal is the endpoint's, turned into a `-32602` by `tool::refusal`, so the two surfaces
+/// refuse the same values for the same reason rather than each keeping a copy of the vocabulary.
+#[test]
+fn the_memory_tool_refuses_an_unknown_filter_and_an_argument_that_narrows_nothing() {
+    let (_dir, root) = common::memory_repository();
+
+    let error = protocol_error(
+        &root,
+        call_tool(memory::TOOL_NAME, json!({ "scope": "opertions" })),
+    );
+    assert_eq!(error["code"], -32602);
+    assert_eq!(error["data"]["this_is_not_an_empty_list"], true);
+    assert_eq!(
+        error["data"]["allowed"],
+        json!(nerve_server::api::memory::scope_vocabulary())
+    );
+
+    // A derived view asked for as a status is refused and named as one, rather than answering
+    // "nothing is stale" to a question about a column that does not exist.
+    let error = protocol_error(
+        &root,
+        call_tool(memory::TOOL_NAME, json!({ "status": "potentially_stale" })),
+    );
+    assert_eq!(error["data"]["named_a_derived_view"], true);
+
+    // A filter beside `memory_id` cannot narrow one named record, so it is refused rather than
+    // ignored — ignoring it would let a caller believe a narrowing happened that never could.
+    let error = protocol_error(
+        &root,
+        call_tool(
+            memory::TOOL_NAME,
+            json!({ "memory_id": "m1", "scope": "process" }),
+        ),
+    );
+    assert_eq!(error["code"], -32602);
+    assert_eq!(error["data"]["argument"], "scope");
+    assert_eq!(error["data"]["supplied_with"], "memory_id");
+
+    // And a record that is not here is a refusal inside the envelope, never an empty answer.
+    let refused = result_of(&root, memory::TOOL_NAME, json!({ "memory_id": "nope" }));
+    assert_eq!(refused["isError"], true);
+    assert_eq!(
+        refused["structuredContent"]["evidence"]["code"],
+        "memory_record_not_found"
+    );
+}
+
+/// The whole point of the surface boundary: **a memory session writes nothing.**
+///
+/// Row 14 §1's honest control is that the lifecycle path is absent from this surface rather than
+/// gated on it. `tests/layering.rs` asserts the absence in the source; this asserts the consequence
+/// on the bytes, across a session that lists, searches, filters, inspects and is refused.
+#[test]
+fn a_memory_session_leaves_the_database_byte_identical() {
+    let (_dir, root) = common::memory_repository();
+    let db_path = nerve_index::config::db_path(&root);
+    let before = nerve_core::ids::content_hash(&std::fs::read(&db_path).unwrap());
+
+    let output = drive(
+        &root,
+        &[
+            initialize(),
+            json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+            call_tool(memory::TOOL_NAME, json!({ "limit": 100 })),
+            call_tool(memory::TOOL_NAME, json!({ "scope": "implementation" })),
+            call_tool(memory::TOOL_NAME, json!({ "status": "invalidated" })),
+            call_tool(memory::TOOL_NAME, json!({ "subject": "src/math.ts" })),
+            call_tool(memory::TOOL_NAME, json!({ "query": "audited" })),
+            call_tool(memory::TOOL_NAME, json!({ "memory_id": "m1" })),
+            call_tool(memory::TOOL_NAME, json!({ "memory_id": "nope" })),
+            json!({ "jsonrpc": "2.0", "id": 3, "method": "ping" }),
+        ],
+    );
+    let answered = responses(&output);
+    // Eleven messages in, ten answered: the notification is not one of them.
+    assert_eq!(answered.len(), 10, "{answered:?}");
+
+    // Anti-vacuity: the calls really produced answers, so "unchanged" is not "nothing ran". The
+    // notification is not answered, so the list is the third response and the one record is the
+    // eighth.
+    let listed = &answered[2]["result"]["structuredContent"][tool::UNTRUSTED_CONTENT_FIELD]
+        ["memory"]["records"];
+    assert_eq!(
+        listed.as_array().unwrap().len(),
+        common::MEMORY_WORLD_IDS.len()
+    );
+    assert_eq!(
+        answered[7]["result"]["structuredContent"][tool::UNTRUSTED_CONTENT_FIELD]["memory"]
+            ["records"][0]["memory_id"],
+        "m1"
+    );
+    // The last tool call was refused, and a refusal is an answer rather than a protocol error.
+    assert_eq!(answered[8]["result"]["isError"], true);
+    assert!(answered[8]["error"].is_null(), "{}", answered[8]);
+
+    assert_eq!(
+        before,
+        nerve_core::ids::content_hash(&std::fs::read(&db_path).unwrap()),
+        "an MCP memory session must not write to the index"
+    );
+}
+
+/// T7, on the vector this feature adds: **prose a human typed**.
+///
+/// Slice 12c-iii-b's lesson is why this test counts. The first T7 extension there was very nearly
+/// vacuous, because hostile *paths* never reach the history tables and the only content that did
+/// was a commit summary. Here the hostile content is the thing the feature stores — a note's own
+/// words, the label of whoever wrote it, its claim key, its reason for ending and the note attached
+/// to one event — so this asserts, for each of them, that the number of occurrences inside
+/// `repository_content` is **non-zero** and that the number anywhere else is exactly zero. A
+/// version that only checked the second half would pass on an answer that carried none of it.
+#[test]
+fn every_hostile_field_of_a_note_is_confined_to_the_untrusted_field_and_the_count_proves_it() {
+    let (_dir, root) = common::memory_repository();
+
+    /// How many strings hold `marker`, inside the labelled subtree and everywhere else.
+    fn occurrences(payload: &Value, marker: &str) -> (usize, usize) {
+        let mut found = Vec::new();
+        strings(payload, "", &mut found);
+        let label = format!("/{}", tool::UNTRUSTED_CONTENT_FIELD);
+        let (mut inside, mut outside) = (0, 0);
+        for (at, text) in found {
+            if !text.contains(marker) {
+                continue;
+            }
+            // `/query` is the caller's own arguments echoed back, which the trust block says in as
+            // many words, and it is not counted as either.
+            if at.starts_with("/query") {
+                continue;
+            }
+            if at.starts_with(&label) {
+                inside += 1;
+            } else {
+                outside += 1;
+            }
+        }
+        (inside, outside)
+    }
+
+    let markers = [
+        ("note content", common::HOSTILE_NOTE),
+        ("author label", common::HOSTILE_AUTHOR),
+        ("claim key", common::HOSTILE_CLAIM_KEY),
+        ("event note", common::HOSTILE_EVENT_NOTE),
+        ("invalidation reason", common::HOSTILE_REASON),
+        ("subject snapshot path", common::PAYLOAD),
+    ];
+
+    let mut total_inside = 0;
+    for arguments in [
+        json!({ "limit": 100 }),
+        json!({ "memory_id": "m1" }),
+        json!({ "memory_id": "m6" }),
+        json!({ "query": "DISREGARD" }),
+    ] {
+        let answer = result_of(&root, memory::TOOL_NAME, arguments.clone());
+        let payload = &answer["structuredContent"];
+        for (what, marker) in markers {
+            let (inside, outside) = occurrences(payload, marker);
+            assert_eq!(
+                outside,
+                0,
+                "{arguments}: the {what} appears {outside} time(s) outside `{}`",
+                tool::UNTRUSTED_CONTENT_FIELD
+            );
+            total_inside += inside;
+        }
+    }
+
+    // The anti-vacuity floor. Six hostile fields over four calls: the whole-list call carries all
+    // six, `m1` carries four of them, `m6` carries the reason and the subject path, and the search
+    // carries the note. Anything at or below the count a single field would produce would mean the
+    // walk found almost nothing and the assertion above proved almost nothing.
+    assert!(
+        total_inside >= 20,
+        "only {total_inside} labelled occurrences: the hostile content is not reaching the answer, \
+         so the check above is vacuous"
+    );
+
+    // And each field, on its own, really did arrive at least once — a total can be carried by one
+    // loud field while another never appears at all.
+    let whole = result_of(&root, memory::TOOL_NAME, json!({ "limit": 100 }));
+    for (what, marker) in markers {
+        let (inside, _) = occurrences(&whole["structuredContent"], marker);
+        assert!(inside > 0, "the {what} never reached the answer");
+    }
 }

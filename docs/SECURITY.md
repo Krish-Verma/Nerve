@@ -82,6 +82,38 @@ contents are read, so denied files are never loaded into memory.
   stored; current source is read from disk when evidence is presented. This limits the blast
   radius if the index is shared or leaked, and keeps "verbatim source" true by construction.
 
+## Stated limitations
+
+These are **not** deferred work. They are limits Nerve accepts and says out loud, because a limit
+stated is a limit a user can plan around, and a guess dressed as a control is worse than either.
+
+### Nerve cannot tell a human from an agent at the same shell (T13)
+
+Nerve has no accounts, no network and no identity provider. `nerve memory confirm <id>` run by a
+person and the same command run by an agent that has been handed a shell are
+**byte-indistinguishable**: same executable, same uid, same argv. Nerve makes no attempt to
+separate them — no tty check, no parent-process inspection, no environment sniffing — because each
+of those is a guess.
+
+What Nerve enforces instead is a **surface boundary**: the memory lifecycle exists on the command
+line and is **absent, not gated,** from the HTTP API and from MCP. No lifecycle writer appears
+anywhere in `crates/nerve-server/src/`, asserted by a source scan that fails by name; the MCP
+connection is `query_only` and a full memory session leaves the database byte-identical; every
+write verb on a memory route answers 405.
+
+**The residual is real and unmitigable.** A human who hands an agent their shell has removed the
+boundary, and Nerve cannot detect it, cannot report it afterwards, and does not claim to. Read a
+memory record accordingly: `author_label` is a label the caller supplied and nothing verified, and
+`status: active` means *`nerve memory confirm` ran on this machine* — never *a human confirmed
+this*. Nerve reports which **surface** a record was written from, never **who** wrote it.
+
+See `docs/THREAT-MODEL.md` T13.
+
+### Unbounded request-header read in the local HTTP server (T11)
+
+Accepted local-availability risk with revisit conditions recorded in `docs/THREAT-MODEL.md` T11;
+`tiny_http` exposes no knob for it and the listener type is a closed enum.
+
 ## Deferred, with a gate
 
 A written threat model is required **before**:

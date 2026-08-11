@@ -175,6 +175,12 @@ fn route(target: &Target, ctx: &Context<'_>) -> Outcome {
         "/api/contracts" => api::contracts::links(ctx, target),
         "/api/contracts/registry" => api::contracts::registry(ctx, target),
         "/api/contracts/vocabulary" => api::contracts::vocabulary(ctx),
+        // Slice 14c, and read-only for a reason stronger than habit: writing a note, confirming
+        // one, replacing one and ending one all write, and `api::memory::BOUNDARY` carries the
+        // exact commands on every answer instead. A `POST` here never reaches dispatch — the
+        // method check above refuses it — so there is no route to forget to make read-only.
+        "/api/memory" => api::memory::list(ctx, target),
+        "/api/memory/record" => api::memory::one(ctx, target),
         other => {
             return match assets::lookup(other) {
                 Some(asset) => Outcome::Asset(asset),
@@ -223,7 +229,7 @@ fn wrap(value: serde_json::Value) -> serde_json::Value {
 /// Nothing checked this before Slice 12c-iii-a. `no_api_route_answers_without_a_token` iterates this
 /// table, but the guard runs *before* dispatch, so an entry naming no arm still answered `401` and
 /// passed.
-pub const ROUTES: [&str; 21] = [
+pub const ROUTES: [&str; 23] = [
     "/api/overview",
     "/api/search",
     "/api/entity",
@@ -245,6 +251,8 @@ pub const ROUTES: [&str; 21] = [
     "/api/contracts",
     "/api/contracts/registry",
     "/api/contracts/vocabulary",
+    "/api/memory",
+    "/api/memory/record",
 ];
 
 #[cfg(test)]

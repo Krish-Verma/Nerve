@@ -163,6 +163,87 @@ fn the_only_file_the_server_opens_itself_is_the_randomness_source() {
     assert!(!TOKEN.contains("rel_path"));
 }
 
+/// Every lifecycle writer in `nerve-store`'s memory module, by the name it is called by.
+///
+/// Row 14 §1's control is a **surface boundary**, not an identity check, and this is the half of it
+/// that is enforceable. Nerve is offline and has no accounts, so an agent invoking `nerve memory
+/// confirm` at a local shell is byte-indistinguishable from a human invoking it; what can be made
+/// true and kept true is that *the code path is absent from the agent surface rather than gated on
+/// it*. These are the eight functions that would have to appear for it to stop being absent.
+const MEMORY_LIFECYCLE_WRITERS: [&str; 8] = [
+    "propose_memory",
+    "confirm_memory",
+    "invalidate_memory",
+    "supersede_memory",
+    "cite_memory",
+    "insert_memory",
+    "insert_memory_citation",
+    "append_memory_event",
+];
+
+/// Acceptance criterion 2: **no memory write is reachable from the MCP surface.**
+///
+/// Two scans, because one of them alone would be escapable:
+///
+/// 1. `src/mcp.rs` and everything under `src/mcp/` — the surface the criterion names, with its own
+///    anti-vacuity floor so a walk that found no files could not pass by iterating nothing.
+/// 2. The **whole crate**, because an MCP tool calls the application layer: a writer added to
+///    `src/api/memory.rs` and invoked from a tool would satisfy the first scan and defeat the
+///    property. `nerve serve` opens `query_only` and every route on it is a `GET`, so no file here
+///    has any business naming one of these.
+///
+/// The failure message names the function, so a probe that adds one fails by name rather than with
+/// a count. This is the same shape as the scans above and is deliberately just as crude: a grep
+/// that fails loudly is worth more than a convention nobody rechecks.
+#[test]
+fn no_memory_lifecycle_write_is_reachable_from_the_mcp_surface() {
+    let all = sources();
+    let mcp: Vec<&(String, String)> = all
+        .iter()
+        .filter(|(name, _)| name == "mcp.rs" || name.starts_with("mcp/"))
+        .collect();
+
+    // Anti-vacuity, twice over: the filter found the surface rather than nothing, and the walk
+    // found the crate. A renamed directory would otherwise turn this into a scan of an empty list.
+    assert!(
+        mcp.len() >= 10,
+        "expected to scan the whole MCP surface, found {} files: {:?}",
+        mcp.len(),
+        mcp.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
+    assert!(
+        mcp.iter().any(|(name, _)| name == "mcp/memory.rs"),
+        "the memory tool is not in the scanned set: {:?}",
+        mcp.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
+    // And the scan really can see a call: the tool it is about does reach the read model, so the
+    // files below are not empty of `nerve_store` calls in general.
+    assert!(
+        mcp.iter()
+            .any(|(name, source)| name == "mcp/memory.rs" && source.contains("api::memory")),
+        "the memory tool does not reach the application layer, so this scan proves nothing"
+    );
+
+    for (name, source) in &mcp {
+        for writer in MEMORY_LIFECYCLE_WRITERS {
+            assert!(
+                !source.contains(writer),
+                "nerve-server/{name} reaches {writer:?}; the MCP surface must not be able to write \
+                 a memory record, and the boundary is that the path is absent rather than gated"
+            );
+        }
+    }
+    for (name, source) in &all {
+        for writer in MEMORY_LIFECYCLE_WRITERS {
+            assert!(
+                !source.contains(writer),
+                "nerve-server/{name} reaches {writer:?}; this server is read-only, and a writer in \
+                 the application layer would be reachable from every surface on it"
+            );
+        }
+    }
+}
+
 /// The storage layer is reached through `nerve-store`'s own API, never by linking SQLite here.
 #[test]
 fn the_server_does_not_depend_on_a_database_or_a_parser() {

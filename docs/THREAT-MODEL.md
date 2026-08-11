@@ -363,6 +363,46 @@ neighbour on a hot path, or on media where the sidecars cannot be created.
 (`crates/nerve-index/tests/registry.rs`), 9 at the surface (`crates/nerve-cli/tests/registry.rs`),
 4 repository-wide scans (`crates/nerve-cli/tests/registry_guards.rs`).
 
+### T13 — An agent confirming its own memory (A4) — **Slice 14 gate, partly unmitigable**
+
+Row 14's brief requires that *"agents may not confirm their own proposal."* Nerve has no accounts,
+no network and no identity provider. At a local shell, `nerve memory confirm <id>` run by a human
+and the same command run by an agent that has been given a shell are **byte-indistinguishable** to
+Nerve: same executable, same uid, same argv.
+
+Nerve does **not** attempt to tell them apart. No tty check, no parent-process inspection, no
+environment sniffing — each is a guess, and a guess presented as a control is worse than a stated
+limit. That is the same reasoning that refused `nerve affected` (ADR-0008): a claim the evidence
+cannot support is not improved by making it confidently.
+
+So the control is a **surface boundary, not an identity check** — the lifecycle exists on the
+command line and is **absent, not gated,** from MCP and HTTP. Absence is the point: a gate can be
+mis-configured, and a code path that does not exist cannot be.
+
+**What is enforced, and by what:**
+
+| control | test |
+|---|---|
+| No lifecycle writer — `propose_memory`, `confirm_memory`, `invalidate_memory`, `supersede_memory`, `cite_memory`, `insert_memory`, `insert_memory_citation`, `append_memory_event` — appears anywhere in `crates/nerve-server/src/` | `tests/layering.rs::no_memory_lifecycle_write_is_reachable_from_the_mcp_surface`, which fails **by name**. It scans the **whole crate**, not only `src/mcp/`: a writer added to `src/api/memory.rs` and called from a tool would satisfy an MCP-only scan |
+| The MCP connection is `PRAGMA query_only`, and a full memory session leaves the database byte-identical | `tests/mcp.rs::a_memory_session_leaves_the_database_byte_identical` |
+| Every method but `GET` refused before routing; `POST`/`PUT`/`PATCH`/`DELETE` on both memory routes answer **405**, database byte-identical across a session containing all eight attempts | `tests/memory.rs::no_memory_route_is_reachable_by_a_write_verb_and_the_database_never_changes`, plus acceptance §4g |
+| `tools/list` advertises no confirmation tool; an invented name is refused with the closed set | `tests/mcp.rs` |
+
+**Not mitigated, and unmitigable.** A human who hands an agent their shell has removed the
+boundary. The agent can run `nerve memory propose` and `nerve memory confirm` itself, and **Nerve
+cannot detect that this happened, cannot report it afterwards, and does not claim to.** Nothing in
+the database distinguishes such a record: `author_label` is a local label the caller supplied and
+nothing verified, and `status: active` means only *that `nerve memory confirm` ran on this machine*
+— never *that a human confirmed it*.
+
+Accepted and unmitigable, in the manner T11 records the `tiny_http` header bound. It is written
+here so the product's own claim stays honest: Nerve reports **which surface** a memory record was
+written from, never **who** wrote it.
+
+**Status: ✅ implemented and attack-verified**, with the residual above stated rather than closed.
+Probe: `let _probe = nerve_store::confirm_memory;` added to `crates/nerve-server/src/mcp/memory.rs`
+fails the scan by name; reverted.
+
 ## 5. Explicit non-goals
 
 - Nerve does not defend against a **local attacker who already has the user's UID** — such an

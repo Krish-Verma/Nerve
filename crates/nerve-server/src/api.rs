@@ -13,6 +13,7 @@
 
 pub mod contracts;
 pub mod history;
+pub mod memory;
 
 use std::path::Path;
 
