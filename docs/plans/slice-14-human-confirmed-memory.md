@@ -381,6 +381,48 @@ Unknown-value behaviour, in three places rather than one:
    human's note is the one thing in this database re-indexing cannot rebuild (§6b), so a migration
    that silently edits one is refused on the same ground as a delete verb.
 
+## 6e. The export format, decided (added 2026-08-11, Slice 14b-ii)
+
+§6b requires export to be *"versioned, deterministic, local, offline"* and §7.4e requires the same
+database to export **byte-identically twice**. Those two sentences together decide more of the
+format than they look like they do.
+
+**One JSON document, not JSONL.** §6b offered canonical JSONL "or another explicitly versioned
+format", and a single document wins here for a reason specific to this schema: a memory record is
+not self-contained. It owns citations and an event history, and JSONL would either split one record
+across several lines — losing the containment the reader needs — or nest them anyway, at which
+point the line-orientation buys nothing. `serde_json`'s default map is a `BTreeMap`, so keys
+serialise in sorted order without a sorting pass; determinism is a property of the library here
+rather than of a convention someone has to remember.
+
+```
+format · format_version · schema_version · repo_id · record_count · records[]
+records[] : the stored columns, plus citations[] and events[]
+ordering  : records by memory_id · citations by citation_id · events by event_id
+```
+
+**Three deliberate omissions, each of which is a test rather than a note.**
+
+1. **No `exported_at`.** This is the one that matters, and it is forced: an export timestamp makes
+   two exports of an unchanged database differ, so §7.4e's byte-identical requirement and an
+   "exported at" field cannot both be satisfied. The brief's own *"exported-at metadata if useful"*
+   is therefore **declined**, and determinism is what it is declined in favour of. A human who
+   wants to know when they took a backup has the file's own mtime.
+2. **No derived state.** `potentially_stale`, `conflicted`, `multiple_active`, the subject
+   resolution verdict and `current_state_id` are computed at read time and must not appear.
+   Exporting one would write a query's answer into a file that outlives the query — which is the
+   *stored versus derived* split this row spent §3 establishing, undone at the last surface.
+3. **No absolute path.** Repository-relative only, asserted by searching the output for the
+   repository root string rather than by inspection.
+
+**Import stays out of 14b-ii.** §6c scopes this sub-slice to "the command family, citations, export
+and the acceptance rows", and §6b makes import conditional on a safety contract with thirteen parts
+and eleven tests. A half-safe importer is how a human's notes get overwritten by a file, so it is
+deferred **explicitly**: export is the supported backup mechanism, and import is its own slice if
+and when the full contract is met.
+
+---
+
 ## 7. Acceptance criteria
 
 1. `assertion` / `observation` / `occurrence` / `assertion_state` byte-identical across every memory
