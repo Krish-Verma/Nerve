@@ -133,7 +133,7 @@ entity(entity_id)` (`schema.rs:97`, immutable since v1) with `foreign_keys=ON`, 
 cross-repository target has no row in the local `entity` table. Links live in `contract_link`, and
 ordinary `path`/`impact` queries must not traverse them.
 
-## 7. Human-confirmed memory (row 14 — not started)
+## 7. Human-confirmed memory (row 14 — 14a + 14b-i complete; no surface yet)
 
 | capability | Svc | CLI | JSON | HTTP | MCP | UI | Acc |
 |---|---|---|---|---|---|---|---|
@@ -182,6 +182,8 @@ These are **gaps, not refusals**, and they are the functional UI parity phase's 
    `outline: none` (`nerve.css:382`), leaving only `.field:focus-within`'s border-colour change —
    measured `rgb(46,40,34)` → `rgb(87,79,72)`, a **1.81:1** contrast between states against
    WCAG 2.4.11's **3:1** minimum. Fix: `.field > input:focus-visible` restoring the global outline.
+   **CLOSED — the fix landed in `9d40615`.** The entry stayed in this list after it was fixed;
+   corrected 2026-08-10. Keyboard navigation is **not** an open gap.
 6. **Corrupt-history UI** — exercised 2026-08-08 against `fixtures/history-missing` (a parent
    commit object deleted with **no** `shallow` file, so the hole cannot be reported as a declared
    truncation), served by the release binary and driven at 1600px and 380px. **Clean, and the
@@ -191,7 +193,11 @@ These are **gaps, not refusals**, and they are the functional UI parity phase's 
    enumerated — not an empty commit"*, and the phrase *"begins here"* appears nowhere. No
    horizontal overflow, no console messages, no exceptions, no 4xx at either width. `summary
    complete` renders on every commit, so §6.7 holds on this path too. **No gap remains here.**
-7. Rows 13 and 14 are unbuilt in their entirety.
+7. ~~Rows 13 and 14 are unbuilt in their entirety.~~ **Stale, corrected 2026-08-10 — and it
+   contradicted §6 of this same file.** Row 13 is **complete**. Row 14 is **14a + 14b-i**: schema
+   v9 and v10, the durable subject snapshots, the read model and the transactional lifecycle
+   writes all exist in `nerve-store`, and **no surface exposes any of it** — no CLI, no HTTP, no
+   MCP, no UI. That is 14b-ii, 14c and 14d, and it is the largest single gap in this table.
 
 Gaps 5 and 6 are the residue of row 12's browser QA; everything needed to close 5 exists now that
 `scripts/viewport_qa.mjs` drives a real viewport over CDP.
