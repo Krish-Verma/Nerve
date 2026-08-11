@@ -2427,6 +2427,243 @@ impl FromStr for MemorySubjectResolution {
     }
 }
 
+/// **Which facet of its subject a memory record's claim is about.** Exactly four values.
+///
+/// # Why this is closed at all, and why it is not the argument [`MemoryStatus`] used
+///
+/// `status` was closed in SQL because a *derived* value could be *stored*, and that confusion does
+/// not exist here — so that argument does not transfer and is not reused. The argument that applies
+/// is about what scope is **load-bearing** for. Both derived views are decided over groups that
+/// contain it:
+///
+/// ```text
+/// multiple_active   groups by (repository, subject, scope)
+/// conflicted        groups by (repository, subject, scope, claim_key)
+/// ```
+///
+/// So with a free-form column, **a typo silently suppresses a conflict report**: two records that
+/// genuinely answer the same named claim about the same subject, one filed `operations` and one
+/// `opertions`, land in different groups and are reported as unrelated notes. That is a false
+/// negative on the one contradiction claim this feature makes, produced by a spelling mistake, and
+/// no test can catch it because both spellings would be legal. The second failure is one this
+/// project already has a name for: `--scope opertions` against a free-form column returns zero
+/// records, which reads as *there are no notes* rather than *there is no such scope* — `absence is
+/// not zero`, the rule 7c-ii's `doctor` and 7b's unresolved account both exist to enforce. A closed
+/// domain turns both into a refusal at the point of entry, which is where a refusal is useful.
+///
+/// # The axis, and the two fields it must not duplicate
+///
+/// This is **not** the kind of thing the subject is — `memory.subject_kind_snapshot` holds that,
+/// and Slice 14a's placeholder test values `"file"` and `"repository"` were exactly that
+/// redundancy. It is **not** the question the record answers — `memory.claim_key` holds that
+/// (`owner`, `deprecation-status`, `retry-policy`). The axis left, and the one that makes the
+/// grouping do work, is *which facet of the subject the claim is about*.
+///
+/// The worked case is `owner`. Subject `src/payments/charge.ts`, `claim_key = "owner"`, two active
+/// records: *"the payments team owns this code"* and *"platform owns its deployment"*. Same
+/// subject, same named claim, and **not a contradiction** — the first is about
+/// [`MemoryScope::Implementation`] and the second about [`MemoryScope::Operations`]. Without a facet
+/// axis Nerve reports a disagreement neither record made, which is what `ADR_DESCRIBES_COMPONENT`
+/// was refused for. `ownership` is deliberately **not** a value here, because *owner* is already a
+/// `claim_key` and promoting it would put one concept on two axes.
+///
+/// # The residual, stated rather than hidden
+///
+/// A retry policy is [`MemoryScope::Implementation`] when it is coded and
+/// [`MemoryScope::Operations`] when it is configured, and a human can reasonably file it either
+/// way. A misfiled record is not lost — it is still found by subject and by search — it only fails
+/// to compete with a record filed elsewhere. That is the same trade `claim_key` already makes, and
+/// it is strictly better than the free-form column, where *every* record is misfiled with respect
+/// to every typo.
+///
+/// Added in Slice 14b-i. `memory.scope`, enumerated in SQL by schema v10.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MemoryScope {
+    /// What the code does, and why it is written this way.
+    Implementation,
+    /// What it promises to whoever calls or consumes it.
+    Interface,
+    /// How it behaves when it runs: configuration, deployment, environment.
+    Operations,
+    /// How people work on it: ownership, review, convention.
+    Process,
+}
+
+impl MemoryScope {
+    /// Every value, in declaration order.
+    pub const ALL: [MemoryScope; 4] = [
+        MemoryScope::Implementation,
+        MemoryScope::Interface,
+        MemoryScope::Operations,
+        MemoryScope::Process,
+    ];
+
+    /// Canonical lower-case name, stored in `memory.scope`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MemoryScope::Implementation => "implementation",
+            MemoryScope::Interface => "interface",
+            MemoryScope::Operations => "operations",
+            MemoryScope::Process => "process",
+        }
+    }
+
+    /// What each facet covers, in words.
+    ///
+    /// Each sentence names the facet rather than the subject, because the whole reason this axis
+    /// exists is that a reader given only the subject cannot tell two records on it apart.
+    pub fn note(self) -> &'static str {
+        match self {
+            MemoryScope::Implementation => {
+                "the claim is about what the code does and why it is written this way — the \
+                 decision inside the thing, not the promise it makes outward"
+            }
+            MemoryScope::Interface => {
+                "the claim is about what the thing promises to whoever calls or consumes it, which \
+                 is a fact about the boundary rather than about what happens behind it"
+            }
+            MemoryScope::Operations => {
+                "the claim is about how it behaves when it runs: configuration, deployment and \
+                 environment. A policy that is coded is `implementation` and the same policy \
+                 configured is this one, and a human may reasonably file it either way"
+            }
+            MemoryScope::Process => {
+                "the claim is about how people work on it: ownership, review and convention. \
+                 Ownership is a facet here and never a scope of its own, because *owner* is a \
+                 claim key and one concept must not sit on two axes"
+            }
+        }
+    }
+}
+
+impl fmt::Display for MemoryScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for MemoryScope {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        MemoryScope::ALL
+            .into_iter()
+            .find(|v| v.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("MemoryScope", s))
+    }
+}
+
+/// What a `memory_event` records having been done. **One value per mutating operation, and no more.**
+///
+/// Slice 14a left this an open string because *"14b's commands own the verbs"*. 14b owns them now,
+/// and the invariant that closes it belongs to 14d: **every event must be renderable**, and the
+/// interface's vocabulary guard can only guard a vocabulary it knows exists — 12c-iv found eight
+/// unmirrored vocabularies for which that guard *could not fail*. An open string is one more.
+///
+/// Four of the five are status transitions and name the [`MemoryStatus`] they arrive at.
+/// **[`MemoryOperation::Cited`] is the exception and it is the reason this is a separate vocabulary
+/// from [`MemoryStatus`]:** adding a citation to a record changes no status, so its event carries
+/// `from_status == to_status`, which is the shape a memory event already documents as *an event
+/// that changed no status*. Collapsing the two vocabularies would leave that event with no verb to
+/// carry, and an audit history that cannot say a citation happened is not an audit history.
+///
+/// There is deliberately no `deleted`. There is no `nerve memory delete`, because a delete verb is
+/// how *"history preserved"* stops being true, and a verb with no command behind it is
+/// documentation rather than a gate.
+///
+/// Added in Slice 14b-i. `memory_event.operation`, enumerated in SQL by schema v10.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MemoryOperation {
+    /// The record was written down. The creating event, whose `from_status` is `None`.
+    Proposed,
+    /// A human at the command line confirmed it: `proposed` → `active`.
+    Confirmed,
+    /// A later record replaced it: it is retired and the successor names it.
+    Superseded,
+    /// It stopped being true and nothing replaced it.
+    Invalidated,
+    /// A citation was attached. **The only value that is not a transition**: `from` equals `to`.
+    Cited,
+}
+
+impl MemoryOperation {
+    /// Every value, in declaration order.
+    pub const ALL: [MemoryOperation; 5] = [
+        MemoryOperation::Proposed,
+        MemoryOperation::Confirmed,
+        MemoryOperation::Superseded,
+        MemoryOperation::Invalidated,
+        MemoryOperation::Cited,
+    ];
+
+    /// Canonical lower-case name, stored in `memory_event.operation`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MemoryOperation::Proposed => "proposed",
+            MemoryOperation::Confirmed => "confirmed",
+            MemoryOperation::Superseded => "superseded",
+            MemoryOperation::Invalidated => "invalidated",
+            MemoryOperation::Cited => "cited",
+        }
+    }
+
+    /// Whether this operation changes the record's stored status.
+    ///
+    /// Exactly one value answers `false`, and a reader of an event log needs to know which: an
+    /// event whose `from_status` equals its `to_status` is well-formed for
+    /// [`MemoryOperation::Cited`] and a bug for every other value.
+    pub fn changes_status(self) -> bool {
+        !matches!(self, MemoryOperation::Cited)
+    }
+
+    /// What each operation records, in words.
+    pub fn note(self) -> &'static str {
+        match self {
+            MemoryOperation::Proposed => {
+                "the record was written down. This is the creating event, so it has no prior \
+                 status — nothing in this product treats the record as settled until a human \
+                 confirms it at the command line"
+            }
+            MemoryOperation::Confirmed => {
+                "a human at the command line confirmed a proposal, so it became the current \
+                 statement about its subject. Nerve has no accounts, so what makes this the \
+                 human's act is the surface it arrived on and not an identity it checked"
+            }
+            MemoryOperation::Superseded => {
+                "a later record replaced this one, and that record names it. The content is left \
+                 unchanged: superseding rewrites nothing and deletes nothing"
+            }
+            MemoryOperation::Invalidated => {
+                "it stopped being true and nothing replaced it, which is the fact superseding \
+                 would have contradicted. Every earlier event stays readable"
+            }
+            MemoryOperation::Cited => {
+                "a citation was attached to the record. This is the one operation that changes no \
+                 status, so its event carries the same status before and after — an event that \
+                 happened and moved nothing, which is still a thing an audit history must be able \
+                 to say"
+            }
+        }
+    }
+}
+
+impl fmt::Display for MemoryOperation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for MemoryOperation {
+    type Err = NerveError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        MemoryOperation::ALL
+            .into_iter()
+            .find(|v| v.as_str() == s)
+            .ok_or_else(|| NerveError::unknown("MemoryOperation", s))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3948,5 +4185,165 @@ mod tests {
         let before = notes.len();
         notes.dedup();
         assert_eq!(notes.len(), before, "two subject verdicts share prose");
+    }
+
+    // ---- Slice 14b-i: the two vocabularies 14a left open --------------------------------------
+
+    /// **Four facets, and none of them duplicates the subject's kind or the record's claim key.**
+    ///
+    /// 14a stored `scope` as an opaque string and used `"file"` and `"repository"` in its tests —
+    /// which are `subject_kind_snapshot` values, and are exactly the redundancy this vocabulary
+    /// must not be. So the negative half is asserted first and by name: the placeholders and the
+    /// plan's own `claim_key` examples must all fail to parse, or the axis has collapsed onto one
+    /// of the two fields beside it.
+    #[test]
+    fn the_memory_scope_axis_is_a_facet_and_not_the_subject_kind_or_the_claim_key() {
+        let pinned: [(MemoryScope, &str); 4] = [
+            (MemoryScope::Implementation, "implementation"),
+            (MemoryScope::Interface, "interface"),
+            (MemoryScope::Operations, "operations"),
+            (MemoryScope::Process, "process"),
+        ];
+        for (value, name) in pinned {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<MemoryScope>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+            assert!(!value.note().is_empty());
+        }
+        let mut listed: Vec<MemoryScope> = pinned.iter().map(|(value, _)| *value).collect();
+        listed.sort_unstable();
+        let mut all = MemoryScope::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a memory scope was added to the vocabulary without a name above"
+        );
+        assert_eq!(MemoryScope::ALL.len(), 4);
+
+        // 14a's placeholders are `EntityKind` values, and the whole correction is that this axis is
+        // not that one. A build that accepted them would have re-created the redundancy.
+        for subject_kind in ["file", "repository", "directory", "function", "module"] {
+            assert!(
+                subject_kind.parse::<MemoryScope>().is_err(),
+                "`{subject_kind}` is a subject kind and it parsed as a scope"
+            );
+        }
+        // And the plan's own claim keys are on the other neighbouring axis.
+        for claim_key in ["owner", "ownership", "deprecation-status", "retry-policy"] {
+            assert!(
+                claim_key.parse::<MemoryScope>().is_err(),
+                "`{claim_key}` is a claim key and it parsed as a scope"
+            );
+        }
+        // The typo that motivated closing the domain at all.
+        for absent in ["opertions", "Implementation", "", " process"] {
+            assert!(
+                absent.parse::<MemoryScope>().is_err(),
+                "{absent:?} parsed as a MemoryScope"
+            );
+        }
+
+        // The residual is documented rather than hidden: the two scopes a retry policy could land
+        // in must each say so, or a human filing one has nothing to read.
+        let operations = MemoryScope::Operations.note();
+        assert!(operations.contains("configured"), "{operations}");
+        assert!(operations.contains("either way"), "{operations}");
+        // And `process` must say why ownership is a facet here rather than a scope of its own.
+        let process = MemoryScope::Process.note();
+        assert!(process.contains("claim key"), "{process}");
+
+        let mut notes: Vec<&str> = MemoryScope::ALL.iter().map(|v| v.note()).collect();
+        notes.sort_unstable();
+        let before = notes.len();
+        notes.dedup();
+        assert_eq!(notes.len(), before, "two memory scopes share prose");
+    }
+
+    /// **Five operations, and exactly one of them is not a status transition.**
+    ///
+    /// `cited` is the whole reason this is a vocabulary of its own rather than a reuse of
+    /// [`MemoryStatus`]: it changes no status, so its event carries the same status before and
+    /// after. The count is asserted, because "exactly one" is the claim
+    /// [`MemoryOperation::changes_status`] makes checkable.
+    #[test]
+    fn exactly_one_memory_operation_changes_no_status_and_no_verb_deletes() {
+        let pinned: [(MemoryOperation, &str); 5] = [
+            (MemoryOperation::Proposed, "proposed"),
+            (MemoryOperation::Confirmed, "confirmed"),
+            (MemoryOperation::Superseded, "superseded"),
+            (MemoryOperation::Invalidated, "invalidated"),
+            (MemoryOperation::Cited, "cited"),
+        ];
+        for (value, name) in pinned {
+            assert_eq!(
+                value.as_str(),
+                name,
+                "{value:?} is pinned against this list"
+            );
+            assert_eq!(name.parse::<MemoryOperation>().unwrap(), value);
+            assert_eq!(value.to_string(), name);
+            assert!(!value.note().is_empty());
+        }
+        let mut listed: Vec<MemoryOperation> = pinned.iter().map(|(value, _)| *value).collect();
+        listed.sort_unstable();
+        let mut all = MemoryOperation::ALL.to_vec();
+        all.sort_unstable();
+        assert_eq!(
+            listed, all,
+            "a memory operation was added to the vocabulary without a name above"
+        );
+        assert_eq!(MemoryOperation::ALL.len(), 5);
+
+        let unchanging: Vec<MemoryOperation> = MemoryOperation::ALL
+            .into_iter()
+            .filter(|op| !op.changes_status())
+            .collect();
+        assert_eq!(
+            unchanging,
+            vec![MemoryOperation::Cited],
+            "exactly one operation may leave the status where it was"
+        );
+        let cited = MemoryOperation::Cited.note();
+        assert!(cited.contains("changes no status"), "{cited}");
+
+        // Three of the four transitions name the status they arrive at, which is what lets a reader
+        // check an event against the row it is about. `proposed` is the creating event.
+        for (operation, status) in [
+            (MemoryOperation::Proposed, MemoryStatus::Proposed),
+            (MemoryOperation::Superseded, MemoryStatus::Superseded),
+            (MemoryOperation::Invalidated, MemoryStatus::Invalidated),
+        ] {
+            assert_eq!(operation.as_str(), status.as_str());
+        }
+        // And `confirmed` is deliberately not a status name: the status it arrives at is `active`.
+        assert!(MemoryOperation::Confirmed
+            .as_str()
+            .parse::<MemoryStatus>()
+            .is_err());
+
+        // No delete verb, and no verb for the derived views either — a view is not something that
+        // was done to a record.
+        for absent in ["deleted", "delete", "removed", "purged", "edited", ""] {
+            assert!(
+                absent.parse::<MemoryOperation>().is_err(),
+                "{absent:?} parsed as a MemoryOperation"
+            );
+        }
+        for view in MemoryView::ALL {
+            assert!(
+                view.as_str().parse::<MemoryOperation>().is_err(),
+                "`{view}` is a derived view and it parsed as an operation"
+            );
+        }
+
+        let mut notes: Vec<&str> = MemoryOperation::ALL.iter().map(|v| v.note()).collect();
+        notes.sort_unstable();
+        let before = notes.len();
+        notes.dedup();
+        assert_eq!(notes.len(), before, "two memory operations share prose");
     }
 }

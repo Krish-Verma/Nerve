@@ -23,7 +23,7 @@ use std::path::Path;
 
 use common::{named_fixture_copy, open_db, TEST_PROJECT_ID};
 
-use nerve_core::vocab::{MemoryStatus, MemorySubjectResolution};
+use nerve_core::vocab::{MemoryOperation, MemoryScope, MemoryStatus, MemorySubjectResolution};
 use nerve_store::memory::{insert_memory, read_memory, MemoryRow, MemorySubject};
 use nerve_store::Connection;
 
@@ -82,7 +82,7 @@ fn note(memory_id: &str, entity_id: &str, state_id: &str, path: &str, content: &
             selector: format!("file:{path}"),
         },
         anchor_state_id: state_id.to_string(),
-        scope: "file".to_string(),
+        scope: MemoryScope::Implementation.as_str().to_string(),
         claim_key: None,
         content: content.to_string(),
         author_label: "krish".to_string(),
@@ -251,7 +251,14 @@ fn memory_operations_leave_the_indexer_s_evidence_byte_identical() {
         "entry point, and it is generated",
     );
     successor.supersedes_memory_id = Some("m1".to_string());
-    nerve_store::memory::supersede_memory(&conn, &repo, &successor, "supersede", None).unwrap();
+    nerve_store::memory::supersede_memory(
+        &conn,
+        &repo,
+        &successor,
+        MemoryOperation::Superseded,
+        None,
+    )
+    .unwrap();
     nerve_store::memory::read_memory_all(&conn, &repo).unwrap();
 
     assert_eq!(

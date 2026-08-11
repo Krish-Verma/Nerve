@@ -20,12 +20,15 @@
 //! Every fixture holds two repositories. All three v9 tables carry `repo_id`, and a read that forgot
 //! to scope by it would still pass against a database holding one.
 
-use nerve_core::vocab::{MemoryStatus, MemorySubjectResolution, MemoryView};
+use nerve_core::vocab::{
+    MemoryOperation, MemoryScope, MemoryStatus, MemorySubjectResolution, MemoryView,
+};
 use nerve_store::memory::{
-    append_memory_event, insert_memory, insert_memory_citation, list_memory, memory,
-    memory_citations, memory_events, memory_for_subject, memory_in_scope, read_memory,
-    read_memory_all, read_memory_for_subject, read_memory_in_scope, resolve_memory_subject,
-    supersede_memory, superseded_by, MemoryCitationRow, MemoryEventRow, MemoryRow, MemorySubject,
+    append_memory_event, cite_memory, confirm_memory, insert_memory, insert_memory_citation,
+    invalidate_memory, list_memory, memory, memory_citations, memory_events, memory_for_subject,
+    memory_in_scope, propose_memory, read_memory, read_memory_all, read_memory_for_subject,
+    read_memory_in_scope, resolve_memory_subject, supersede_memory, superseded_by,
+    MemoryCitationRow, MemoryEventRow, MemoryRow, MemorySubject,
 };
 use nerve_store::{migrate, open_in_memory, Connection};
 
@@ -66,6 +69,12 @@ fn reindex_to_later_state(conn: &Connection) {
 }
 
 /// A well-formed record about `local1`, anchored at `s`.
+///
+/// The scope is [`MemoryScope::Implementation`], and the choice is the 14b-i correction rather than
+/// an arbitrary pick: 14a's fixture said `"file"`, which is the subject's *kind* and is exactly the
+/// redundancy the closed vocabulary exists to remove. Where a test needs a second, genuinely
+/// different scope it uses [`MemoryScope::Operations`] — a different facet of the same subject, not
+/// a different kind of subject.
 fn note(memory_id: &str, claim_key: Option<&str>, content: &str) -> MemoryRow {
     MemoryRow {
         memory_id: memory_id.to_string(),
@@ -77,7 +86,7 @@ fn note(memory_id: &str, claim_key: Option<&str>, content: &str) -> MemoryRow {
             selector: "file:src/app.ts".to_string(),
         },
         anchor_state_id: "s".to_string(),
-        scope: "file".to_string(),
+        scope: MemoryScope::Implementation.as_str().to_string(),
         claim_key: claim_key.map(str::to_string),
         content: content.to_string(),
         author_label: "krish".to_string(),
@@ -200,7 +209,7 @@ fn lists_are_scoped_and_include_retired_records() {
     let conn = store();
     insert_memory(&conn, "r", &note("m1", None, "one")).unwrap();
     let mut second = note("m2", None, "two");
-    second.scope = "repository".to_string();
+    second.scope = MemoryScope::Operations.as_str().to_string();
     insert_memory(&conn, "r", &second).unwrap();
     let mut retired = note("m3", None, "three");
     retired.status = MemoryStatus::Invalidated;
@@ -226,11 +235,11 @@ fn lists_are_scoped_and_include_retired_records() {
     );
     assert!(memory_for_subject(&conn, "r", "local2").unwrap().is_empty());
     assert_eq!(
-        ids(memory_in_scope(&conn, "r", "file").unwrap()),
+        ids(memory_in_scope(&conn, "r", MemoryScope::Implementation.as_str()).unwrap()),
         ["m1", "m3"]
     );
     assert_eq!(
-        ids(memory_in_scope(&conn, "r", "repository").unwrap()),
+        ids(memory_in_scope(&conn, "r", MemoryScope::Operations.as_str()).unwrap()),
         ["m2"]
     );
 }
@@ -286,22 +295,28 @@ fn events_append_in_order_and_are_never_removed() {
     proposed.status = MemoryStatus::Proposed;
     insert_memory(&conn, "r", &proposed).unwrap();
 
-    let event = |operation: &str, from: Option<MemoryStatus>, to: MemoryStatus| MemoryEventRow {
-        event_id: None,
-        memory_id: "m1".to_string(),
-        at: String::new(),
-        operation: operation.to_string(),
-        from_status: from,
-        to_status: to,
-        note: None,
-    };
+    let event =
+        |operation: MemoryOperation, from: Option<MemoryStatus>, to: MemoryStatus| MemoryEventRow {
+            event_id: None,
+            memory_id: "m1".to_string(),
+            at: String::new(),
+            operation,
+            from_status: from,
+            to_status: to,
+            note: None,
+        };
 
-    append_memory_event(&conn, "r", &event("propose", None, MemoryStatus::Proposed)).unwrap();
+    append_memory_event(
+        &conn,
+        "r",
+        &event(MemoryOperation::Proposed, None, MemoryStatus::Proposed),
+    )
+    .unwrap();
     append_memory_event(
         &conn,
         "r",
         &event(
-            "confirm",
+            MemoryOperation::Confirmed,
             Some(MemoryStatus::Proposed),
             MemoryStatus::Active,
         ),
@@ -312,18 +327,23 @@ fn events_append_in_order_and_are_never_removed() {
     append_memory_event(
         &conn,
         "r",
-        &event("cite", Some(MemoryStatus::Active), MemoryStatus::Active),
+        &event(
+            MemoryOperation::Cited,
+            Some(MemoryStatus::Active),
+            MemoryStatus::Active,
+        ),
     )
     .unwrap();
 
     let events = memory_events(&conn, "r", "m1").unwrap();
     assert_eq!(events.len(), 3);
     assert_eq!(
-        events
-            .iter()
-            .map(|e| e.operation.as_str())
-            .collect::<Vec<_>>(),
-        ["propose", "confirm", "cite"]
+        events.iter().map(|e| e.operation).collect::<Vec<_>>(),
+        [
+            MemoryOperation::Proposed,
+            MemoryOperation::Confirmed,
+            MemoryOperation::Cited
+        ]
     );
     assert!(
         events[0].from_status.is_none(),
@@ -347,7 +367,14 @@ fn superseding_flips_the_status_and_appends_the_event_together() {
 
     let mut successor = note("m2", Some("owner"), "team B owns this");
     successor.supersedes_memory_id = Some("m1".to_string());
-    let written = supersede_memory(&conn, "r", &successor, "supersede", Some("handover")).unwrap();
+    let written = supersede_memory(
+        &conn,
+        "r",
+        &successor,
+        MemoryOperation::Superseded,
+        Some("handover"),
+    )
+    .unwrap();
 
     assert_eq!(written.memory_id, "m2");
     assert_eq!(
@@ -362,7 +389,7 @@ fn superseding_flips_the_status_and_appends_the_event_together() {
     // The event exists, and it says what changed and why.
     let events = memory_events(&conn, "r", "m1").unwrap();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].operation, "supersede");
+    assert_eq!(events[0].operation, MemoryOperation::Superseded);
     assert_eq!(events[0].from_status, Some(MemoryStatus::Active));
     assert_eq!(events[0].to_status, MemoryStatus::Superseded);
     assert_eq!(events[0].note.as_deref(), Some("handover"));
@@ -403,7 +430,8 @@ fn a_refused_supersession_leaves_neither_half_applied() {
 
     let mut successor = note("m2", None, "two");
     successor.supersedes_memory_id = Some("m1".to_string());
-    let err = supersede_memory(&conn, "r", &successor, "supersede", None).unwrap_err();
+    let err =
+        supersede_memory(&conn, "r", &successor, MemoryOperation::Superseded, None).unwrap_err();
     assert!(
         matches!(err, nerve_store::StoreError::Memory(_)),
         "expected a memory refusal, got {err}"
@@ -422,14 +450,14 @@ fn a_refused_supersession_leaves_neither_half_applied() {
 
     // A successor that names no predecessor is not a supersession, and writes nothing either.
     let orphan = note("m3", None, "three");
-    let err = supersede_memory(&conn, "r", &orphan, "supersede", None).unwrap_err();
+    let err = supersede_memory(&conn, "r", &orphan, MemoryOperation::Superseded, None).unwrap_err();
     assert!(matches!(err, nerve_store::StoreError::Memory(_)), "{err}");
     assert!(memory(&conn, "r", "m3").unwrap().is_none());
 
     // And one naming a record in another repository finds nothing to retire.
     let mut cross = note("m4", None, "four");
     cross.supersedes_memory_id = Some("m1".to_string());
-    assert!(supersede_memory(&conn, "r2", &cross, "supersede", None).is_err());
+    assert!(supersede_memory(&conn, "r2", &cross, MemoryOperation::Superseded, None).is_err());
     assert!(memory(&conn, "r2", "m4").unwrap().is_none());
 
     assert_eq!(scalar(&conn, "SELECT count(*) FROM memory"), 1);
@@ -665,7 +693,7 @@ fn two_notes_on_one_subject_without_a_claim_key_are_not_a_conflict() {
 
     // A single note about a subject is neither.
     let mut alone = note("m3", None, "alone");
-    alone.scope = "repository".to_string();
+    alone.scope = MemoryScope::Operations.as_str().to_string();
     insert_memory(&conn, "r", &alone).unwrap();
     let only = read_memory(&conn, "r", "m3").unwrap().unwrap();
     assert!(only.views.is_empty(), "{:?}", only.views);
@@ -712,7 +740,7 @@ fn a_shared_claim_key_is_what_makes_two_records_conflict() {
 
     // A claim key in a different *scope* is a different claim.
     let mut other_scope = note("m4", Some("owner"), "the repository is owned by team C");
-    other_scope.scope = "repository".to_string();
+    other_scope.scope = MemoryScope::Operations.as_str().to_string();
     insert_memory(&conn, "r", &other_scope).unwrap();
     assert_eq!(
         read_memory(&conn, "r", "m4").unwrap().unwrap().views,
@@ -789,7 +817,7 @@ fn no_derived_view_ever_reaches_the_status_column() {
     insert_memory(&conn, "r", &note("m1", Some("owner"), "team A")).unwrap();
     let mut successor = note("m2", Some("owner"), "team B");
     successor.supersedes_memory_id = Some("m1".to_string());
-    supersede_memory(&conn, "r", &successor, "supersede", None).unwrap();
+    supersede_memory(&conn, "r", &successor, MemoryOperation::Superseded, None).unwrap();
     reindex_to_later_state(&conn);
 
     let mut stmt = conn
@@ -862,7 +890,8 @@ fn the_database_itself_refuses_a_derived_view_in_the_status_column() {
                   anchor_state_id, scope, claim_key, content, author_label, created_at, status,
                   supersedes_memory_id, invalidated_at, invalidation_reason)
              VALUES ('probe', 'r', 'e1', 'file', 'a.ts', 'a.ts', 'a.ts',
-                     'state-1', 'anything', NULL, 'a sentence', 'local', '2026-01-01T00:00:00Z', ?1,
+                     'state-1', 'implementation', NULL, 'a sentence', 'local',
+                     '2026-01-01T00:00:00Z', ?1,
                      NULL, NULL, NULL)",
             rusqlite::params![view.as_str()],
         );
@@ -906,10 +935,15 @@ fn the_list_readers_agree_with_the_single_reader() {
         assert_eq!(&single, report);
     }
     assert_eq!(read_memory_for_subject(&conn, "r", "local1").unwrap(), all);
-    assert_eq!(read_memory_in_scope(&conn, "r", "file").unwrap(), all);
-    assert!(read_memory_in_scope(&conn, "r", "repository")
-        .unwrap()
-        .is_empty());
+    assert_eq!(
+        read_memory_in_scope(&conn, "r", MemoryScope::Implementation.as_str()).unwrap(),
+        all
+    );
+    assert!(
+        read_memory_in_scope(&conn, "r", MemoryScope::Operations.as_str())
+            .unwrap()
+            .is_empty()
+    );
     assert!(read_memory_all(&conn, "r2").unwrap().is_empty());
 }
 
@@ -961,7 +995,7 @@ fn no_memory_operation_moves_a_single_byte_of_the_evidence_tables() {
             event_id: None,
             memory_id: "m1".to_string(),
             at: String::new(),
-            operation: "cite".to_string(),
+            operation: MemoryOperation::Cited,
             from_status: Some(MemoryStatus::Active),
             to_status: MemoryStatus::Active,
             note: None,
@@ -970,7 +1004,7 @@ fn no_memory_operation_moves_a_single_byte_of_the_evidence_tables() {
     .unwrap();
     let mut successor = note("m2", Some("owner"), "team B owns this");
     successor.supersedes_memory_id = Some("m1".to_string());
-    supersede_memory(&conn, "r", &successor, "supersede", None).unwrap();
+    supersede_memory(&conn, "r", &successor, MemoryOperation::Superseded, None).unwrap();
 
     // And the reads, which must not write either.
     read_memory_all(&conn, "r").unwrap();
@@ -1018,6 +1052,499 @@ fn the_evidence_comparison_catches_a_probe_that_writes_evidence() {
         before,
         "the comparison did not notice a row written into the evidence tables"
     );
+}
+
+// ---- the lifecycle, Slice 14b-i ----------------------------------------------------------------
+
+/// Every row of all three memory tables, in one deterministic string.
+///
+/// The counterpart to [`machine_tables`], and it exists for the refusal tests: *"the database did
+/// not move"* is a claim about every column of every row, and checking one status column would
+/// pass against a write that landed somewhere else. A full serialisation rather than a digest, for
+/// the reason [`machine_tables`] gives — it says *what* moved and not only *that* something did.
+fn memory_tables(conn: &Connection) -> String {
+    let mut out = String::new();
+    for (label, sql) in [
+        (
+            "memory",
+            "SELECT memory_id || '|' || repo_id || '|' || subject_entity_id_snapshot || '|'
+                 || subject_kind_snapshot || '|' || subject_name_snapshot || '|'
+                 || subject_path_snapshot || '|' || subject_selector_snapshot || '|'
+                 || anchor_state_id || '|' || scope || '|' || coalesce(claim_key,'-') || '|'
+                 || content || '|' || author_label || '|' || created_at || '|' || status || '|'
+                 || coalesce(supersedes_memory_id,'-') || '|' || coalesce(invalidated_at,'-')
+                 || '|' || coalesce(invalidation_reason,'-')
+               FROM memory ORDER BY repo_id, memory_id",
+        ),
+        (
+            "memory_citation",
+            "SELECT citation_id || '|' || repo_id || '|' || memory_id || '|'
+                 || coalesce(cited_entity_id_snapshot,'-') || '|'
+                 || coalesce(cited_kind_snapshot,'-') || '|' || coalesce(cited_name_snapshot,'-')
+                 || '|' || cited_path_snapshot || '|' || coalesce(cited_span_snapshot,'-') || '|'
+                 || cited_at_state || '|' || created_at
+               FROM memory_citation ORDER BY citation_id",
+        ),
+        (
+            "memory_event",
+            "SELECT event_id || '|' || repo_id || '|' || memory_id || '|' || at || '|' || operation
+                 || '|' || coalesce(from_status,'-') || '|' || to_status || '|'
+                 || coalesce(note,'-')
+               FROM memory_event ORDER BY event_id",
+        ),
+    ] {
+        out.push_str(label);
+        out.push('\n');
+        let mut stmt = conn.prepare(sql).unwrap();
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0)).unwrap();
+        for row in rows {
+            out.push_str(&row.unwrap());
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// A citation of `local1` by `memory_id`, anchored at `s`.
+fn citation(memory_id: &str, span: &str) -> MemoryCitationRow {
+    MemoryCitationRow {
+        citation_id: None,
+        memory_id: memory_id.to_string(),
+        cited_entity_id: Some("local1".to_string()),
+        cited_kind: Some("file".to_string()),
+        cited_name: Some("app.ts".to_string()),
+        cited_path: "src/app.ts".to_string(),
+        cited_span: Some(span.to_string()),
+        cited_at_state: "s".to_string(),
+        created_at: String::new(),
+    }
+}
+
+/// **A record walks proposed → active → invalidated, one event per step, and nothing is lost.**
+///
+/// 14a's `insert_memory` appended no event at all, so a record existed whose audit history did not
+/// say it had ever been written. Each wrapper now appends exactly one event — *exactly*, because
+/// two would double-count a transition and none would leave a status change unrecorded — and every
+/// earlier event is still readable at the end, which is what append-only means when it is measured
+/// rather than asserted.
+#[test]
+fn each_lifecycle_step_appends_exactly_one_event_and_keeps_every_earlier_one() {
+    let conn = store();
+
+    let written =
+        propose_memory(&conn, "r", &note("m1", Some("owner"), "team A owns this")).unwrap();
+    assert_eq!(
+        written.status,
+        MemoryStatus::Proposed,
+        "propose_memory must not take the caller's status"
+    );
+    assert!(!written.created_at.is_empty());
+    let events = memory_events(&conn, "r", "m1").unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].operation, MemoryOperation::Proposed);
+    assert!(
+        events[0].from_status.is_none(),
+        "the creating event has no prior status to name"
+    );
+    assert_eq!(events[0].to_status, MemoryStatus::Proposed);
+
+    let confirmed = confirm_memory(&conn, "r", "m1", Some("checked against the tree")).unwrap();
+    assert_eq!(confirmed.status, MemoryStatus::Active);
+    let events = memory_events(&conn, "r", "m1").unwrap();
+    assert_eq!(events.len(), 2, "confirming appended more than one event");
+    assert_eq!(
+        events[0].operation,
+        MemoryOperation::Proposed,
+        "the earlier event is gone"
+    );
+    assert_eq!(events[1].operation, MemoryOperation::Confirmed);
+    assert_eq!(events[1].from_status, Some(MemoryStatus::Proposed));
+    assert_eq!(events[1].to_status, MemoryStatus::Active);
+    assert_eq!(events[1].note.as_deref(), Some("checked against the tree"));
+
+    let invalidated = invalidate_memory(
+        &conn,
+        "r",
+        "m1",
+        Some("the module was removed"),
+        Some("noticed during a re-index"),
+    )
+    .unwrap();
+    assert_eq!(invalidated.status, MemoryStatus::Invalidated);
+    assert!(
+        invalidated.invalidated_at.is_some(),
+        "an ending is a status and a moment"
+    );
+    assert_eq!(
+        invalidated.invalidation_reason.as_deref(),
+        Some("the module was removed")
+    );
+    // The content is untouched: retiring a record rewrites nothing.
+    assert_eq!(invalidated.content, "team A owns this");
+
+    let events = memory_events(&conn, "r", "m1").unwrap();
+    assert_eq!(events.len(), 3, "invalidating appended more than one event");
+    assert_eq!(
+        events.iter().map(|e| e.operation).collect::<Vec<_>>(),
+        [
+            MemoryOperation::Proposed,
+            MemoryOperation::Confirmed,
+            MemoryOperation::Invalidated
+        ],
+        "an earlier event was rewritten or removed"
+    );
+    assert_eq!(events[2].from_status, Some(MemoryStatus::Active));
+    assert_eq!(events[2].to_status, MemoryStatus::Invalidated);
+    assert!(events.iter().all(|e| !e.at.is_empty()));
+}
+
+/// **A citation's event changes no status: `from_status == to_status`.**
+///
+/// The one operation in the vocabulary that is not a transition, which is the whole reason
+/// [`MemoryOperation`] is a vocabulary of its own rather than a reuse of [`MemoryStatus`]. The
+/// status is read inside the transaction, so the assertion is against the record's status *now*
+/// rather than against whatever the caller last saw.
+#[test]
+fn a_citation_event_carries_the_same_status_before_and_after() {
+    let conn = store();
+    propose_memory(&conn, "r", &note("m1", None, "one")).unwrap();
+
+    // Cited while proposed, then cited again once active: the event tracks the record either way.
+    cite_memory(&conn, "r", &citation("m1", "3:9"), None).unwrap();
+    let proposed_event = memory_events(&conn, "r", "m1").unwrap().pop().unwrap();
+    assert_eq!(proposed_event.operation, MemoryOperation::Cited);
+    assert_eq!(proposed_event.from_status, Some(MemoryStatus::Proposed));
+    assert_eq!(proposed_event.to_status, MemoryStatus::Proposed);
+
+    confirm_memory(&conn, "r", "m1", None).unwrap();
+    let citation_id = cite_memory(&conn, "r", &citation("m1", "11:14"), Some("second")).unwrap();
+    assert!(citation_id > 0);
+
+    let events = memory_events(&conn, "r", "m1").unwrap();
+    assert_eq!(events.len(), 4);
+    let last = events.last().unwrap();
+    assert_eq!(last.operation, MemoryOperation::Cited);
+    assert_eq!(
+        last.from_status,
+        Some(last.to_status),
+        "a citation changed a status"
+    );
+    assert_eq!(last.to_status, MemoryStatus::Active);
+    assert_eq!(last.note.as_deref(), Some("second"));
+
+    assert_eq!(memory_citations(&conn, "r", "m1").unwrap().len(), 2);
+    assert_eq!(
+        memory(&conn, "r", "m1").unwrap().unwrap().status,
+        MemoryStatus::Active,
+        "citing moved the record's status"
+    );
+
+    // Anti-vacuity for the equality above: the transitions in this file do not satisfy it.
+    for event in &events {
+        if event.operation.changes_status() {
+            assert_ne!(
+                event.from_status,
+                Some(event.to_status),
+                "`{}` left the status where it was",
+                event.operation
+            );
+        }
+    }
+}
+
+/// **Every refused transition leaves the database completely unchanged.**
+///
+/// Not "leaves the status alone" — *unchanged*, compared as a full serialisation of all three
+/// tables before and after. A refusal that rolled back the status change but left the event behind
+/// would pass a status assertion and would have written a history entry describing something that
+/// did not happen.
+///
+/// Six refusals, and each names a fact a `CHECK` cannot reach because a `CHECK` sees one row:
+/// confirming twice, confirming something already retired, invalidating a **superseded** record,
+/// invalidating twice, and either verb against a record that is not there or is in another
+/// repository.
+#[test]
+fn every_refused_transition_leaves_all_three_tables_exactly_as_they_were() {
+    let conn = store();
+    propose_memory(&conn, "r", &note("m1", Some("owner"), "team A owns this")).unwrap();
+    confirm_memory(&conn, "r", "m1", None).unwrap();
+    cite_memory(&conn, "r", &citation("m1", "3:9"), None).unwrap();
+
+    let mut successor = note("m2", Some("owner"), "team B owns this");
+    successor.supersedes_memory_id = Some("m1".to_string());
+    supersede_memory(&conn, "r", &successor, MemoryOperation::Superseded, None).unwrap();
+
+    propose_memory(&conn, "r", &note("m3", None, "still a proposal")).unwrap();
+
+    // Anti-vacuity: there is a database here, so "unchanged" is a measurement.
+    let before = memory_tables(&conn);
+    assert!(before.contains("team A owns this"), "{before}");
+    // Three labels, three records, one citation and five events.
+    assert_eq!(before.lines().count(), 3 + 3 + 1 + 5, "{before}");
+
+    /// One refused call: what it is, how to make it, and the word its message must contain.
+    ///
+    /// Named rather than left as a tuple, so the loop below reads as a table of refusals.
+    struct Refusal<'a> {
+        label: &'a str,
+        run: Box<dyn Fn() -> nerve_store::StoreError + 'a>,
+        must_say: &'a str,
+    }
+    let refusal = |label, run, must_say| Refusal {
+        label,
+        run,
+        must_say,
+    };
+
+    let refusals: [Refusal<'_>; 7] = [
+        refusal(
+            "confirming an already-active record",
+            Box::new(|| confirm_memory(&conn, "r", "m2", None).unwrap_err()),
+            "active",
+        ),
+        refusal(
+            "confirming a superseded record",
+            Box::new(|| confirm_memory(&conn, "r", "m1", None).unwrap_err()),
+            "superseded",
+        ),
+        refusal(
+            "invalidating a superseded record",
+            Box::new(|| invalidate_memory(&conn, "r", "m1", Some("gone"), None).unwrap_err()),
+            "superseded",
+        ),
+        refusal(
+            "confirming a record that this repository does not hold",
+            Box::new(|| confirm_memory(&conn, "r2", "m3", None).unwrap_err()),
+            "",
+        ),
+        refusal(
+            "invalidating a record that is not there",
+            Box::new(|| invalidate_memory(&conn, "r", "absent", None, None).unwrap_err()),
+            "",
+        ),
+        refusal(
+            "citing a record that is not there",
+            Box::new(|| cite_memory(&conn, "r", &citation("absent", "1:2"), None).unwrap_err()),
+            "",
+        ),
+        refusal(
+            "proposing a record that names a predecessor",
+            Box::new(|| {
+                let mut orphan = note("m9", None, "nine");
+                orphan.supersedes_memory_id = Some("m3".to_string());
+                propose_memory(&conn, "r", &orphan).unwrap_err()
+            }),
+            "",
+        ),
+    ];
+
+    for Refusal {
+        label,
+        run,
+        must_say,
+    } in refusals
+    {
+        let error = run();
+        assert!(
+            matches!(error, nerve_store::StoreError::Memory(_)),
+            "{label}: expected a memory refusal, got {error}"
+        );
+        if !must_say.is_empty() {
+            assert!(
+                error.to_string().contains(must_say),
+                "{label}: the refusal must say the status the record is actually in: {error}"
+            );
+        }
+        assert_eq!(memory_tables(&conn), before, "{label} moved the database");
+    }
+
+    // Confirming twice: the second is refused and says which status the record is in now.
+    confirm_memory(&conn, "r", "m3", None).unwrap();
+    let after_one_confirm = memory_tables(&conn);
+    let error = confirm_memory(&conn, "r", "m3", None).unwrap_err();
+    assert!(
+        error.to_string().contains("active"),
+        "a second confirm must say the record is already active: {error}"
+    );
+    assert_eq!(
+        memory_tables(&conn),
+        after_one_confirm,
+        "a second confirm moved the database"
+    );
+
+    // Invalidating twice: likewise, and the first `invalidated_at` is not moved by the second.
+    invalidate_memory(&conn, "r", "m3", Some("removed"), None).unwrap();
+    let after_one_invalidate = memory_tables(&conn);
+    let error = invalidate_memory(&conn, "r", "m3", Some("removed again"), None).unwrap_err();
+    assert!(
+        error.to_string().contains("invalidated"),
+        "a second invalidate must say the record is already invalidated: {error}"
+    );
+    assert_eq!(
+        memory_tables(&conn),
+        after_one_invalidate,
+        "a second invalidate moved the database"
+    );
+}
+
+/// **Invalidating a superseded record is refused, and superseding an invalidated one already was.**
+///
+/// The pair is what keeps the two statuses distinguishable at all. *"It stopped being true and
+/// nothing replaced it"* and *"this record replaced it"* are contradictory claims about one record,
+/// so accepting either after the other would quietly turn one into the other — and the successor
+/// would go on being active, naming a predecessor that now says nothing succeeded it.
+#[test]
+fn invalidated_and_superseded_are_refused_in_both_directions() {
+    let conn = store();
+    propose_memory(&conn, "r", &note("m1", None, "one")).unwrap();
+    confirm_memory(&conn, "r", "m1", None).unwrap();
+    let mut successor = note("m2", None, "two");
+    successor.supersedes_memory_id = Some("m1".to_string());
+    supersede_memory(&conn, "r", &successor, MemoryOperation::Superseded, None).unwrap();
+
+    let before = memory_tables(&conn);
+    let error = invalidate_memory(&conn, "r", "m1", Some("gone"), None).unwrap_err();
+    assert!(
+        error.to_string().contains("superseded"),
+        "the refusal must name the status that contradicts it: {error}"
+    );
+    assert_eq!(memory_tables(&conn), before);
+    assert_eq!(
+        superseded_by(&conn, "r", "m1").unwrap(),
+        Some("m2".to_string()),
+        "the supersession survived a refused invalidation"
+    );
+
+    // The other direction, which Slice 14a already refused: an invalidated record may not be
+    // superseded. Asserted here too, because the pair is the claim rather than either half.
+    propose_memory(&conn, "r", &note("m3", None, "three")).unwrap();
+    confirm_memory(&conn, "r", "m3", None).unwrap();
+    invalidate_memory(&conn, "r", "m3", Some("gone"), None).unwrap();
+    let before = memory_tables(&conn);
+    let mut late = note("m4", None, "four");
+    late.supersedes_memory_id = Some("m3".to_string());
+    let error = supersede_memory(&conn, "r", &late, MemoryOperation::Superseded, None).unwrap_err();
+    assert!(
+        matches!(error, nerve_store::StoreError::Memory(_)),
+        "{error}"
+    );
+    assert_eq!(memory_tables(&conn), before);
+
+    // And the two statuses are still told apart in the read model, which is acceptance criterion 5.
+    assert_eq!(
+        memory(&conn, "r", "m1").unwrap().unwrap().status,
+        MemoryStatus::Superseded
+    );
+    assert_eq!(
+        memory(&conn, "r", "m3").unwrap().unwrap().status,
+        MemoryStatus::Invalidated
+    );
+    assert!(memory(&conn, "r", "m3")
+        .unwrap()
+        .unwrap()
+        .invalidated_at
+        .is_some());
+    assert!(memory(&conn, "r", "m1")
+        .unwrap()
+        .unwrap()
+        .invalidated_at
+        .is_none());
+}
+
+/// **No lifecycle operation moves a single byte of the evidence tables.**
+///
+/// The 14a invariant, re-asserted across the five writes 14b-i adds. Memory is offered *beside*
+/// evidence and never mixed into it, and a wrapper that reached for `assertion_state` — to record
+/// that a human had confirmed something, say — would be the silent-truth failure arrived at through
+/// a feature instead of through the schema.
+#[test]
+fn no_lifecycle_operation_moves_a_single_byte_of_the_evidence_tables() {
+    let conn = store();
+    seed_graph(&conn);
+
+    let before = machine_tables(&conn);
+    assert!(before.contains("AST_DIRECT"), "{before}");
+    assert!(before.contains("SUPPORTED"), "{before}");
+    assert!(before.lines().count() > 8, "{before}");
+
+    propose_memory(&conn, "r", &note("m1", Some("owner"), "team A owns this")).unwrap();
+    confirm_memory(&conn, "r", "m1", None).unwrap();
+    cite_memory(&conn, "r", &citation("m1", "3:9"), None).unwrap();
+    let mut successor = note("m2", Some("owner"), "team B owns this");
+    successor.supersedes_memory_id = Some("m1".to_string());
+    supersede_memory(&conn, "r", &successor, MemoryOperation::Superseded, None).unwrap();
+    invalidate_memory(&conn, "r", "m2", Some("the team was dissolved"), None).unwrap();
+
+    // And the refusals, which must not write either — including the halves of a rolled-back write.
+    assert!(confirm_memory(&conn, "r", "m1", None).is_err());
+    assert!(invalidate_memory(&conn, "r", "m1", None, None).is_err());
+
+    assert_eq!(
+        machine_tables(&conn),
+        before,
+        "a memory lifecycle operation moved the evidence tables"
+    );
+    // The memory tables did fill up, so the invariant is not holding because nothing happened.
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory"), 2);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory_citation"), 1);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory_event"), 5);
+}
+
+/// The scope column holds only vocabulary values, and the database refuses anything else.
+///
+/// The Rust half is not enough on its own: `MemoryScope::FromStr` fails on the next *read*, which
+/// is a repair job rather than a refusal, so the claim is made against the constraint. Each of the
+/// two neighbouring axes is refused **by name** — the subject's kind and the record's claim key —
+/// because those are the two values a scope would silently be if the axis had collapsed.
+#[test]
+fn the_database_itself_refuses_a_scope_outside_the_vocabulary() {
+    let conn = store();
+
+    for outside in ["file", "repository", "owner", "opertions", "Implementation"] {
+        let mut row = note("probe", None, "anything");
+        row.scope = outside.to_string();
+        let error = insert_memory(&conn, "r", &row)
+            .expect_err(&format!("`{outside}` is not a scope and it was stored"))
+            .to_string();
+        assert!(
+            error.contains("CHECK constraint failed"),
+            "`{outside}` was refused, but not by the CHECK: {error}"
+        );
+    }
+
+    // Anti-vacuity: all four real scopes are accepted, or a constraint refusing everything would
+    // satisfy the loop above.
+    for scope in MemoryScope::ALL {
+        let mut row = note(&format!("ok-{scope}"), None, "anything");
+        row.scope = scope.as_str().to_string();
+        insert_memory(&conn, "r", &row)
+            .unwrap_or_else(|error| panic!("`{scope}` is a real scope and was refused: {error}"));
+    }
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory"), 4);
+
+    // And the same for the event vocabulary, which v10 closed in the same migration.
+    let mut proposed = note("event-probe", None, "anything");
+    proposed.scope = MemoryScope::Process.as_str().to_string();
+    propose_memory(&conn, "r", &proposed).unwrap();
+    let error = conn
+        .execute(
+            "INSERT INTO memory_event (repo_id, memory_id, at, operation, to_status)
+             VALUES ('r','event-probe','t','deleted','proposed')",
+            [],
+        )
+        .expect_err("`deleted` is not an operation and it was stored")
+        .to_string();
+    assert!(error.contains("CHECK constraint failed"), "{error}");
+    for operation in MemoryOperation::ALL {
+        conn.execute(
+            "INSERT INTO memory_event (repo_id, memory_id, at, operation, to_status)
+             VALUES ('r','event-probe','t',?1,'proposed')",
+            rusqlite::params![operation.as_str()],
+        )
+        .unwrap_or_else(|error| {
+            panic!("`{operation}` is a real operation and was refused: {error}")
+        });
+    }
 }
 
 // ---- the source scans --------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 //! Human-confirmed project memory: `memory`, `memory_citation` and `memory_event`
-//! (schema v9, Slice 14a).
+//! (schema v9, Slice 14a; the closed vocabularies and the lifecycle writes, schema v10,
+//! Slice 14b-i).
 //!
 //! These three tables are **not** part of the evidence graph and are deliberately absent from the
 //! canonical dump. A memory record is a human sentence *about* one subject, which is not the shape
@@ -30,13 +31,24 @@
 //!    one fact can disagree with nothing to notice — the shape row 13 §4.1 rejected.
 //! 4. **Nothing here deletes.** There is no delete verb, and `memory_event` is append-only: this
 //!    module contains no `DELETE` and no `UPDATE` against it, and a source scan asserts that.
-//! 5. **No lifecycle command lives here.** Confirming and invalidating are Slice 14b's, and this
-//!    module never authors an operation name — [`supersede_memory`] takes the caller's label,
-//!    because the store must not name the product's verbs.
+//! 5. **A lifecycle write is one transaction, or it is nothing.** [`propose_memory`],
+//!    [`confirm_memory`], [`invalidate_memory`], [`cite_memory`] and [`supersede_memory`] each
+//!    change a status and append the event that records the change inside a single transaction. A
+//!    crash or a refusal between the two halves would leave a record that changed with no record of
+//!    changing — the failure the audit history exists to prevent. Slice 14a left [`insert_memory`]
+//!    and [`append_memory_event`] as the only writers and appended no creating event; those two
+//!    are still public, because supersession and the schema tests need them, but a product
+//!    lifecycle caller must use the wrappers or an event is skipped.
+//!
+//! Slice 14b-i also closes the two vocabularies 14a deliberately left open. `operation` is a
+//! [`MemoryOperation`] rather than a string, because the store no longer has a reason to accept an
+//! arbitrary verb: 14b owns the verbs, and 14d's guard can only guard a vocabulary that exists.
+//! `scope` stays a `String` on [`MemoryRow`] and is enumerated by the schema — see
+//! [`crate::schema`]'s `V10` doc comment for why the column is closed and what it cost.
 
 use std::collections::BTreeMap;
 
-use nerve_core::vocab::{MemoryStatus, MemorySubjectResolution, MemoryView};
+use nerve_core::vocab::{MemoryOperation, MemoryStatus, MemorySubjectResolution, MemoryView};
 use rusqlite::{params, Connection, Row};
 
 use crate::error::{Result, StoreError};
@@ -142,8 +154,9 @@ pub struct MemoryCitationRow {
 /// declined because it can be dropped by a later migration, whereas a source scan for a `DELETE` or
 /// an `UPDATE` against this table cannot be satisfied by anything except the code not existing.
 ///
-/// `operation` is an open string. Slice 14a is storage; the commands that name the operations are
-/// 14b's, and pinning a closed vocabulary here would fix verbs that do not exist yet.
+/// `operation` is a closed [`MemoryOperation`] as of Slice 14b-i. 14a left it an open string
+/// because *"14b's commands own the verbs"*; they exist now, and an open string would leave 14d's
+/// vocabulary guard with nothing it could fail against — the shape 12c-iv found eight times over.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryEventRow {
     /// Surrogate key, assigned by SQLite. `None` before the row is written.
@@ -152,8 +165,8 @@ pub struct MemoryEventRow {
     pub memory_id: String,
     /// When it happened. Stamped by [`append_memory_event`].
     pub at: String,
-    /// What was done, in the caller's own words.
-    pub operation: String,
+    /// What was done. One of five values, and only [`MemoryOperation::Cited`] leaves the status be.
+    pub operation: MemoryOperation,
     /// The status before. `None` on the event that created the record.
     pub from_status: Option<MemoryStatus>,
     /// The status after. Equal to `from_status` for an event that changed no status.
@@ -249,13 +262,14 @@ fn citation_from_row(row: &Row<'_>) -> Result<MemoryCitationRow> {
 const EVENT_COLUMNS: &str = "event_id, memory_id, at, operation, from_status, to_status, note";
 
 fn event_from_row(row: &Row<'_>) -> Result<MemoryEventRow> {
+    let operation: String = row.get(3)?;
     let from_status: Option<String> = row.get(4)?;
     let to_status: String = row.get(5)?;
     Ok(MemoryEventRow {
         event_id: row.get(0)?,
         memory_id: row.get(1)?,
         at: row.get(2)?,
-        operation: row.get(3)?,
+        operation: operation.parse()?,
         from_status: from_status.map(|value| value.parse()).transpose()?,
         to_status: to_status.parse()?,
         note: row.get(6)?,
@@ -276,6 +290,12 @@ fn event_from_row(row: &Row<'_>) -> Result<MemoryEventRow> {
 /// else is taken from the row, including `status`, so that a caller restoring an already-retired
 /// record can — the schema's `CHECK`s refuse the pairings that would make a status and its
 /// timestamps disagree.
+///
+/// **This is the raw writer and it appends no event.** It stays public because [`supersede_memory`]
+/// builds on it and the schema tests need a way to put an arbitrary well-formed row on disk. A
+/// product lifecycle caller must use [`propose_memory`] instead, which is the same insert with the
+/// creating event attached to it inside one transaction — otherwise a record exists whose audit
+/// history does not say it was ever written.
 pub fn insert_memory(conn: &Connection, repo_id: &str, row: &MemoryRow) -> Result<MemoryRow> {
     conn.execute(
         "INSERT INTO memory
@@ -345,6 +365,12 @@ pub fn insert_memory_citation(
 ///
 /// `at` is stamped here; [`MemoryEventRow::at`] and [`MemoryEventRow::event_id`] are ignored on the
 /// way in.
+///
+/// **This is the raw appender and it changes no status.** Like [`insert_memory`] it stays public
+/// because the lifecycle wrappers and the schema tests need it, but a product caller that appends
+/// an event here rather than through [`confirm_memory`], [`invalidate_memory`], [`cite_memory`] or
+/// [`supersede_memory`] has written half of a change: the history would record a transition the row
+/// did not make.
 pub fn append_memory_event(conn: &Connection, repo_id: &str, row: &MemoryEventRow) -> Result<i64> {
     conn.execute(
         "INSERT INTO memory_event
@@ -353,7 +379,7 @@ pub fn append_memory_event(conn: &Connection, repo_id: &str, row: &MemoryEventRo
         params![
             repo_id,
             row.memory_id,
-            row.operation,
+            row.operation.as_str(),
             row.from_status.map(|status| status.as_str()),
             row.to_status.as_str(),
             row.note,
@@ -381,13 +407,16 @@ pub fn append_memory_event(conn: &Connection, repo_id: &str, row: &MemoryEventRo
 /// uniqueness conflict: at most one record may replace any given record, which is what makes
 /// [`superseded_by`] single-valued.
 ///
-/// `operation` is the caller's label for the event. The store does not author it — Slice 14a is
-/// storage, and naming the product's verbs is 14b's.
+/// `operation` was a `&str` in Slice 14a, on the ground that the store must not name the product's
+/// verbs. 14b names them, so the parameter is a [`MemoryOperation`]: an arbitrary verb is no longer
+/// a thing the store has any reason to accept, and the schema stopped accepting one at v10. It
+/// stays a parameter rather than becoming [`MemoryOperation::Superseded`] outright because the
+/// caller decides what it is doing, and the caller is the only one that knows.
 pub fn supersede_memory(
     conn: &Connection,
     repo_id: &str,
     successor: &MemoryRow,
-    operation: &str,
+    operation: MemoryOperation,
     note: Option<&str>,
 ) -> Result<MemoryRow> {
     let predecessor_id = successor.supersedes_memory_id.clone().ok_or_else(|| {
@@ -436,13 +465,261 @@ pub fn supersede_memory(
             event_id: None,
             memory_id: predecessor_id,
             at: String::new(),
-            operation: operation.to_string(),
+            operation,
             from_status: Some(predecessor.status),
             to_status: MemoryStatus::Superseded,
             note: note.map(str::to_string),
         },
     )?;
 
+    tx.commit()?;
+    Ok(written)
+}
+
+// ---- the lifecycle, each write one transaction -------------------------------------------------
+
+/// Write a new record as [`MemoryStatus::Proposed`] and append its creating event, **in one
+/// transaction**.
+///
+/// [`MemoryRow::status`] is ignored and the record enters at `proposed`, because that is what
+/// proposing is. [`insert_memory`] stays permissive about the status on purpose — a caller
+/// restoring an already-retired row needs it to be — and this is the lifecycle door, where the
+/// status is the verb's rather than the caller's. The event carries `from_status = None`: there was
+/// no prior status, and writing one would invent a state the record was never in.
+///
+/// **A proposal may not name a predecessor.** A record carrying `supersedes_memory_id` while its
+/// predecessor stays active is precisely the half-applied state [`supersede_memory`]'s transaction
+/// exists to prevent — and worse, it is unrecoverable: the unique index means the predecessor now
+/// has its one successor, so no later call could retire it. Superseding is one operation with one
+/// door.
+pub fn propose_memory(conn: &Connection, repo_id: &str, row: &MemoryRow) -> Result<MemoryRow> {
+    if row.supersedes_memory_id.is_some() {
+        return Err(StoreError::Memory(format!(
+            "{} names a predecessor, and a proposal cannot retire one; use supersede_memory, \
+             which changes both records together",
+            row.memory_id
+        )));
+    }
+
+    let tx = conn.unchecked_transaction()?;
+    let proposed = MemoryRow {
+        status: MemoryStatus::Proposed,
+        invalidated_at: None,
+        invalidation_reason: None,
+        ..row.clone()
+    };
+    let written = insert_memory(&tx, repo_id, &proposed)?;
+    append_memory_event(
+        &tx,
+        repo_id,
+        &MemoryEventRow {
+            event_id: None,
+            memory_id: written.memory_id.clone(),
+            at: String::new(),
+            operation: MemoryOperation::Proposed,
+            from_status: None,
+            to_status: MemoryStatus::Proposed,
+            note: None,
+        },
+    )?;
+    tx.commit()?;
+    Ok(written)
+}
+
+/// Confirm a proposal: [`MemoryStatus::Proposed`] → [`MemoryStatus::Active`], with the event, **in
+/// one transaction**.
+///
+/// Confirming is the only transition this product claims a human made, and §1 of row 14's plan is
+/// explicit about what that claim rests on: Nerve has no accounts and no identity provider, so what
+/// makes this the human's act is the **surface it arrived on** and never an identity it checked.
+/// This function is reachable from the CLI and from nothing else.
+///
+/// **Refused from every other status**, and the message says which one it actually is — a refusal
+/// that only said "not proposed" would send a reader back to the database to find out whether they
+/// had already confirmed it or someone had retired it.
+pub fn confirm_memory(
+    conn: &Connection,
+    repo_id: &str,
+    memory_id: &str,
+    note: Option<&str>,
+) -> Result<MemoryRow> {
+    transition(
+        conn,
+        repo_id,
+        memory_id,
+        &[MemoryStatus::Proposed],
+        MemoryStatus::Active,
+        MemoryOperation::Confirmed,
+        note,
+        None,
+    )
+}
+
+/// Record that a memory stopped being true and **nothing replaced it**, with the event, **in one
+/// transaction**.
+///
+/// Sets `invalidated_at` — an ending is a status and a moment, and the schema's `CHECK` refuses one
+/// without the other — and records `reason` when a reason was given.
+///
+/// **Refused from [`MemoryStatus::Superseded`].** *"It stopped being true and nothing replaced it"*
+/// and *"this record replaced it"* are contradictory claims about one record, and accepting the
+/// second after the first would quietly turn one into the other: the successor would still be
+/// active, still naming a predecessor, and the predecessor would now say nothing succeeded it. That
+/// is the mirror of the refusal [`supersede_memory`] already makes in the other direction, and the
+/// pair is what keeps the two statuses distinguishable at all.
+///
+/// **Refused from [`MemoryStatus::Invalidated`]**, because a second ending would move
+/// `invalidated_at` and overwrite the reason — the audit history would keep both events and the row
+/// would keep only the later one, so the row and its history would disagree.
+pub fn invalidate_memory(
+    conn: &Connection,
+    repo_id: &str,
+    memory_id: &str,
+    reason: Option<&str>,
+    note: Option<&str>,
+) -> Result<MemoryRow> {
+    transition(
+        conn,
+        repo_id,
+        memory_id,
+        &[MemoryStatus::Proposed, MemoryStatus::Active],
+        MemoryStatus::Invalidated,
+        MemoryOperation::Invalidated,
+        note,
+        Some(reason),
+    )
+}
+
+/// Attach a citation to a record and append the event that says so, **in one transaction**.
+///
+/// The only lifecycle operation that changes no status, so its event carries
+/// `from_status == to_status == the record's status right now` —
+/// [`MemoryOperation::changes_status`] is what states that in the vocabulary, and this is where it
+/// is honoured. A citation is not a transition and pretending otherwise would put a status change
+/// in the history that the row never made.
+///
+/// The status is read inside the transaction rather than taken from the caller, because a caller
+/// holding a [`MemoryRow`] read a moment ago would stamp the event with a status the record may
+/// have left. Returns the citation's assigned `citation_id`.
+pub fn cite_memory(
+    conn: &Connection,
+    repo_id: &str,
+    citation: &MemoryCitationRow,
+    note: Option<&str>,
+) -> Result<i64> {
+    let tx = conn.unchecked_transaction()?;
+
+    let record = memory(&tx, repo_id, &citation.memory_id)?.ok_or_else(|| {
+        StoreError::Memory(format!(
+            "no memory record {} in this repository",
+            citation.memory_id
+        ))
+    })?;
+
+    let citation_id = insert_memory_citation(&tx, repo_id, citation)?;
+    append_memory_event(
+        &tx,
+        repo_id,
+        &MemoryEventRow {
+            event_id: None,
+            memory_id: citation.memory_id.clone(),
+            at: String::new(),
+            operation: MemoryOperation::Cited,
+            from_status: Some(record.status),
+            to_status: record.status,
+            note: note.map(str::to_string),
+        },
+    )?;
+
+    tx.commit()?;
+    Ok(citation_id)
+}
+
+/// One status change plus its event, in one transaction. The body [`confirm_memory`] and
+/// [`invalidate_memory`] share.
+///
+/// `from` is the set of statuses the transition is admissible from; anything else is refused and
+/// the message names the status the record is **actually** in. `invalidation` is `Some(reason)`
+/// exactly when the target status is [`MemoryStatus::Invalidated`], which is what pairs the
+/// timestamp with the status the schema's `CHECK` requires them paired in.
+///
+/// The `UPDATE` re-states the expected status in its `WHERE` clause even though the row was just
+/// read inside this transaction. That is not redundant: `unchecked_transaction` does not promise
+/// serialisability against another connection to the same file, and a zero-row update is a fact
+/// worth reporting rather than a silent no-op that would leave an event behind describing a change
+/// that did not happen.
+#[allow(clippy::too_many_arguments)]
+fn transition(
+    conn: &Connection,
+    repo_id: &str,
+    memory_id: &str,
+    from: &[MemoryStatus],
+    to: MemoryStatus,
+    operation: MemoryOperation,
+    note: Option<&str>,
+    invalidation: Option<Option<&str>>,
+) -> Result<MemoryRow> {
+    let tx = conn.unchecked_transaction()?;
+
+    let record = memory(&tx, repo_id, memory_id)?.ok_or_else(|| {
+        StoreError::Memory(format!("no memory record {memory_id} in this repository"))
+    })?;
+
+    if !from.contains(&record.status) {
+        let admitted = from
+            .iter()
+            .map(|status| status.as_str())
+            .collect::<Vec<_>>()
+            .join(" or ");
+        return Err(StoreError::Memory(format!(
+            "{memory_id} is {}, and {operation} is only admissible from {admitted}",
+            record.status
+        )));
+    }
+
+    let changed = match invalidation {
+        Some(reason) => tx.execute(
+            "UPDATE memory
+                SET status = ?3,
+                    invalidated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+                    invalidation_reason = ?5
+              WHERE repo_id = ?1 AND memory_id = ?2 AND status = ?4",
+            params![
+                repo_id,
+                memory_id,
+                to.as_str(),
+                record.status.as_str(),
+                reason,
+            ],
+        )?,
+        None => tx.execute(
+            "UPDATE memory SET status = ?3
+              WHERE repo_id = ?1 AND memory_id = ?2 AND status = ?4",
+            params![repo_id, memory_id, to.as_str(), record.status.as_str()],
+        )?,
+    };
+    if changed == 0 {
+        return Err(StoreError::Memory(format!(
+            "{memory_id} changed status while it was being {operation}"
+        )));
+    }
+
+    append_memory_event(
+        &tx,
+        repo_id,
+        &MemoryEventRow {
+            event_id: None,
+            memory_id: memory_id.to_string(),
+            at: String::new(),
+            operation,
+            from_status: Some(record.status),
+            to_status: to,
+            note: note.map(str::to_string),
+        },
+    )?;
+
+    let written = memory(&tx, repo_id, memory_id)?
+        .ok_or_else(|| StoreError::from(rusqlite::Error::QueryReturnedNoRows))?;
     tx.commit()?;
     Ok(written)
 }

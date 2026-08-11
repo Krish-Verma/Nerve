@@ -1,5 +1,6 @@
 //! Schema v1 (ADR-0003), v2 (Slice 3), v3 (Slice 3b), v4 (Slice 5d-i), v5 (Slice 10a),
-//! v6 (Slice 12b), v7 (Slice 12c-ii), v8 (Slice 13a-i), v9 (Slice 14a), and migrations.
+//! v6 (Slice 12b), v7 (Slice 12c-ii), v8 (Slice 13a-i), v9 (Slice 14a), v10 (Slice 14b-i),
+//! and migrations.
 //!
 //! Migrations are append-only. `V1` is immutable: a database written by an older build must be
 //! upgradable by replaying the later steps, so editing an already-shipped step in place would
@@ -12,7 +13,7 @@ use nerve_core::ids;
 use crate::error::{Result, StoreError};
 
 /// The schema version this build writes and understands.
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 10;
 
 /// Human-readable description recorded in `schema_version`.
 pub const SCHEMA_V1_DESCRIPTION: &str =
@@ -57,6 +58,11 @@ pub const SCHEMA_V8_DESCRIPTION: &str =
 pub const SCHEMA_V9_DESCRIPTION: &str =
     "Slice 14a: memory, memory_citation and memory_event — human-confirmed project memory, with \
      the subject recorded as a snapshot because entity rows are routinely pruned";
+
+/// Human-readable description recorded in `schema_version` for the Slice 14b-i upgrade.
+pub const SCHEMA_V10_DESCRIPTION: &str =
+    "Slice 14b-i: memory.scope and memory_event.operation closed in SQL — a typo in a scope would \
+     otherwise suppress a conflict report, and an unrenderable operation would reach the interface";
 
 const V1: &str = r#"
 CREATE TABLE repository (
@@ -940,6 +946,310 @@ CREATE TABLE memory_event (
 CREATE INDEX idx_memory_event_memory ON memory_event(repo_id, memory_id, event_id);
 "#;
 
+/// The `memory.scope` domain v10 introduces, **pinned as literals rather than read from
+/// `MemoryScope::ALL`**.
+///
+/// A migration must mean the same thing forever, which is the reason [`V4_SOURCE_TYPE`] is pinned
+/// one screen down and the reason [`V1`] is immutable. If a sixth scope is ever admitted, v10 must
+/// still refuse it — because the `CHECK` v10 writes is frozen SQL text that refuses it, and a
+/// validation reading the live constant would start disagreeing with the constraint it is guarding.
+/// `nerve-store/tests/schema.rs` asserts the two agree today, in the manner
+/// `nerve-index/tests/graph.rs` does for v4.
+const V10_SCOPES: [&str; 4] = ["implementation", "interface", "operations", "process"];
+
+/// The `memory_event.operation` domain v10 introduces. Pinned for the reason [`V10_SCOPES`] is.
+const V10_OPERATIONS: [&str; 5] = [
+    "proposed",
+    "confirmed",
+    "superseded",
+    "invalidated",
+    "cited",
+];
+
+/// Schema v10 — Slice 14b-i. Two `CHECK`s, and the table rebuild they cost.
+///
+/// # What is being closed, and why the argument is not the one v9 used for `status`
+///
+/// v9 closed `status` in SQL because a *derived* value (`potentially_stale`) could be *stored*.
+/// That confusion does not exist for `scope`, so that argument does not transfer and is not reused.
+/// The argument that applies is about what `scope` is load-bearing for: `multiple_active` groups by
+/// `(repository, subject, scope)` and `conflicted` by that plus `claim_key`, so against a free-form
+/// column **a typo silently suppresses a conflict report** — `operations` and `opertions` land in
+/// different groups and two records answering one named claim are reported as unrelated notes. No
+/// test can catch that, because both spellings are legal. And `--scope opertions` returns zero
+/// records, which reads as *there are no notes* rather than *there is no such scope*; `absence is
+/// not zero` is the rule 7c-ii's `doctor` and 7b's unresolved account exist to enforce.
+///
+/// `memory_event.operation` is closed in the same step for 14d's invariant: **every event must be
+/// renderable**, and the interface's vocabulary guard can only guard a vocabulary it knows exists —
+/// 12c-iv found eight unmirrored vocabularies for which the guard *could not fail*.
+///
+/// # Why this is a rebuild, and why **v7's rebuild is not the precedent it looks like**
+///
+/// SQLite has no `ALTER TABLE … ADD CONSTRAINT`, so a `CHECK` arrives only by the documented
+/// create-copy-drop-rename. [`V7`] did exactly that for `git_rename_hypothesis` — and it could,
+/// because **nothing referenced that table**. `memory` is the opposite: `memory_citation` and
+/// `memory_event` both carry `FOREIGN KEY (repo_id, memory_id) REFERENCES memory(…)`, and `memory`
+/// references *itself* through `supersedes_memory_id`. Three facts then close off v7's shape:
+///
+/// 1. `PRAGMA foreign_keys=ON` is set on every connection (`db.rs:37`), and the pragma is a
+///    **documented no-op inside a transaction** — measured, not assumed: it still reads `1` after
+///    being set to `OFF` inside `BEGIN`. Each step of [`MIGRATIONS`] runs in a transaction, so the
+///    pragma cannot be turned off here.
+/// 2. With foreign keys on, `DROP TABLE` performs an **implicit `DELETE FROM`** first, which
+///    orphans every citation and event row.
+/// 3. `PRAGMA defer_foreign_keys=ON` — the mechanism that *does* work inside a transaction — was
+///    tried and **does not rescue v7's shape**. Deferring moves the failure to `COMMIT`: the
+///    implicit delete increments SQLite's deferred-violation counter, and renaming the replacement
+///    table into place never decrements it, so the commit fails with `FOREIGN KEY constraint
+///    failed` *while `PRAGMA foreign_key_check` reports zero rows*. The database is consistent and
+///    the commit is refused anyway, which is the worst available failure: it lands outside the step
+///    that caused it and the obvious diagnostic cannot see it.
+///
+/// # The procedure this step actually uses
+///
+/// Immediate foreign keys are checked **at the conclusion of each statement**, not per row. So the
+/// rebuild is ordered such that every statement leaves the database consistent at its own boundary,
+/// and enforcement stays immediate — a mistake then fails *inside* this step rather than at commit,
+/// which is why `defer_foreign_keys` is deliberately **not** set:
+///
+/// 1. park `memory`, `memory_event` and `memory_citation` rows in `TEMP` tables (the [`migrate_v3`]
+///    precedent for staging inside a step);
+/// 2. **drop** `memory_event`, which is being rebuilt anyway — emptying it instead would mean
+///    writing a `DELETE` statement against that table, and the absence of any such statement from
+///    the whole workspace is exactly how v9 chose to enforce append-only. Then empty
+///    `memory_citation`, which is not being rebuilt, and then `memory` itself. A whole-table
+///    `DELETE` satisfies the self-reference at its conclusion; a single-row delete of a superseded
+///    record would not, which is why the delete is unqualified;
+/// 3. drop `memory` — now empty, so the implicit delete orphans nothing;
+/// 4. **re-create them under their own names**, so there is no `ALTER TABLE … RENAME` anywhere in
+///    this step. That avoids a second trap, also measured: since SQLite 3.25 a rename rewrites
+///    references in *other* tables, so `ALTER TABLE memory RENAME TO memory_old` silently repoints
+///    `memory_citation`'s foreign key at `"memory_old"` — a child table quietly attached to a
+///    scratch table that is about to be dropped;
+/// 5. re-insert every parked row and drop the staging tables.
+///
+/// `memory_citation` is emptied and refilled rather than rebuilt: its rows must not be present when
+/// their parent is dropped, and its DDL needs no change. Its `citation_id` values are re-inserted
+/// explicitly, so no surrogate key moves.
+///
+/// [`migrate_v10`] runs `PRAGMA foreign_key_check` afterwards, which is belt to the ordering's
+/// braces rather than the guarantee itself — as the deferral finding above shows, it reports zero
+/// rows against a database whose commit is about to be refused, so it can confirm the ordering and
+/// cannot substitute for it.
+///
+/// # Out-of-domain rows are **refused**, not repaired
+///
+/// v9 stored `scope` opaque, so a v9 database may hold anything (14a's own tests used `"file"` and
+/// `"repository"`). [`migrate_v10`] therefore checks both columns before touching a table and
+/// refuses with the offending distinct values named, rather than dropping the rows or rewriting
+/// them to a default. Memory is the only thing in this database re-indexing cannot rebuild, so a
+/// migration that silently edited a human's note would be refused on the same ground as a delete
+/// verb. That check is Rust, which is why v10 is a [`Step::Rust`] rather than a [`Step::Sql`].
+const V10: &str = r#"
+CREATE TEMP TABLE memory_v10_rows AS SELECT * FROM memory;
+CREATE TEMP TABLE memory_event_v10_rows AS SELECT * FROM memory_event;
+CREATE TEMP TABLE memory_citation_v10_rows AS SELECT * FROM memory_citation;
+
+-- Children first. A parent row may not be dropped while a child row points at it, and the check
+-- happens at the conclusion of each statement -- so the order of these four is the whole trick.
+--
+-- The event table is **dropped rather than emptied**, and that is not a stylistic choice: no
+-- `DELETE` statement against this table exists anywhere in this workspace, which is how
+-- "append-only" is enforced (a source scan in `tests/memory.rs`, chosen over a trigger at v9).
+-- Writing one here to save a line would satisfy the migration and defeat the guard. Dropping the
+-- table is what a rebuild is; every row is parked above and re-inserted below, and the v9->v10 test
+-- compares all three tables as a full serialisation before and after, so the history is carried
+-- across rather than trusted to be.
+DROP TABLE memory_event;
+
+DELETE FROM memory_citation;
+-- Unqualified on purpose: `memory` references itself, and only a whole-table delete is consistent
+-- at its own conclusion. `DELETE FROM memory WHERE memory_id = ...` on a superseded record is not.
+DELETE FROM memory;
+
+DROP TABLE memory;
+
+CREATE TABLE memory (
+    memory_id                  TEXT NOT NULL,
+    repo_id                    TEXT NOT NULL REFERENCES repository(repo_id),
+
+    subject_entity_id_snapshot TEXT NOT NULL,
+    subject_kind_snapshot      TEXT NOT NULL,
+    subject_name_snapshot      TEXT NOT NULL,
+    subject_path_snapshot      TEXT NOT NULL,
+    subject_selector_snapshot  TEXT NOT NULL,
+    anchor_state_id            TEXT NOT NULL REFERENCES repository_state(state_id),
+
+    scope                      TEXT NOT NULL,   -- closed vocabulary: MemoryScope, four values
+    claim_key                  TEXT,
+
+    content                    TEXT NOT NULL,
+    author_label               TEXT NOT NULL,   -- a LOCAL LABEL, NOT AN IDENTITY (T7)
+    created_at                 TEXT NOT NULL,
+
+    status                     TEXT NOT NULL,   -- closed vocabulary: MemoryStatus, four values
+    supersedes_memory_id       TEXT,
+
+    invalidated_at             TEXT,
+    invalidation_reason        TEXT,
+
+    PRIMARY KEY (repo_id, memory_id),
+    FOREIGN KEY (repo_id, supersedes_memory_id) REFERENCES memory(repo_id, memory_id),
+
+    -- **New in v10, and the reason this table was rebuilt.** `scope` is in both derived-view
+    -- grouping keys, so a free-form column lets a typo split one group in two and report two
+    -- records answering the same named claim as unrelated notes -- a false negative on the one
+    -- contradiction claim this feature makes, which no test can catch because both spellings are
+    -- legal. Closing it in Rust alone is not enough: `MemoryScope::FromStr` fails on the next
+    -- *read*, which is a repair job rather than a refusal. Same reasoning as the `status` CHECK
+    -- below, arrived at from a different direction.
+    CHECK (scope IN ('implementation', 'interface', 'operations', 'process')),
+    CHECK (status IN ('proposed', 'active', 'superseded', 'invalidated')),
+    CHECK (
+        (status =  'invalidated' AND invalidated_at IS NOT NULL)
+     OR (status <> 'invalidated' AND invalidated_at IS NULL)
+    ),
+    CHECK (invalidation_reason IS NULL OR invalidated_at IS NOT NULL),
+    CHECK (supersedes_memory_id IS NULL OR supersedes_memory_id <> memory_id),
+    CHECK (claim_key IS NULL OR claim_key <> ''),
+    -- `scope <> ''` and `status <> ''` are gone from this list, and deliberately: the enumerations
+    -- above already exclude the empty string, and restating it would be a second place to keep
+    -- true. Every other column keeps its v9 emptiness check unchanged.
+    CHECK (
+        memory_id <> '' AND subject_entity_id_snapshot <> '' AND subject_kind_snapshot <> ''
+        AND subject_name_snapshot <> '' AND subject_selector_snapshot <> ''
+        AND content <> '' AND author_label <> ''
+    )
+);
+
+CREATE INDEX idx_memory_subject ON memory(repo_id, subject_entity_id_snapshot, status);
+CREATE INDEX idx_memory_scope   ON memory(repo_id, scope, status);
+
+CREATE INDEX idx_memory_claim ON memory(repo_id, subject_entity_id_snapshot, scope, claim_key)
+    WHERE claim_key IS NOT NULL;
+
+CREATE UNIQUE INDEX idx_memory_supersedes ON memory(repo_id, supersedes_memory_id)
+    WHERE supersedes_memory_id IS NOT NULL;
+
+CREATE TABLE memory_event (
+    event_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id     TEXT NOT NULL REFERENCES repository(repo_id),
+    memory_id   TEXT NOT NULL,
+    at          TEXT NOT NULL,
+    operation   TEXT NOT NULL,   -- closed vocabulary: MemoryOperation, five values
+    from_status TEXT,            -- NULL on the event that created the record
+    to_status   TEXT NOT NULL,
+    note        TEXT,
+
+    FOREIGN KEY (repo_id, memory_id) REFERENCES memory(repo_id, memory_id),
+
+    -- **New in v10.** 14a left this open because 14b's commands owned the verbs; they exist now.
+    -- One value per mutating operation and no more, so that every event is renderable and the
+    -- interface's vocabulary guard has something it can fail against. `cited` is the one that is
+    -- not a transition: its event carries from_status = to_status, which stays legitimate below.
+    CHECK (operation IN ('proposed', 'confirmed', 'superseded', 'invalidated', 'cited')),
+    CHECK (at <> '' AND to_status <> ''),
+    CHECK (from_status IS NULL OR from_status <> '')
+);
+
+CREATE INDEX idx_memory_event_memory ON memory_event(repo_id, memory_id, event_id);
+
+-- Columns named on both sides rather than `SELECT *`, so a future column added to one of these
+-- tables cannot be copied into the wrong slot by position.
+INSERT INTO memory
+    (memory_id, repo_id, subject_entity_id_snapshot, subject_kind_snapshot,
+     subject_name_snapshot, subject_path_snapshot, subject_selector_snapshot, anchor_state_id,
+     scope, claim_key, content, author_label, created_at, status, supersedes_memory_id,
+     invalidated_at, invalidation_reason)
+SELECT memory_id, repo_id, subject_entity_id_snapshot, subject_kind_snapshot,
+       subject_name_snapshot, subject_path_snapshot, subject_selector_snapshot, anchor_state_id,
+       scope, claim_key, content, author_label, created_at, status, supersedes_memory_id,
+       invalidated_at, invalidation_reason
+  FROM memory_v10_rows;
+
+INSERT INTO memory_event
+    (event_id, repo_id, memory_id, at, operation, from_status, to_status, note)
+SELECT event_id, repo_id, memory_id, at, operation, from_status, to_status, note
+  FROM memory_event_v10_rows;
+
+INSERT INTO memory_citation
+    (citation_id, repo_id, memory_id, cited_entity_id_snapshot, cited_kind_snapshot,
+     cited_name_snapshot, cited_path_snapshot, cited_span_snapshot, cited_at_state, created_at)
+SELECT citation_id, repo_id, memory_id, cited_entity_id_snapshot, cited_kind_snapshot,
+       cited_name_snapshot, cited_path_snapshot, cited_span_snapshot, cited_at_state, created_at
+  FROM memory_citation_v10_rows;
+
+DROP TABLE memory_v10_rows;
+DROP TABLE memory_event_v10_rows;
+DROP TABLE memory_citation_v10_rows;
+"#;
+
+/// Refuse the upgrade if `column` holds anything outside `admitted`, naming what it found.
+///
+/// The distinct offending values, ordered, and nothing else: a count would tell a human that
+/// something is wrong without telling them what to fix, and the row ids would name rows they would
+/// then have to go and read. The values are what they typed.
+fn refuse_out_of_domain(
+    conn: &Connection,
+    table: &'static str,
+    column: &'static str,
+    admitted: &[&str],
+) -> Result<()> {
+    let list = admitted
+        .iter()
+        .map(|value| format!("'{value}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT DISTINCT {column} FROM {table} WHERE {column} NOT IN ({list}) ORDER BY 1"
+    ))?;
+    let mut rows = stmt.query([])?;
+    let mut found = Vec::new();
+    while let Some(row) = rows.next()? {
+        found.push(format!("{:?}", row.get::<_, String>(0)?));
+    }
+    if found.is_empty() {
+        return Ok(());
+    }
+    Err(StoreError::MigrationDomain {
+        version: 10,
+        table,
+        column,
+        found: found.join(", "),
+        admitted: list,
+    })
+}
+
+/// Check both domains, then rebuild the two tables that now enumerate them.
+///
+/// The check runs **before** any DDL, so a database that will be refused is never partially taken
+/// apart — even though the step's transaction would roll it back anyway. That ordering is what
+/// makes the refusal a refusal rather than a rollback: nothing about the failure depends on the
+/// transaction working.
+///
+/// `PRAGMA foreign_key_check` afterwards is the belt to the statement ordering's braces. It is
+/// deliberately not the guarantee: it reports rows that violate a constraint *now*, and it cannot
+/// see SQLite's deferred-violation counter, which is exactly what defeats the naive rebuild [`V10`]
+/// describes.
+fn migrate_v10(conn: &Connection) -> Result<()> {
+    refuse_out_of_domain(conn, "memory", "scope", &V10_SCOPES)?;
+    refuse_out_of_domain(conn, "memory_event", "operation", &V10_OPERATIONS)?;
+
+    conn.execute_batch(V10)?;
+
+    let violations: i64 =
+        conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get(0)
+        })?;
+    if violations > 0 {
+        return Err(StoreError::Memory(format!(
+            "the v10 rebuild left {violations} foreign key violations; the upgrade is rolled back"
+        )));
+    }
+    Ok(())
+}
+
 /// One migration step. Almost all of them are SQL; v3 is not, because it must recompute a
 /// BLAKE3 digest and SQLite has no such function.
 enum Step {
@@ -952,7 +1262,7 @@ enum Step {
 /// Migration steps, in application order: `(version, description, step)`.
 ///
 /// Appending to this list is how the schema evolves. Editing an existing entry is prohibited.
-const MIGRATIONS: [(i64, &str, Step); 9] = [
+const MIGRATIONS: [(i64, &str, Step); 10] = [
     (1, SCHEMA_V1_DESCRIPTION, Step::Sql(V1)),
     (2, SCHEMA_V2_DESCRIPTION, Step::Sql(V2)),
     (3, SCHEMA_V3_DESCRIPTION, Step::Rust(migrate_v3)),
@@ -962,6 +1272,7 @@ const MIGRATIONS: [(i64, &str, Step); 9] = [
     (7, SCHEMA_V7_DESCRIPTION, Step::Sql(V7)),
     (8, SCHEMA_V8_DESCRIPTION, Step::Sql(V8)),
     (9, SCHEMA_V9_DESCRIPTION, Step::Sql(V9)),
+    (10, SCHEMA_V10_DESCRIPTION, Step::Rust(migrate_v10)),
 ];
 
 /// Apply [`V3`], then restate every `occurrence_id` under the ADR-0006 tuple.

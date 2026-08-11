@@ -644,7 +644,7 @@ fn no_rust_source_references_the_fixture_script() {
 fn the_reader_touches_no_entity_kind_no_relation_and_no_schema_version() {
     assert_eq!(
         nerve_store::SCHEMA_VERSION,
-        9,
+        10,
         "the Git object reader must not be what migrates the schema"
     );
 

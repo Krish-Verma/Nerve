@@ -21,8 +21,8 @@ pub use model::{
 pub use vocab::{
     AssertionStatus, ChangeKind, ChangesEnumerated, ContractFreshness, ContractLinkStatus,
     ContractResolutionMethod, Directness, EndpointKind, EntityKind, EvidenceSourceType,
-    FirstObservedKind, HistoryFreshness, MemoryStatus, MemorySubjectResolution, MemoryView,
-    ParentCompleteness, PathRole, RegistryEntryStatus, Relation, RenameAmbiguity,
-    RenameAnalysisCompleteness, RenameEvidence, SimilarityUnmeasured, SummaryTruncation,
-    UnresolvedCategory, WalkTermination,
+    FirstObservedKind, HistoryFreshness, MemoryOperation, MemoryScope, MemoryStatus,
+    MemorySubjectResolution, MemoryView, ParentCompleteness, PathRole, RegistryEntryStatus,
+    Relation, RenameAmbiguity, RenameAnalysisCompleteness, RenameEvidence, SimilarityUnmeasured,
+    SummaryTruncation, UnresolvedCategory, WalkTermination,
 };

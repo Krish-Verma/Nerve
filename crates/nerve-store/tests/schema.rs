@@ -555,7 +555,7 @@ fn fresh_database_reaches_the_current_schema_version() {
     assert_eq!(schema_version(&conn).unwrap(), None);
     migrate(&conn).unwrap();
     assert_eq!(schema_version(&conn).unwrap(), Some(SCHEMA_VERSION));
-    assert_eq!(SCHEMA_VERSION, 9);
+    assert_eq!(SCHEMA_VERSION, 10);
     // A fresh database reaches v6 directly, without a v1, v2, v3, v4 or v5 database ever existing.
     // v5's column is present from the start, with the default that makes a *migrated* row miss the
     // framework cache. On a fresh database nothing has been cached yet, so the default is inert
@@ -618,6 +618,36 @@ fn fresh_database_reaches_the_current_schema_version() {
         );
         assert_eq!(scalar(&conn, &format!("SELECT count(*) FROM {table}")), 0);
     }
+    // v10 closes two columns that v9 left open, and the tables it rebuilt are still the same three.
+    // A fresh database gets them straight from the replayed step, so this is where a rebuild that
+    // dropped an index or a constraint on the way through would show up.
+    for value in ["implementation", "interface", "operations", "process"] {
+        assert!(
+            value.parse::<nerve_core::vocab::MemoryScope>().is_ok(),
+            "the v10 CHECK and MemoryScope have drifted: `{value}`"
+        );
+    }
+    assert_eq!(nerve_core::vocab::MemoryScope::ALL.len(), 4);
+    assert_eq!(nerve_core::vocab::MemoryOperation::ALL.len(), 5);
+    for index in [
+        "idx_memory_subject",
+        "idx_memory_scope",
+        "idx_memory_claim",
+        "idx_memory_supersedes",
+        "idx_memory_citation_memory",
+        "idx_memory_citation_path",
+        "idx_memory_event_memory",
+    ] {
+        assert_eq!(
+            scalar(
+                &conn,
+                &format!("SELECT count(*) FROM sqlite_master WHERE name = '{index}'")
+            ),
+            1,
+            "{index} did not survive the v10 rebuild"
+        );
+    }
+
     // The subject is a snapshot and nothing else. A column named `subject_entity_id` would be the
     // foreign key row 14 was rewritten to remove, so its absence is asserted rather than assumed.
     assert!(column_names(&conn, "memory").contains(&"subject_entity_id_snapshot".to_string()));
@@ -2255,7 +2285,7 @@ const MEMORY_INSERT: &str = "INSERT INTO memory
       scope, claim_key, content, author_label, created_at, status, supersedes_memory_id,
       invalidated_at, invalidation_reason)
  VALUES (?1, 'r', ?2, 'file', 'app.ts', 'src/app.ts', 'file:src/app.ts', 's',
-         'file', ?3, 'the retry budget here is deliberate', 'krish',
+         'implementation', ?3, 'the retry budget here is deliberate', 'krish',
          '2026-01-01T00:00:00.000Z', ?4, ?5, ?6, ?7)";
 
 /// A v8 database with a registry entry and a contract link, assembled from what v8 shipped.
@@ -2584,7 +2614,7 @@ fn the_memory_checks_refuse_a_record_that_names_or_says_nothing() {
     };
 
     let well_formed = "'x','r','local1','file','app.ts','src/app.ts','file:src/app.ts','s',\
-                       'file',NULL,'something','krish','t','active',NULL,NULL,NULL";
+                       'implementation',NULL,'something','krish','t','active',NULL,NULL,NULL";
     // The control: the shape every case below perturbs by one column does land.
     conn.execute(&format!("INSERT INTO memory VALUES ({well_formed})"), [])
         .expect("the well-formed control must land");
@@ -2593,44 +2623,59 @@ fn the_memory_checks_refuse_a_record_that_names_or_says_nothing() {
         "an empty claim key",
         "claim_key",
         "'e1','r','local1','file','app.ts','src/app.ts','file:src/app.ts','s',\
-         'file','','something','krish','t','active',NULL,NULL,NULL",
+         'implementation','','something','krish','t','active',NULL,NULL,NULL",
     );
     refused(
         "an empty subject id",
         "subject_entity_id_snapshot",
         "'e2','r','','file','app.ts','src/app.ts','file:src/app.ts','s',\
-         'file',NULL,'something','krish','t','active',NULL,NULL,NULL",
+         'implementation',NULL,'something','krish','t','active',NULL,NULL,NULL",
     );
     refused(
         "an empty selector",
         "subject_selector_snapshot",
         "'e3','r','local1','file','app.ts','src/app.ts','','s',\
-         'file',NULL,'something','krish','t','active',NULL,NULL,NULL",
+         'implementation',NULL,'something','krish','t','active',NULL,NULL,NULL",
     );
     refused(
         "an empty content",
         "content",
         "'e4','r','local1','file','app.ts','src/app.ts','file:src/app.ts','s',\
-         'file',NULL,'','krish','t','active',NULL,NULL,NULL",
+         'implementation',NULL,'','krish','t','active',NULL,NULL,NULL",
     );
     refused(
         "an empty author label",
         "author_label",
         "'e5','r','local1','file','app.ts','src/app.ts','file:src/app.ts','s',\
-         'file',NULL,'something','','t','active',NULL,NULL,NULL",
+         'implementation',NULL,'something','','t','active',NULL,NULL,NULL",
     );
+    // v10 enumerates the scope, so the empty string is refused by the enumeration rather than by
+    // an emptiness check — and so is every other value outside the domain, which is the stronger
+    // claim. `file` is asserted by name because it is what 14a's own fixtures used.
     refused(
         "an empty scope",
         "scope",
         "'e6','r','local1','file','app.ts','src/app.ts','file:src/app.ts','s',\
          '',NULL,'something','krish','t','active',NULL,NULL,NULL",
     );
+    refused(
+        "the subject's kind used as a scope",
+        "scope",
+        "'e7','r','local1','file','app.ts','src/app.ts','file:src/app.ts','s',\
+         'file',NULL,'something','krish','t','active',NULL,NULL,NULL",
+    );
+    refused(
+        "a misspelt scope",
+        "scope",
+        "'e8','r','local1','file','app.ts','src/app.ts','file:src/app.ts','s',\
+         'opertions',NULL,'something','krish','t','active',NULL,NULL,NULL",
+    );
 
     // An empty *path* is deliberately legal: the repository entity is no file and says so honestly.
     conn.execute(
         "INSERT INTO memory VALUES
              ('repo-note','r','repo1','repository','.','','repo:.','s',
-              'repository',NULL,'this project is offline-first','krish','t','active',
+              'process',NULL,'this project is offline-first','krish','t','active',
               NULL,NULL,NULL)",
         [],
     )
@@ -2696,7 +2741,7 @@ fn a_citation_event_or_supersession_naming_no_record_is_refused() {
      VALUES ('r', ?1, NULL, NULL, NULL, 'src/app.ts', '3:9', 's', 't')";
     let event = "INSERT INTO memory_event
          (repo_id, memory_id, at, operation, from_status, to_status, note)
-     VALUES ('r', ?1, 't', 'confirm', 'proposed', 'active', NULL)";
+     VALUES ('r', ?1, 't', 'confirmed', 'proposed', 'active', NULL)";
 
     // The controls: both land against the record that exists.
     conn.execute(citation, ["m1"]).unwrap();
@@ -3076,4 +3121,480 @@ fn write_module_contains_no_statement_touching_assertion_state() {
         offenders.is_empty(),
         "nerve_store::write must never reference assertion_state in code: {offenders:?}"
     );
+}
+
+// ---- v10: the two closed domains, and the rebuild they cost ------------------------------------
+
+/// The v9 schema as it shipped in `2190643`, written out so a **genuine v9 database** can be built.
+///
+/// v10 rebuilds `memory` and `memory_event`, and the only way to know a rebuild is lossless is to
+/// put rows in the *old* shape and count them out of the new one — the same reason `V6_ONLY` and
+/// `V8_ONLY` exist above. The difference that matters is here: v9's `memory.scope` and
+/// `memory_event.operation` carry **no enumeration**, which is exactly what makes the refusal test
+/// below possible at all.
+const V9_ONLY: &str = r#"
+CREATE TABLE memory (
+    memory_id                  TEXT NOT NULL,
+    repo_id                    TEXT NOT NULL REFERENCES repository(repo_id),
+    subject_entity_id_snapshot TEXT NOT NULL,
+    subject_kind_snapshot      TEXT NOT NULL,
+    subject_name_snapshot      TEXT NOT NULL,
+    subject_path_snapshot      TEXT NOT NULL,
+    subject_selector_snapshot  TEXT NOT NULL,
+    anchor_state_id            TEXT NOT NULL REFERENCES repository_state(state_id),
+    scope                      TEXT NOT NULL,
+    claim_key                  TEXT,
+    content                    TEXT NOT NULL,
+    author_label               TEXT NOT NULL,
+    created_at                 TEXT NOT NULL,
+    status                     TEXT NOT NULL,
+    supersedes_memory_id       TEXT,
+    invalidated_at             TEXT,
+    invalidation_reason        TEXT,
+    PRIMARY KEY (repo_id, memory_id),
+    FOREIGN KEY (repo_id, supersedes_memory_id) REFERENCES memory(repo_id, memory_id),
+    CHECK (status IN ('proposed', 'active', 'superseded', 'invalidated')),
+    CHECK (
+        (status =  'invalidated' AND invalidated_at IS NOT NULL)
+     OR (status <> 'invalidated' AND invalidated_at IS NULL)
+    ),
+    CHECK (invalidation_reason IS NULL OR invalidated_at IS NOT NULL),
+    CHECK (supersedes_memory_id IS NULL OR supersedes_memory_id <> memory_id),
+    CHECK (claim_key IS NULL OR claim_key <> ''),
+    CHECK (
+        memory_id <> '' AND subject_entity_id_snapshot <> '' AND subject_kind_snapshot <> ''
+        AND subject_name_snapshot <> '' AND subject_selector_snapshot <> ''
+        AND scope <> '' AND content <> '' AND author_label <> '' AND status <> ''
+    )
+);
+CREATE INDEX idx_memory_subject ON memory(repo_id, subject_entity_id_snapshot, status);
+CREATE INDEX idx_memory_scope   ON memory(repo_id, scope, status);
+CREATE INDEX idx_memory_claim ON memory(repo_id, subject_entity_id_snapshot, scope, claim_key)
+    WHERE claim_key IS NOT NULL;
+CREATE UNIQUE INDEX idx_memory_supersedes ON memory(repo_id, supersedes_memory_id)
+    WHERE supersedes_memory_id IS NOT NULL;
+CREATE TABLE memory_citation (
+    citation_id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id                  TEXT NOT NULL REFERENCES repository(repo_id),
+    memory_id                TEXT NOT NULL,
+    cited_entity_id_snapshot TEXT,
+    cited_kind_snapshot      TEXT,
+    cited_name_snapshot      TEXT,
+    cited_path_snapshot      TEXT NOT NULL,
+    cited_span_snapshot      TEXT,
+    cited_at_state           TEXT NOT NULL REFERENCES repository_state(state_id),
+    created_at               TEXT NOT NULL,
+    FOREIGN KEY (repo_id, memory_id) REFERENCES memory(repo_id, memory_id),
+    CHECK (
+        cited_entity_id_snapshot IS NULL
+     OR (cited_entity_id_snapshot <> ''
+            AND cited_kind_snapshot IS NOT NULL AND cited_kind_snapshot <> ''
+            AND cited_name_snapshot IS NOT NULL AND cited_name_snapshot <> '')
+    ),
+    CHECK (cited_path_snapshot <> '' AND (cited_span_snapshot IS NULL OR cited_span_snapshot <> ''))
+);
+CREATE INDEX idx_memory_citation_memory ON memory_citation(repo_id, memory_id);
+CREATE INDEX idx_memory_citation_path   ON memory_citation(repo_id, cited_path_snapshot);
+CREATE TABLE memory_event (
+    event_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id     TEXT NOT NULL REFERENCES repository(repo_id),
+    memory_id   TEXT NOT NULL,
+    at          TEXT NOT NULL,
+    operation   TEXT NOT NULL,
+    from_status TEXT,
+    to_status   TEXT NOT NULL,
+    note        TEXT,
+    FOREIGN KEY (repo_id, memory_id) REFERENCES memory(repo_id, memory_id),
+    CHECK (at <> '' AND operation <> '' AND to_status <> ''),
+    CHECK (from_status IS NULL OR from_status <> '')
+);
+CREATE INDEX idx_memory_event_memory ON memory_event(repo_id, memory_id, event_id);
+INSERT INTO schema_version (version, applied_at, description)
+    VALUES (9, '2026-01-01T00:00:00.000Z', 'Slice 14a');
+"#;
+
+/// A v9 database holding a memory record, a citation, an event **and a supersession**.
+///
+/// The child rows are the whole point. v7's rebuild had none — `git_rename_hypothesis` is referenced
+/// by nothing — so a v10 test against an empty `memory` table would prove exactly the thing that was
+/// never in doubt. `scope` and `operation` are caller-supplied so the refusal tests can hand this
+/// fixture a value v10 does not admit.
+fn v9_database_with_memory(scope: &str, operation: &str) -> nerve_store::Connection {
+    let conn = v8_database_from_the_written_out_steps();
+    conn.execute_batch(V9_ONLY).unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), Some(9));
+
+    // `e2` is a real entity in this fixture, so the subject snapshot names something that exists.
+    conn.execute_batch(&format!(
+        "INSERT INTO memory VALUES
+             ('m1','r','e2','module','math','src/math.ts','module:math','s','{scope}','owner',
+              'the payments team owns this code','krish','2026-01-01T00:00:00.000Z','superseded',
+              NULL,NULL,NULL);
+         INSERT INTO memory VALUES
+             ('m2','r','e2','module','math','src/math.ts','module:math','s','{scope}','owner',
+              'platform owns its deployment','krish','2026-01-02T00:00:00.000Z','active',
+              'm1',NULL,NULL);
+         INSERT INTO memory_citation VALUES
+             (1,'r','m1','e1','function','add','src/math.ts','1:1','s',
+              '2026-01-01T00:00:00.000Z');
+         INSERT INTO memory_event VALUES
+             (1,'r','m1','2026-01-01T00:00:00.000Z','proposed',NULL,'proposed','written down');
+         INSERT INTO memory_event VALUES
+             (2,'r','m1','2026-01-02T00:00:00.000Z','{operation}','active','superseded','handover');"
+    ))
+    .unwrap();
+    conn
+}
+
+/// Every memory row, citation and event in one deterministic string.
+///
+/// A full serialisation rather than a count, for the reason `tests/memory.rs` gives: a count says
+/// *that* the rebuild kept the rows and this says *what* it kept, which is the claim a lossless
+/// copy actually makes.
+fn memory_tables(conn: &nerve_store::Connection) -> String {
+    let mut out = String::new();
+    for (label, sql) in [
+        (
+            "memory",
+            "SELECT memory_id || '|' || repo_id || '|' || subject_entity_id_snapshot || '|'
+                 || subject_kind_snapshot || '|' || subject_name_snapshot || '|'
+                 || subject_path_snapshot || '|' || subject_selector_snapshot || '|'
+                 || anchor_state_id || '|' || scope || '|' || coalesce(claim_key,'-') || '|'
+                 || content || '|' || author_label || '|' || created_at || '|' || status || '|'
+                 || coalesce(supersedes_memory_id,'-') || '|' || coalesce(invalidated_at,'-')
+                 || '|' || coalesce(invalidation_reason,'-')
+               FROM memory ORDER BY memory_id",
+        ),
+        (
+            "memory_citation",
+            "SELECT citation_id || '|' || repo_id || '|' || memory_id || '|'
+                 || coalesce(cited_entity_id_snapshot,'-') || '|'
+                 || coalesce(cited_kind_snapshot,'-') || '|' || coalesce(cited_name_snapshot,'-')
+                 || '|' || cited_path_snapshot || '|' || coalesce(cited_span_snapshot,'-') || '|'
+                 || cited_at_state || '|' || created_at
+               FROM memory_citation ORDER BY citation_id",
+        ),
+        (
+            "memory_event",
+            "SELECT event_id || '|' || repo_id || '|' || memory_id || '|' || at || '|' || operation
+                 || '|' || coalesce(from_status,'-') || '|' || to_status || '|'
+                 || coalesce(note,'-')
+               FROM memory_event ORDER BY event_id",
+        ),
+    ] {
+        out.push_str(label);
+        out.push('\n');
+        let mut stmt = conn.prepare(sql).unwrap();
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0)).unwrap();
+        for row in rows {
+            out.push_str(&row.unwrap());
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// **The v9 → v10 rebuild carries every child row, and the foreign keys still enforce afterwards.**
+///
+/// This is the test v7's precedent could not stand in for. `git_rename_hypothesis` was referenced by
+/// nothing, so its create-copy-drop-rename had no child rows to orphan; `memory` is referenced by
+/// `memory_citation`, by `memory_event` and by *itself* through `supersedes_memory_id`, and
+/// `PRAGMA foreign_keys=ON` is set on every connection. So the assertions are:
+///
+/// - every row of all three tables survives **with identical content**, including the surrogate keys
+///   `citation_id` and `event_id`, which a copy that re-issued them would silently renumber;
+/// - the self-supersession still resolves, by joining `m2` back to `m1` through the schema rather
+///   than by reading the column — a dangling `supersedes_memory_id` would still *read* fine;
+/// - the child foreign keys still **enforce**, which is the half a rebuild is most likely to lose:
+///   drop the parent, recreate it, and a child whose constraint silently stopped pointing anywhere
+///   accepts a row naming a record that does not exist.
+#[test]
+fn the_v10_rebuild_keeps_every_child_row_and_the_foreign_keys_still_enforce() {
+    let conn = v9_database_with_memory("implementation", "superseded");
+
+    // Anti-vacuity: there is something to lose, and v9 genuinely has no scope constraint — the
+    // control that makes the refusal test below a measurement rather than a tautology.
+    let before = memory_tables(&conn);
+    assert_eq!(before.lines().count(), 8, "{before}");
+    assert!(before.contains("platform owns its deployment"), "{before}");
+
+    migrate(&conn).unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), Some(SCHEMA_VERSION));
+
+    assert_eq!(
+        memory_tables(&conn),
+        before,
+        "the v10 rebuild did not carry every row through unchanged"
+    );
+    // Every earlier table is still where it was, too: this step rebuilds three tables and must not
+    // touch the other twenty.
+    assert_eq!(rename_labels(&conn).len(), 3);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM repo_registry"), 1);
+    assert_row_counts(&conn, &V5_ROW_COUNTS);
+
+    // The self-supersession resolves through the schema rather than through the column.
+    assert_eq!(
+        conn.query_row(
+            "SELECT successor.memory_id || ' replaced ' || predecessor.memory_id
+               FROM memory successor
+               JOIN memory predecessor
+                 ON predecessor.repo_id = successor.repo_id
+                AND predecessor.memory_id = successor.supersedes_memory_id
+              WHERE successor.memory_id = 'm2'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "m2 replaced m1"
+    );
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM pragma_foreign_key_check"),
+        0,
+        "the rebuilt tables left a dangling reference"
+    );
+
+    // **The foreign keys still enforce.** A citation and an event naming no record are refused, and
+    // so is a supersession of one — the three constraints the rebuild had to carry across.
+    let orphan_citation = conn.execute(
+        "INSERT INTO memory_citation
+             (repo_id, memory_id, cited_path_snapshot, cited_at_state, created_at)
+         VALUES ('r','absent','src/math.ts','s','t')",
+        [],
+    );
+    assert!(
+        orphan_citation.is_err(),
+        "a citation for a nonexistent record was accepted after the rebuild"
+    );
+    let orphan_event = conn.execute(
+        "INSERT INTO memory_event (repo_id, memory_id, at, operation, to_status)
+         VALUES ('r','absent','t','cited','active')",
+        [],
+    );
+    assert!(
+        orphan_event.is_err(),
+        "an event for a nonexistent record was accepted after the rebuild"
+    );
+    let orphan_supersession = conn.execute(
+        MEMORY_INSERT,
+        rusqlite::params![
+            "m3",
+            "e2",
+            None::<String>,
+            "active",
+            Some("absent"),
+            None::<String>,
+            None::<String>
+        ],
+    );
+    assert!(
+        orphan_supersession.is_err(),
+        "a record superseding a nonexistent one was accepted after the rebuild"
+    );
+
+    // And the two new CHECKs are live, each refused by name with the control beside it. The event
+    // probe is an INSERT rather than an UPDATE on purpose: no statement anywhere in this workspace
+    // may `UPDATE` that table, and `tests/memory.rs` scans every source file for one.
+    let refused = conn
+        .execute(
+            "UPDATE memory SET scope = ?1 WHERE memory_id = 'm1'",
+            rusqlite::params!["file"],
+        )
+        .expect_err("`file` is a subject kind and was accepted as a scope")
+        .to_string();
+    assert!(
+        refused.contains("CHECK constraint failed"),
+        "`file` was refused, but not by the CHECK: {refused}"
+    );
+    let refused = conn
+        .execute(
+            "INSERT INTO memory_event (repo_id, memory_id, at, operation, to_status)
+             VALUES ('r','m1','t',?1,'active')",
+            rusqlite::params!["deleted"],
+        )
+        .expect_err("`deleted` is not an operation and it was stored")
+        .to_string();
+    assert!(
+        refused.contains("CHECK constraint failed"),
+        "`deleted` was refused, but not by the CHECK: {refused}"
+    );
+
+    conn.execute(
+        "UPDATE memory SET scope = 'operations' WHERE memory_id = 'm1'",
+        [],
+    )
+    .expect("a scope in the domain must still be accepted");
+    conn.execute(
+        "INSERT INTO memory_event (repo_id, memory_id, at, operation, to_status)
+         VALUES ('r','m1','t','cited','superseded')",
+        [],
+    )
+    .expect("an operation in the domain must still be accepted");
+}
+
+/// **A scope v10 does not admit stops the migration, and nothing is dropped or rewritten.**
+///
+/// v9 stored `scope` opaque, and 14a's own tests used `"file"` and `"repository"` — so a database on
+/// disk may genuinely hold one. A migration has three options at that point and only one of them is
+/// honest: memory is the single thing in this database re-indexing cannot rebuild, so dropping the
+/// row or rewriting it to a default would destroy the one artefact the feature exists to protect.
+/// The offending values are **named**, because a refusal that will not say what it refused leaves a
+/// human to go and find out.
+#[test]
+fn a_scope_outside_the_v10_domain_refuses_the_migration_and_changes_nothing() {
+    let conn = v9_database_with_memory("file", "superseded");
+    let before = memory_tables(&conn);
+    let tables_before = table_names(&conn);
+
+    let err = migrate(&conn).unwrap_err();
+    let message = err.to_string();
+    assert!(
+        matches!(err, nerve_store::StoreError::MigrationDomain { .. }),
+        "expected a domain refusal, got {message}"
+    );
+    assert!(
+        message.contains("\"file\""),
+        "the refusal does not name what it found: {message}"
+    );
+    assert!(
+        message.contains("memory.scope"),
+        "the refusal does not name the column: {message}"
+    );
+    assert!(
+        message.contains("implementation"),
+        "the refusal does not say what would be admitted: {message}"
+    );
+
+    // Nothing moved: not the version, not a table, not a row, not a character of a human's note.
+    assert_eq!(schema_version(&conn).unwrap(), Some(9));
+    assert_eq!(table_names(&conn), tables_before);
+    assert_eq!(memory_tables(&conn), before);
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM memory WHERE scope = 'file'"),
+        2,
+        "the migration rewrote or dropped a row it had refused to migrate"
+    );
+
+    // The control: the identical fixture with an admitted scope reaches v10, so the refusal above
+    // is the domain check and not a broken fixture.
+    let clean = v9_database_with_memory("process", "superseded");
+    migrate(&clean).unwrap();
+    assert_eq!(schema_version(&clean).unwrap(), Some(SCHEMA_VERSION));
+    assert_eq!(scalar(&clean, "SELECT count(*) FROM memory"), 2);
+}
+
+/// The same refusal for `memory_event.operation`, which v9 also left open.
+///
+/// Asserted separately rather than folded into the test above, because the two columns are checked
+/// in sequence: a single fixture violating both would pass while the second check did nothing.
+#[test]
+fn an_operation_outside_the_v10_domain_refuses_the_migration_and_changes_nothing() {
+    let conn = v9_database_with_memory("interface", "supersede");
+    let before = memory_tables(&conn);
+
+    let err = migrate(&conn).unwrap_err();
+    let message = err.to_string();
+    assert!(
+        matches!(err, nerve_store::StoreError::MigrationDomain { .. }),
+        "expected a domain refusal, got {message}"
+    );
+    assert!(
+        message.contains("memory_event.operation"),
+        "the refusal names the wrong column: {message}"
+    );
+    assert!(
+        message.contains("\"supersede\""),
+        "the refusal does not name what it found: {message}"
+    );
+    // The verb it *would* have admitted is one character different, and the message has to show
+    // both or a reader cannot see what to change.
+    assert!(message.contains("'superseded'"), "{message}");
+
+    assert_eq!(schema_version(&conn).unwrap(), Some(9));
+    assert_eq!(memory_tables(&conn), before);
+    assert_eq!(
+        scalar(
+            &conn,
+            "SELECT count(*) FROM memory_event WHERE operation = 'supersede'"
+        ),
+        1
+    );
+}
+
+/// Re-migrating a v10 database changes nothing: no version row, no table, no rebuilt row.
+///
+/// The rebuild is the reason this needs its own test rather than reusing v9's. A step that ran
+/// twice would drop and recreate two tables a second time, and the failure mode is not an error —
+/// it is a silent re-copy that could renumber a surrogate key.
+#[test]
+fn re_migrating_a_v10_database_changes_nothing_and_appends_no_version_row() {
+    let conn = v9_database_with_memory("operations", "invalidated");
+    migrate(&conn).unwrap();
+
+    let memory_before = memory_tables(&conn);
+    let tables_before = table_names(&conn);
+    let versions_before = scalar(&conn, "SELECT count(*) FROM schema_version");
+    assert_eq!(versions_before, SCHEMA_VERSION);
+
+    migrate(&conn).unwrap();
+    migrate(&conn).unwrap();
+
+    assert_eq!(table_names(&conn), tables_before);
+    assert_eq!(memory_tables(&conn), memory_before);
+    assert_eq!(
+        scalar(&conn, "SELECT count(*) FROM schema_version"),
+        versions_before,
+        "re-migrating must not append a version row"
+    );
+    assert_eq!(schema_version(&conn).unwrap(), Some(SCHEMA_VERSION));
+}
+
+/// **A failing v10 step commits nothing, and the tables it took apart come back.**
+///
+/// The sabotage is a table named `idx_memory_claim`, so the rebuild fails at a `CREATE INDEX` that
+/// runs *after* `memory` has already been dropped and recreated. Without the step's transaction the
+/// database would sit at v9 with `memory` emptied and its rows only in a temporary table that the
+/// connection is about to discard — the human's notes gone, which is the one outcome this row must
+/// never produce.
+#[test]
+fn an_interrupted_v10_migration_leaves_every_memory_row_where_it_was() {
+    let conn = v9_database_with_memory("process", "superseded");
+    let before = memory_tables(&conn);
+    // The sabotage has to bite *after* `memory` has been dropped and recreated, and every name
+    // v10 creates already exists at v9 — so a colliding table cannot be the probe. A trigger on
+    // `memory_citation` can: it fires on the final re-insert, which is the last statement of the
+    // step and runs long after the parent table was taken apart.
+    conn.execute_batch(
+        "CREATE TRIGGER sabotage BEFORE INSERT ON memory_citation
+         BEGIN SELECT RAISE(ABORT, 'sabotage'); END;",
+    )
+    .unwrap();
+
+    let err = migrate(&conn).unwrap_err();
+    assert!(
+        matches!(err, nerve_store::StoreError::Sqlite(_)),
+        "expected the CREATE INDEX to fail, got {err}"
+    );
+
+    assert_eq!(
+        schema_version(&conn).unwrap(),
+        Some(9),
+        "a failed step must not record its version"
+    );
+    assert_eq!(
+        memory_tables(&conn),
+        before,
+        "an interrupted v10 rebuild lost a human's note"
+    );
+    // And v9's shape is back, not v10's: the free-form scope is accepted again.
+    conn.execute(
+        "UPDATE memory SET scope = 'file' WHERE memory_id = 'm1'",
+        [],
+    )
+    .expect("the v9 table did not come back");
+
+    // The control: the identical fixture without the sabotage reaches v10.
+    let clean = v9_database_with_memory("process", "superseded");
+    migrate(&clean).unwrap();
+    assert_eq!(schema_version(&clean).unwrap(), Some(SCHEMA_VERSION));
+    assert_eq!(scalar(&clean, "SELECT count(*) FROM memory"), 2);
 }

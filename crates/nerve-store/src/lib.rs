@@ -74,11 +74,11 @@ pub use impact::{
     DEFAULT_RELATIONS as DEFAULT_IMPACT_RELATIONS, UNCATEGORISED as UNCATEGORISED_UNRESOLVED,
 };
 pub use memory::{
-    append_memory_event, insert_memory, insert_memory_citation, list_memory, memory,
-    memory_citations, memory_events, memory_for_subject, memory_in_scope, read_memory,
-    read_memory_all, read_memory_for_subject, read_memory_in_scope, resolve_memory_subject,
-    supersede_memory, superseded_by, MemoryCitationRow, MemoryEventRow, MemoryReport, MemoryRow,
-    MemorySubject, MemorySubjectReport,
+    append_memory_event, cite_memory, confirm_memory, insert_memory, insert_memory_citation,
+    invalidate_memory, list_memory, memory, memory_citations, memory_events, memory_for_subject,
+    memory_in_scope, propose_memory, read_memory, read_memory_all, read_memory_for_subject,
+    read_memory_in_scope, resolve_memory_subject, supersede_memory, superseded_by,
+    MemoryCitationRow, MemoryEventRow, MemoryReport, MemoryRow, MemorySubject, MemorySubjectReport,
 };
 pub use prune::{
     delete_claims_sourced_at, delete_directory_containment, delete_extractor_file_rows,

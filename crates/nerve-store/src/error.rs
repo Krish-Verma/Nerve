@@ -37,6 +37,32 @@ pub enum StoreError {
     #[error("memory: {0}")]
     Memory(String),
 
+    /// A migration refused to run because rows on disk sit outside the domain it introduces.
+    ///
+    /// The refusal is the point, and it is not a fallback for a rewrite that was hard. A migration
+    /// that narrows a column has three honest options — drop the offending rows, rewrite them to a
+    /// default, or refuse — and for a table a **human authored** only the third is available:
+    /// memory is the one thing in this database re-indexing cannot rebuild, so a migration that
+    /// silently edited a note would be refused on the same ground as a delete verb. The offending
+    /// values are named so the human can correct them and run again.
+    #[error(
+        "migration to schema v{version} refused: {table}.{column} holds {found}, which v{version} \
+         does not admit (it admits {admitted}). Nothing was dropped or rewritten — these rows were \
+         written by a human and re-indexing cannot rebuild them. Correct them and migrate again"
+    )]
+    MigrationDomain {
+        /// The version whose domain the rows violate.
+        version: i64,
+        /// Table holding them.
+        table: &'static str,
+        /// Column whose domain they are outside.
+        column: &'static str,
+        /// The offending distinct values, quoted and comma-separated.
+        found: String,
+        /// The values the new schema does admit, quoted and comma-separated.
+        admitted: String,
+    },
+
     /// Filesystem operation around the database file failed.
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
