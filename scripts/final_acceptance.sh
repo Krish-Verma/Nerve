@@ -124,21 +124,29 @@ refused affected \
 refused trace-tests \
   "Nerve must not run a repository's test runner (THREAT-MODEL T1, no_subprocess.rs)"
 
-# Absent because unbuilt. A gap, and named as one rather than blended into the row above.
-#
-# `history` left this list in Slice 12b. It is now exercised for real in section 4b, which is the
-# update the old row was asking for: while it sat here, the script printed
-# `PASS — nerve history exists — update this script`, which counted as a pass while checking nothing
-# about what the command does. A placeholder that scores is worse than a gap that does not.
-for pair in "memory:Slice 14 — human-confirmed memory"; do
-  command="${pair%%:*}"; reason="${pair#*:}"
-  if "$NERVE" help "$command" >/dev/null 2>&1; then
-    printf '  [%s] nerve %s exists — update this script\n' "$(green PASS)" "$command"
-    PASS=$((PASS + 1))
+# A verb absent by decision, inside a command that exists. Same rule as `refused`, one level down:
+# `$NERVE help <command>` cannot ask about a subcommand, so the verb is *typed* and the parser's
+# rejection is what is checked.
+refused_verb() {
+  if "$NERVE" "$1" "$2" --help >/dev/null 2>&1; then
+    printf '  [%s] nerve %s %s exists, but %s\n' "$(red FAIL)" "$1" "$2" "$3"
+    FAIL=$((FAIL + 1))
+    FAILED_CHECKS+=("nerve $1 $2 should not exist")
   else
-    printf '  [%s] nerve %s — %s\n' "$(dim "NOT BUILT")" "$command" "$reason"
+    printf '  [%s] nerve %s %s — %s\n' "$(dim REFUSED)" "$1" "$2" "$3"
   fi
-done
+}
+refused_verb memory delete \
+  "the brief requires history preserved, and a delete verb is how that stops being true; \
+invalidate records that a note ended, and keeps every event it had"
+
+# The "unbuilt commands" loop that used to sit here is gone, and its removal is the point rather
+# than a tidy-up. It awarded a PASS for a command's mere existence: `nerve history` moved 35 → 36
+# checks by appearing, printing `PASS — nerve history exists — update this script`, which counted
+# as a pass while checking nothing about what the command does. That row was replaced by eight real
+# checks in `2dc3a7d`, and `nerve memory` was the last name left in the loop — so it is replaced by
+# section 4f in the same commit that lands the command, not after. A placeholder that scores is
+# worse than a gap that does not.
 
 # ---------------------------------------------------------------------------------------------
 section "4. End to end, on a clean checkout of this repository"
@@ -1093,6 +1101,174 @@ assert len(links) >= 4, len(links)
   fi
 else
   skip "the contract surfaces" "fixtures/contracts-exports is missing or python3 is unavailable"
+fi
+
+# ---------------------------------------------------------------------------------------------
+section "4f. Human-confirmed memory, and the facts it must keep apart"
+
+# Behaviour, not surface. Every check below asks something the answer to which would be wrong if the
+# command merely existed: does a note persist, does confirming change the stored lifecycle, does
+# superseding keep the predecessor *and every event it had*, is invalidation a different fact from
+# supersession, does a read write, is the export byte-identical twice and does it contain what was
+# just written, and is a misspelled scope refused rather than answered with an empty list.
+#
+# This runs in section 4's throwaway `git archive` checkout, which is already indexed — a memory
+# record needs a repository state to anchor to, so an unindexed directory could not exercise any of
+# it. `relationPhrase` is the same TypeScript symbol section 4 queries, for the same reason: Nerve
+# does not index Rust, so its own source is not a usable subject.
+if [ -n "${WORK:-}" ] && [ -f "$WORK/.nerve/nerve.db" ] && command -v python3 >/dev/null 2>&1; then
+
+  check "a proposed note persists, and nothing treats it as settled" bash -c "
+    '$NERVE' memory propose --subject relationPhrase --scope interface \
+      --content 'the UI renders every relation through this helper' \
+      --claim-key rendering --id acc1 --path '$WORK' --json |
+    python3 -c '
+import json,sys
+r = json.load(sys.stdin)[\"records\"][0]
+assert r[\"memory_id\"] == \"acc1\", r
+assert r[\"status\"] == \"proposed\", r
+assert r[\"anchor_state_id\"], r
+assert r[\"subject\"][\"selector\"] == \"relationPhrase\", r
+assert r[\"views\"] == [], r
+assert r[\"events\"][0][\"operation\"] == \"proposed\", r
+assert r[\"events\"][0][\"from_status\"] is None, r
+'
+    '$NERVE' memory show acc1 --path '$WORK' --json | python3 -c '
+import json,sys
+r = json.load(sys.stdin)[\"records\"][0]
+assert r[\"content\"].startswith(\"the UI renders\"), r
+assert r[\"status\"] == \"proposed\", r
+'"
+
+  check "confirming changes the stored lifecycle and records that it did" bash -c "
+    '$NERVE' memory confirm acc1 --note 'checked at the acceptance gate' --path '$WORK' --json |
+    python3 -c '
+import json,sys
+r = json.load(sys.stdin)[\"records\"][0]
+assert r[\"status\"] == \"active\", r
+events = r[\"events\"]
+assert [e[\"operation\"] for e in events] == [\"proposed\", \"confirmed\"], events
+assert events[1][\"from_status\"] == \"proposed\" and events[1][\"to_status\"] == \"active\", events
+assert events[1][\"note\"] == \"checked at the acceptance gate\", events
+'"
+
+  # The row's own property. A supersession that kept the row but lost an event would pass a naive
+  # \"the predecessor is still there\" check, so the events are compared as a list.
+  check "superseding keeps the predecessor and every event it had" bash -c "
+    '$NERVE' memory cite acc1 --file docs/ROADMAP.md --span 1:20 --path '$WORK' >/dev/null || exit 1
+    '$NERVE' memory supersede acc1 --content 'the UI now renders relations in two places' \
+      --id acc2 --note 'the interface grew' --path '$WORK' --json |
+    python3 -c '
+import json,sys
+rows = {r[\"memory_id\"]: r for r in json.load(sys.stdin)[\"records\"]}
+old, new = rows[\"acc1\"], rows[\"acc2\"]
+assert old[\"status\"] == \"superseded\", old
+assert old[\"content\"].startswith(\"the UI renders\"), old
+assert old[\"superseded_by_memory_id\"] == \"acc2\", old
+assert new[\"supersedes_memory_id\"] == \"acc1\", new
+assert new[\"subject\"] == old[\"subject\"], (new, old)
+assert [e[\"operation\"] for e in old[\"events\"]] == \
+       [\"proposed\", \"confirmed\", \"cited\", \"superseded\"], old[\"events\"]
+cited = old[\"events\"][2]
+assert cited[\"from_status\"] == cited[\"to_status\"], cited
+assert old[\"citations\"][0][\"cited_path\"] == \"docs/ROADMAP.md\", old[\"citations\"]
+'"
+
+  # Two retirements, two facts. Collapsing them loses \"what did we once believe and no longer do,
+  # with no successor\" — the question a returning reader actually asks.
+  check "invalidation is a different fact from supersession, in the same read" bash -c "
+    '$NERVE' memory invalidate acc2 --reason 'the helper was inlined' --path '$WORK' >/dev/null || exit 1
+    '$NERVE' memory list --path '$WORK' --json | python3 -c '
+import json,sys
+rows = {r[\"memory_id\"]: r for r in json.load(sys.stdin)[\"records\"]}
+old, new = rows[\"acc1\"], rows[\"acc2\"]
+assert old[\"status\"] == \"superseded\", old
+assert new[\"status\"] == \"invalidated\", new
+assert old[\"status\"] != new[\"status\"]
+assert new[\"invalidated_at\"], new
+assert new[\"invalidation_reason\"] == \"the helper was inlined\", new
+assert new[\"superseded_by_memory_id\"] is None, new
+assert old[\"invalidated_at\"] is None, old
+'"
+
+  check "every memory read leaves the database byte-identical" bash -c "
+    before=\$(shasum -a 256 '$WORK/.nerve/nerve.db' | cut -d' ' -f1)
+    '$NERVE' memory list --path '$WORK' >/dev/null || exit 1
+    '$NERVE' memory show acc1 --path '$WORK' >/dev/null || exit 1
+    '$NERVE' memory search 'renders every relation' --path '$WORK' >/dev/null || exit 1
+    '$NERVE' memory events acc1 --path '$WORK' >/dev/null || exit 1
+    '$NERVE' memory export --path '$WORK' >/dev/null || exit 1
+    after=\$(shasum -a 256 '$WORK/.nerve/nerve.db' | cut -d' ' -f1)
+    [ \"\$before\" = \"\$after\" ] || { echo \"\$before != \$after\"; exit 1; }
+    # Anti-vacuity: the reads really answered, so 'unchanged' is not 'nothing ran'.
+    '$NERVE' memory search 'renders every relation' --path '$WORK' --json | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+assert d[\"count\"] == 1, d
+'"
+
+  check "the export carries the records just written, with their history" bash -c "
+    '$NERVE' memory export --path '$WORK' | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+assert d[\"format\"] == \"nerve-memory-export\", d
+assert d[\"format_version\"] == 1, d
+assert d[\"schema_version\"] == 10, d
+assert d[\"repo_id\"].startswith(\"repo_\"), d
+rows = {r[\"memory_id\"]: r for r in d[\"records\"]}
+assert d[\"record_count\"] == len(d[\"records\"]) == 2, d[\"record_count\"]
+assert rows[\"acc1\"][\"content\"].startswith(\"the UI renders\"), rows[\"acc1\"]
+assert [e[\"operation\"] for e in rows[\"acc1\"][\"events\"]] == \
+       [\"proposed\", \"confirmed\", \"cited\", \"superseded\"], rows[\"acc1\"][\"events\"]
+assert rows[\"acc2\"][\"invalidation_reason\"] == \"the helper was inlined\", rows[\"acc2\"]
+# Memory is the one thing re-indexing cannot rebuild, so the export must be a whole record and not
+# a summary of one.
+assert sorted(rows[\"acc1\"]) == [\"anchor_state_id\",\"author_label\",\"citations\",\"claim_key\",
+                                 \"content\",\"created_at\",\"events\",\"invalidated_at\",
+                                 \"invalidation_reason\",\"memory_id\",\"scope\",\"status\",
+                                 \"subject\",\"supersedes_memory_id\"], sorted(rows[\"acc1\"])
+'"
+
+  # §7.4e. Deterministic means byte-identical, which is why the document carries no timestamp of its
+  # own — and no derived state, and no absolute path, each of which would also make it a claim
+  # rather than a copy.
+  check "the export is byte-identical twice, and dates and derives nothing" bash -c "
+    '$NERVE' memory export --path '$WORK' > /tmp/nerve_memory_export_a.json || exit 1
+    '$NERVE' memory export --out /tmp/nerve_memory_export_b.json --path '$WORK' >/dev/null || exit 1
+    cmp -s /tmp/nerve_memory_export_a.json /tmp/nerve_memory_export_b.json ||
+      { echo 'two exports of one database differ'; exit 1; }
+    for forbidden in exported_at potentially_stale conflicted multiple_active current_state_id \
+                     subject_resolution superseded_by; do
+      grep -q \"\$forbidden\" /tmp/nerve_memory_export_a.json &&
+        { echo \"the export carries \$forbidden\"; exit 1; }
+    done
+    grep -q '/Users/' /tmp/nerve_memory_export_a.json && { echo 'the export carries a home path'; exit 1; }
+    grep -qF '$WORK' /tmp/nerve_memory_export_a.json && { echo 'the export carries the root'; exit 1; }
+    exit 0"
+
+  # `absence is not zero`. A misspelled scope must be refused at the point of entry, because against
+  # a free-form column it would answer \"there are no notes\" when what is true is \"there is no such
+  # scope\" — and it would also silently suppress a conflict report.
+  check "a misspelled scope is refused, and a legal empty one is not" bash -c "
+    out=\$('$NERVE' memory list --scope opertions --path '$WORK' --json); rc=\$?
+    [ \"\$rc\" = 10 ] || { printf '%s\n' \"\$out\"; exit 1; }
+    printf '%s' \"\$out\" | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+assert d[\"ok\"] is False, d
+assert \"implementation, interface, operations, process\" in d[\"error\"], d
+assert \"records\" not in d, d
+'
+    '$NERVE' memory list --scope process --path '$WORK' --json | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+assert d[\"count\"] == 0, d
+'
+    out=\$('$NERVE' memory list --status potentially_stale --path '$WORK' 2>&1); rc=\$?
+    [ \"\$rc\" = 10 ] || { printf '%s\n' \"\$out\"; exit 1; }
+    printf '%s' \"\$out\" | grep -q 'derived at read time'"
+else
+  skip "human-confirmed memory" "the indexed checkout from section 4 is unavailable, or python3 is"
 fi
 
 # ---------------------------------------------------------------------------------------------

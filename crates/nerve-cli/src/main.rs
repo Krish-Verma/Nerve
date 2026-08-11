@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::json;
 
+use nerve_core::vocab::{MemoryScope, MemoryStatus};
 use nerve_core::Relation;
 use nerve_index::config;
 use nerve_index::error::IndexError;
@@ -133,6 +134,29 @@ enum Command {
     /// taken.
     #[command(subcommand)]
     Repo(RepoCommand),
+    /// Write down what a human knows about this repository, and read it back with its
+    /// qualifications.
+    ///
+    /// **This is the human's surface, and it is the only one that writes.** Nerve has no accounts,
+    /// no network and no identity provider, so nothing here can tell a human apart from an agent
+    /// holding the same shell — and a control that cannot be enforced must not be claimed. What is
+    /// enforceable is the *surface boundary*: the HTTP API and the MCP tools read memory and cannot
+    /// write it, and their inability is `PRAGMA query_only`, not a check they could be talked out
+    /// of. A human who hands an agent their shell has removed the boundary, and Nerve cannot
+    /// detect that (`docs/THREAT-MODEL.md` T13).
+    ///
+    /// **Nothing here deletes.** `invalidate` records that a note stopped being true and
+    /// `supersede` records that a later note replaced it — two different facts, kept apart — and
+    /// both keep every earlier event readable. There is no `nerve memory delete`, because a delete
+    /// verb is how *"history preserved"* stops being true; its absence is asserted by a test rather
+    /// than left to discipline.
+    ///
+    /// A record's subject is a **snapshot**, never a live pointer: `entity` rows are pruned on
+    /// every re-index, so a note about a file survives that file's deletion and reports its subject
+    /// as `missing` rather than disappearing with it. Staleness is derived at read time against the
+    /// repository state the record was anchored to, and is never stored as a score.
+    #[command(subcommand)]
+    Memory(MemoryCommand),
     /// Report index counts, freshness and schema version.
     Status {
         /// Repository root. Defaults to the current directory.
@@ -697,6 +721,242 @@ enum RepoCommand {
     },
 }
 
+/// `nerve memory` subcommands.
+///
+/// Five writers and five readers, and the split is the one thing about this surface that is
+/// enforced rather than intended: the readers open the database `query_only`, so a read that
+/// reached for a convenient repair would be refused by SQLite rather than by review.
+///
+/// The verbs are what they do. `supersede` and `invalidate` are **not** the same verb spelled two
+/// ways — *"a later record replaced it"* and *"it stopped being true and nothing replaced it"* are
+/// different facts, and the second is the one a returning reader most often needs, because there is
+/// no successor to read instead. There is no `delete`: history is preserved, and a delete verb is
+/// how that stops being true.
+#[derive(Debug, Subcommand)]
+enum MemoryCommand {
+    /// Write down a note about one subject. It enters as `proposed`.
+    ///
+    /// The subject is resolved **now** and stored as a snapshot — its id, kind, name and
+    /// repository-relative path, plus the selector exactly as you typed it. None of those is a
+    /// foreign key, which is what lets the note outlive the file: entities are pruned on every
+    /// re-index, and a note that vanished with its subject would be the one thing a memory feature
+    /// must never do.
+    ///
+    /// The note is anchored to the repository state this index currently describes, and a
+    /// repository nothing has indexed is **refused** rather than anchored to a state invented for
+    /// the occasion: staleness is derived from the anchor at read time, so a note anchored to
+    /// nothing could never be qualified.
+    Propose {
+        /// What the note is about. Any selector `nerve why` accepts.
+        #[arg(long, value_name = "SELECTOR")]
+        subject: String,
+        /// Which facet of the subject the claim is about.
+        ///
+        /// One of `implementation`, `interface`, `operations`, `process`. Closed on purpose: the
+        /// value is part of the grouping both derived views are decided over, so a free-form typo
+        /// would silently suppress a conflict report and make `--scope opertions` answer *"there
+        /// are no notes"* when it means *"there is no such scope"*.
+        #[arg(long, value_name = "SCOPE")]
+        scope: String,
+        /// The note itself. Stored verbatim and never rewritten, including by supersession.
+        #[arg(long, value_name = "TEXT")]
+        content: String,
+        /// What named question this note answers — `owner`, `deprecation-status`, `retry-policy`.
+        ///
+        /// Optional, and it is what makes a contradiction reportable at all: only records agreeing
+        /// on subject, scope and claim key are ever reported as conflicting. Several notes about
+        /// one subject with no claim key are `multiple_active`, which is ordinary.
+        #[arg(long = "claim-key", value_name = "KEY")]
+        claim_key: Option<String>,
+        /// A local label recorded beside the note. **Not an identity.**
+        ///
+        /// Nerve has no accounts, no network and no identity provider, so this records what the
+        /// caller said it was and nothing verified it. Defaults to `local`.
+        #[arg(long, value_name = "LABEL")]
+        author: Option<String>,
+        /// The note's id. Defaults to a generated one.
+        #[arg(long, value_name = "ID")]
+        id: Option<String>,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Confirm a proposal: `proposed` → `active`.
+    ///
+    /// The only transition into `active`, and the only one this product claims a human made. What
+    /// makes it the human's act is the **surface it arrived on** — this command exists at the CLI
+    /// and nowhere else — never an identity Nerve checked, because there is none to check.
+    Confirm {
+        /// The record's id, as `nerve memory list` prints it.
+        #[arg(value_name = "MEMORY_ID")]
+        memory_id: String,
+        /// Anything to record in the audit history beside the change.
+        #[arg(long, value_name = "TEXT")]
+        note: Option<String>,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Replace an earlier note with a new one, retiring the earlier one in the same transaction.
+    ///
+    /// The predecessor keeps its content: superseding rewrites nothing and deletes nothing, so what
+    /// was once believed stays readable with every event it accumulated. The successor inherits the
+    /// predecessor's subject snapshot, and its scope and claim key unless you say otherwise — a
+    /// replacement that answered a different question about a different subject would not be a
+    /// replacement.
+    ///
+    /// The successor enters as `proposed`, like every other note, and the command prints the
+    /// `confirm` line for it. `active` is reachable only through `confirm`, or a record would
+    /// arrive already confirmed with nothing in its history saying who confirmed it.
+    Supersede {
+        /// The record being replaced.
+        #[arg(value_name = "PREDECESSOR_ID")]
+        predecessor_id: String,
+        /// The replacement note.
+        #[arg(long, value_name = "TEXT")]
+        content: String,
+        /// The successor's scope. Defaults to the predecessor's.
+        #[arg(long, value_name = "SCOPE")]
+        scope: Option<String>,
+        /// The successor's claim key. Defaults to the predecessor's.
+        #[arg(long = "claim-key", value_name = "KEY")]
+        claim_key: Option<String>,
+        /// A local label recorded beside the successor. **Not an identity.**
+        #[arg(long, value_name = "LABEL")]
+        author: Option<String>,
+        /// The successor's id. Defaults to a generated one.
+        #[arg(long, value_name = "ID")]
+        id: Option<String>,
+        /// Anything to record in the predecessor's audit history beside its retirement.
+        #[arg(long, value_name = "TEXT")]
+        note: Option<String>,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Record that a note stopped being true and **nothing replaced it**.
+    ///
+    /// Not a delete and not a supersession. The row keeps its content, keeps every event it ever
+    /// had, and gains the moment it ended — so *"what did we once believe and no longer do, with no
+    /// successor"* stays answerable, which is the question a returning reader actually asks.
+    Invalidate {
+        /// The record's id.
+        #[arg(value_name = "MEMORY_ID")]
+        memory_id: String,
+        /// Why it stopped being true. Stored on the record itself.
+        #[arg(long, value_name = "TEXT")]
+        reason: Option<String>,
+        /// Anything to record in the audit history beside the change.
+        #[arg(long, value_name = "TEXT")]
+        note: Option<String>,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Attach a passage to a note as its citation. Changes no status.
+    ///
+    /// The only operation here that is not a transition, so its event carries the status the record
+    /// is already in on both sides. The cited passage is stored as a snapshot of a
+    /// repository-relative path and an optional line span, for the reason the subject is one.
+    Cite {
+        /// The record's id.
+        #[arg(value_name = "MEMORY_ID")]
+        memory_id: String,
+        /// The cited file, repository-relative.
+        #[arg(long, value_name = "REPO_RELATIVE_PATH")]
+        file: String,
+        /// The cited lines, as `START:END`. Omit to cite the whole file.
+        #[arg(long, value_name = "START:END")]
+        span: Option<String>,
+        /// Anything to record in the audit history beside the citation.
+        #[arg(long, value_name = "TEXT")]
+        note: Option<String>,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// List records, retired ones included.
+    ///
+    /// A retired record is listed and marked, for the reason `nerve repo list` prints a tombstone:
+    /// hiding it would make the state unreportable at exactly the moment it becomes the answer.
+    ///
+    /// `--subject` takes a selector and resolves it against the **live** index, so a subject that
+    /// has since been pruned can no longer be named that way. Those records have not gone anywhere:
+    /// they are listed by this command without the filter, found by `nerve memory search`, and each
+    /// one carries the snapshot of what it was about.
+    List {
+        /// Only this facet.
+        #[arg(long, value_name = "SCOPE")]
+        scope: Option<String>,
+        /// Only records about this subject.
+        #[arg(long, value_name = "SELECTOR")]
+        subject: Option<String>,
+        /// Only records in this stored lifecycle: `proposed`, `active`, `superseded`,
+        /// `invalidated`.
+        ///
+        /// The stored lifecycle only. `potentially_stale`, `conflicted` and `multiple_active` are
+        /// derived at read time and are reported beside every record rather than filtered on, so
+        /// asking for one here is refused rather than silently answered with something else.
+        #[arg(long, value_name = "STATUS")]
+        status: Option<String>,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Show one record in full: its lifecycle, its qualifications, its citations and its history.
+    Show {
+        /// The record's id.
+        #[arg(value_name = "MEMORY_ID")]
+        memory_id: String,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Find records whose content or claim key contains some text.
+    ///
+    /// A literal substring, case-insensitive for ASCII. `%` and `_` are characters here and not
+    /// wildcards. The subject snapshot is deliberately **not** searched: a search that also matched
+    /// paths would answer *"records near this file"* and *"records that say this"* with the same
+    /// result, and the caller could not tell which question was answered.
+    Search {
+        /// The text to look for.
+        #[arg(value_name = "QUERY")]
+        query: String,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Print one record's audit history, oldest first.
+    ///
+    /// Every event ever appended, including the ones that precede a retirement. Nothing removes
+    /// one, so this is the complete history by construction rather than by filtering.
+    Events {
+        /// The record's id.
+        #[arg(value_name = "MEMORY_ID")]
+        memory_id: String,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Write every record, its citations and its history out as one JSON document.
+    ///
+    /// Memory is the only thing in this database a human authored, so it is the only thing whose
+    /// loss re-indexing cannot repair. The document is **deterministic**: the same database exports
+    /// byte-identically twice, which is why it carries no timestamp of its own, no derived state
+    /// and no absolute path.
+    ///
+    /// There is no `import` in this release, and that is a refusal rather than an omission: a
+    /// half-safe import is how a human's notes get overwritten by a file.
+    Export {
+        /// Write to this file instead of standard output.
+        #[arg(long, value_name = "FILE")]
+        out: Option<PathBuf>,
+        /// Repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+}
+
 /// `--direction` values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum DirectionArg {
@@ -868,6 +1128,105 @@ fn main() {
             path,
         }) => run_repo_relocate(&output, &path, &registry_id, &new_path),
         Command::Repo(RepoCommand::Scan { path }) => run_repo_scan(&output, &path),
+        Command::Memory(MemoryCommand::Propose {
+            subject,
+            scope,
+            content,
+            claim_key,
+            author,
+            id,
+            path,
+        }) => run_memory_propose(
+            &output,
+            &path,
+            MemoryProposeArguments {
+                subject,
+                scope,
+                content,
+                claim_key,
+                author,
+                id,
+            },
+        ),
+        Command::Memory(MemoryCommand::Confirm {
+            memory_id,
+            note,
+            path,
+        }) => run_memory_confirm(&output, &path, &memory_id, note.as_deref()),
+        Command::Memory(MemoryCommand::Supersede {
+            predecessor_id,
+            content,
+            scope,
+            claim_key,
+            author,
+            id,
+            note,
+            path,
+        }) => run_memory_supersede(
+            &output,
+            &path,
+            MemorySupersedeArguments {
+                predecessor_id,
+                content,
+                scope,
+                claim_key,
+                author,
+                id,
+                note,
+            },
+        ),
+        Command::Memory(MemoryCommand::Invalidate {
+            memory_id,
+            reason,
+            note,
+            path,
+        }) => run_memory_invalidate(
+            &output,
+            &path,
+            &memory_id,
+            reason.as_deref(),
+            note.as_deref(),
+        ),
+        Command::Memory(MemoryCommand::Cite {
+            memory_id,
+            file,
+            span,
+            note,
+            path,
+        }) => run_memory_cite(
+            &output,
+            &path,
+            &memory_id,
+            &file,
+            span.as_deref(),
+            note.as_deref(),
+        ),
+        Command::Memory(MemoryCommand::List {
+            scope,
+            subject,
+            status,
+            path,
+        }) => run_memory_list(
+            &output,
+            &path,
+            MemoryListArguments {
+                scope,
+                subject,
+                status,
+            },
+        ),
+        Command::Memory(MemoryCommand::Show { memory_id, path }) => {
+            run_memory_show(&output, &path, &memory_id)
+        }
+        Command::Memory(MemoryCommand::Search { query, path }) => {
+            run_memory_search(&output, &path, &query)
+        }
+        Command::Memory(MemoryCommand::Events { memory_id, path }) => {
+            run_memory_events(&output, &path, &memory_id)
+        }
+        Command::Memory(MemoryCommand::Export { out, path }) => {
+            run_memory_export(&output, &path, out.as_deref())
+        }
         Command::Status { path, path_flag } => run_status(
             &output,
             &path.or(path_flag).unwrap_or_else(|| PathBuf::from(".")),
@@ -4187,11 +4546,16 @@ fn run_history_availability(output: &Output, path: &Path) -> i32 {
 // file Nerve opens in a neighbour is named in `nerve_index::registry`, and a surface that spelled it
 // again would be a second place to widen it.
 
-/// Open the index for a registry command, and find the repository the registry belongs to.
+/// Open the index for a command that needs this repository's own `repo_id`, and hand back both.
 ///
-/// `writable` is the whole reason this is one helper rather than two: `list` answers a question and
-/// must not be able to write, so it takes the `query_only` connection every other read command
-/// takes; `add`, `remove` and `relocate` are mutating commands and say so.
+/// `writable` is the whole reason this is one helper rather than two: a command that answers a
+/// question must not be able to write, so it takes the `query_only` connection every other read
+/// command takes; a mutating command says so at the call site and is the only kind that gets a
+/// writable connection.
+///
+/// Named for the registry because that is what first needed it. `nerve memory` needs the identical
+/// pair — an open index and the repository the rows belong to — and calling this rather than
+/// opening a second way is what keeps *"which repository is this?"* a question with one answer.
 fn open_registry(
     output: &Output,
     command: &'static str,
@@ -4961,6 +5325,1164 @@ fn run_repo_scan(output: &Output, path: &Path) -> i32 {
             }))
             .collect::<Vec<_>>(),
     }));
+    exit::SUCCESS
+}
+
+// ---- human-confirmed memory --------------------------------------------------------------------
+//
+// These handlers render and map exit codes. **No lifecycle logic lives here.** Every status change
+// and the event that records it happen inside one `nerve-store` transaction — `propose_memory`,
+// `confirm_memory`, `supersede_memory`, `invalidate_memory`, `cite_memory` — because a surface that
+// flipped a status and then appended an event would leave, on any failure between the two, a record
+// that changed with no record of changing. That is the failure the audit history exists to prevent,
+// and it is not a failure a surface gets to re-introduce.
+//
+// The one derived value this surface reads directly is the anchor state, and it reads it from
+// `nerve_store::current_repository_state` rather than deriving it: a second answer to "which state
+// does this database describe?" is the duplication Slice 12c-i-a existed to remove.
+
+/// The admitted values of a closed vocabulary, for a refusal that names the whole set.
+///
+/// Generated from `ALL` rather than typed out, so a value added to a vocabulary is offered by the
+/// refusal the day it exists.
+fn admitted(values: impl IntoIterator<Item = &'static str>) -> String {
+    values.into_iter().collect::<Vec<_>>().join(", ")
+}
+
+/// Parse `--scope`, or refuse naming the admitted set.
+///
+/// A refusal rather than a filter that returns nothing, and the distinction is the reason the
+/// vocabulary is closed at all: against a free-form column `--scope opertions` answers *"there are
+/// no notes"* when what is true is *"there is no such scope"*. Absence is not zero.
+fn parse_memory_scope(value: &str) -> Result<MemoryScope, String> {
+    value.parse::<MemoryScope>().map_err(|_| {
+        format!(
+            "unknown --scope {value:?}; expected one of: {}",
+            admitted(MemoryScope::ALL.iter().map(|scope| scope.as_str()))
+        )
+    })
+}
+
+/// Parse `--status`, or refuse naming the admitted set.
+///
+/// **The stored lifecycle only.** A caller asking for `potentially_stale` is asking to filter on a
+/// value nothing ever wrote, so the refusal names the derived views separately rather than letting
+/// the request fall through to an empty list that would read as *"nothing is stale"*.
+fn parse_memory_status(value: &str) -> Result<MemoryStatus, String> {
+    value.parse::<MemoryStatus>().map_err(|_| {
+        format!(
+            "unknown --status {value:?}; expected one of: {}. \
+             {} are derived at read time, never stored, and are reported beside every record \
+             rather than filtered on",
+            admitted(MemoryStatus::ALL.iter().map(|status| status.as_str())),
+            admitted(
+                nerve_core::vocab::MemoryView::ALL
+                    .iter()
+                    .map(|v| v.as_str())
+            )
+        )
+    })
+}
+
+/// A memory id for a caller who did not supply one.
+///
+/// The clock rather than a hash of the content: two identical notes written a minute apart are two
+/// notes, and a content-derived id would silently make the second one a primary-key collision. If
+/// two calls did land in the same nanosecond the `INSERT` fails loudly — which is the behaviour
+/// this schema chose over `INSERT OR IGNORE` everywhere else, for the reason Slice 3b measured.
+fn generated_memory_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_nanos())
+        .unwrap_or(0);
+    format!("mem_{nanos:016x}")
+}
+
+/// Map a storage failure to an exit code.
+///
+/// [`nerve_store::StoreError::Memory`] is a **refusal**, not a fault: superseding an invalidated
+/// record, confirming something that is already active, naming an id that is not here. Each of
+/// those is a wrong command line and exits [`exit::USAGE`], and the store's own sentence — which
+/// names the status the record is actually in — is what the caller is shown, because a surface that
+/// re-worded it would be a second statement of the same rule.
+fn memory_exit_code(err: &nerve_store::StoreError) -> i32 {
+    match err {
+        nerve_store::StoreError::Memory(_) => exit::USAGE,
+        _ => exit::INTERNAL,
+    }
+}
+
+/// The repository state a new record anchors to, or a refusal.
+///
+/// A repository nothing has indexed is refused rather than anchored to a state invented for the
+/// occasion. Staleness is `active` plus *"the anchor is not the current state"*, so a note anchored
+/// to nothing could never be qualified — and a qualification that can never be computed is worse
+/// than a refusal, because it looks like an answer.
+fn memory_anchor(
+    output: &Output,
+    command: &'static str,
+    conn: &nerve_store::Connection,
+    repo_id: &str,
+) -> Result<String, i32> {
+    match nerve_store::current_repository_state(conn, repo_id) {
+        Ok(Some(state)) => Ok(state),
+        Ok(None) => Err(output.failure_detail(
+            command,
+            exit::NO_INDEX,
+            "this repository has not been indexed, so there is no repository state to anchor a \
+             note to",
+            &[
+                "  run `nerve index` first".to_string(),
+                "  nothing was written; a note anchored to nothing has no staleness to derive, and \
+                 inventing an anchor would make every later reading of it a guess"
+                    .to_string(),
+            ],
+            json!({
+                "anchor_state_id": serde_json::Value::Null,
+                "reason": "repository_not_indexed",
+            }),
+        )),
+        Err(err) => Err(output.failure(command, memory_exit_code(&err), &err.to_string())),
+    }
+}
+
+/// One record with everything a read surface must be able to show.
+///
+/// The citations and the events are read separately rather than joined into
+/// [`nerve_store::MemoryReport`], because they are lists and the report is one row. Assembling them
+/// here keeps every read verb rendering the same shape: a `list` that showed less than a `show`
+/// would be two answers to one question.
+struct MemoryDetail {
+    report: nerve_store::MemoryReport,
+    citations: Vec<nerve_store::MemoryCitationRow>,
+    events: Vec<nerve_store::MemoryEventRow>,
+}
+
+fn memory_details(
+    conn: &nerve_store::Connection,
+    repo_id: &str,
+    reports: Vec<nerve_store::MemoryReport>,
+) -> Result<Vec<MemoryDetail>, nerve_store::StoreError> {
+    let mut out = Vec::with_capacity(reports.len());
+    for report in reports {
+        let memory_id = report.row.memory_id.clone();
+        out.push(MemoryDetail {
+            citations: nerve_store::memory_citations(conn, repo_id, &memory_id)?,
+            events: nerve_store::memory_events(conn, repo_id, &memory_id)?,
+            report,
+        });
+    }
+    Ok(out)
+}
+
+/// Read one record, or render the refusal that says it is not here.
+fn memory_detail(
+    output: &Output,
+    command: &'static str,
+    conn: &nerve_store::Connection,
+    repo_id: &str,
+    memory_id: &str,
+) -> Result<MemoryDetail, i32> {
+    let report = match nerve_store::read_memory(conn, repo_id, memory_id) {
+        Ok(Some(report)) => report,
+        Ok(None) => {
+            return Err(output.failure_detail(
+                command,
+                exit::NO_INDEX,
+                &format!(
+                    "no memory record {} in this repository",
+                    inert_text(memory_id)
+                ),
+                &["  `nerve memory list` prints every record, retired ones included".to_string()],
+                json!({ "memory_id": inert_text(memory_id) }),
+            ))
+        }
+        Err(err) => return Err(output.failure(command, memory_exit_code(&err), &err.to_string())),
+    };
+    let mut details = memory_details(conn, repo_id, vec![report])
+        .map_err(|err| output.failure(command, memory_exit_code(&err), &err.to_string()))?;
+    Ok(details.remove(0))
+}
+
+/// The stored subject snapshot, as JSON. **Every field is a copy, and none is a live pointer.**
+fn memory_subject_json(subject: &nerve_store::MemorySubject) -> serde_json::Value {
+    json!({
+        "entity_id": subject.entity_id,
+        "kind": inert_text(&subject.kind),
+        "name": inert_text(&subject.name),
+        "path": inert_text(&subject.path),
+        "selector": inert_text(&subject.selector),
+    })
+}
+
+fn memory_citation_json(citation: &nerve_store::MemoryCitationRow) -> serde_json::Value {
+    json!({
+        "citation_id": citation.citation_id,
+        "cited_entity_id": citation.cited_entity_id,
+        "cited_kind": citation.cited_kind.as_deref().map(inert_text),
+        "cited_name": citation.cited_name.as_deref().map(inert_text),
+        "cited_path": inert_text(&citation.cited_path),
+        "cited_span": citation.cited_span.as_deref().map(inert_text),
+        "cited_at_state": citation.cited_at_state,
+        "created_at": citation.created_at,
+    })
+}
+
+fn memory_event_json(event: &nerve_store::MemoryEventRow) -> serde_json::Value {
+    json!({
+        "event_id": event.event_id,
+        "at": event.at,
+        "operation": event.operation.as_str(),
+        "operation_note": event.operation.note(),
+        "changes_status": event.operation.changes_status(),
+        "from_status": event.from_status.map(|status| status.as_str()),
+        "to_status": event.to_status.as_str(),
+        "note": event.note.as_deref().map(inert_text),
+    })
+}
+
+/// One record, everything stored about it and everything derived, as JSON.
+///
+/// **The two kinds are never mixed.** `status` is the stored lifecycle and `views` are query-time
+/// qualifications, under different keys, each rendered through its own vocabulary's `note` so no
+/// surface restates the rule in its own words. `superseded_by_memory_id` is marked derived for the
+/// same reason: there is no such column, and a consumer that wrote one back would be storing a
+/// second, independently writable copy of a fact the schema keeps in one direction.
+fn memory_json(detail: &MemoryDetail) -> serde_json::Value {
+    let report = &detail.report;
+    let row = &report.row;
+    let scope = row.scope.parse::<MemoryScope>().ok();
+    json!({
+        "memory_id": inert_text(&row.memory_id),
+        "status": row.status.as_str(),
+        "status_note": row.status.note(),
+        "views": report
+            .views
+            .iter()
+            .map(|view| json!({ "view": view.as_str(), "note": view.note() }))
+            .collect::<Vec<_>>(),
+        "views_are_derived": true,
+        "subject": memory_subject_json(&row.subject),
+        "subject_resolution": report.subject.resolution.as_str(),
+        "subject_resolution_note": report.subject.resolution.note(),
+        "subject_live_entity_ids": report.subject.live_entity_ids,
+        "scope": inert_text(&row.scope),
+        "scope_note": scope.map(|scope| scope.note()),
+        "claim_key": row.claim_key.as_deref().map(inert_text),
+        "anchor_state_id": row.anchor_state_id,
+        "current_state_id": report.current_state_id,
+        "content": inert_text(&row.content),
+        "author_label": inert_text(&row.author_label),
+        "author_label_is_an_identity": false,
+        "created_at": row.created_at,
+        "supersedes_memory_id": row.supersedes_memory_id.as_deref().map(inert_text),
+        "superseded_by_memory_id": report.superseded_by.as_deref().map(inert_text),
+        "superseded_by_is_derived": true,
+        "invalidated_at": row.invalidated_at,
+        "invalidation_reason": row.invalidation_reason.as_deref().map(inert_text),
+        "citations": detail.citations.iter().map(memory_citation_json).collect::<Vec<_>>(),
+        "events": detail.events.iter().map(memory_event_json).collect::<Vec<_>>(),
+    })
+}
+
+/// One record as lines, carrying the same facts as [`memory_json`] in the same order.
+///
+/// Every human-supplied and repository-derived string goes through [`inert_text`], for the reason a
+/// commit summary does: a newline inside a note would forge a second line of Nerve's own output.
+fn print_memory(output: &Output, detail: &MemoryDetail) {
+    let report = &detail.report;
+    let row = &report.row;
+    output.line(format!(
+        "  {}  {} — {}",
+        inert_text(&row.memory_id),
+        row.status.as_str(),
+        row.status.note()
+    ));
+    for view in &report.views {
+        output.line(format!(
+            "    {:<14} {} — {} (derived at read time, never stored)",
+            "view",
+            view.as_str(),
+            view.note()
+        ));
+    }
+    output.line(format!(
+        "    {:<14} {} — {} {} at {}",
+        "subject",
+        inert_text(&row.subject.selector),
+        inert_text(&row.subject.kind),
+        inert_text(&row.subject.name),
+        if row.subject.path.is_empty() {
+            "(no file — the repository itself)".to_string()
+        } else {
+            inert_text(&row.subject.path)
+        }
+    ));
+    output.line(format!(
+        "    {:<14} {} — {}",
+        "resolution",
+        report.subject.resolution.as_str(),
+        report.subject.resolution.note()
+    ));
+    for live in &report.subject.live_entity_ids {
+        output.line(format!("    {:<14} {live}", "reaches"));
+    }
+    match row.scope.parse::<MemoryScope>() {
+        Ok(scope) => output.line(format!(
+            "    {:<14} {} — {}",
+            "scope",
+            scope.as_str(),
+            scope.note()
+        )),
+        Err(_) => output.line(format!("    {:<14} {}", "scope", inert_text(&row.scope))),
+    }
+    output.line(format!(
+        "    {:<14} {}",
+        "claim_key",
+        match &row.claim_key {
+            Some(key) => inert_text(key),
+            None => "(none — this record answers no named claim and competes with nothing)".into(),
+        }
+    ));
+    output.line(format!(
+        "    {:<14} {} (current {})",
+        "anchor_state",
+        row.anchor_state_id,
+        report
+            .current_state_id
+            .as_deref()
+            .unwrap_or("none — nothing has been indexed here")
+    ));
+    if let Some(predecessor) = &row.supersedes_memory_id {
+        output.line(format!(
+            "    {:<14} {}",
+            "supersedes",
+            inert_text(predecessor)
+        ));
+    }
+    if let Some(successor) = &report.superseded_by {
+        output.line(format!(
+            "    {:<14} {} (derived from the one stored direction, never a second column)",
+            "superseded_by",
+            inert_text(successor)
+        ));
+    }
+    if let Some(at) = &row.invalidated_at {
+        output.line(format!("    {:<14} {at}", "invalidated_at"));
+    }
+    output.line(format!(
+        "    {:<14} {}",
+        "reason",
+        match &row.invalidation_reason {
+            Some(reason) => inert_text(reason),
+            None => "(none)".to_string(),
+        }
+    ));
+    output.line(format!(
+        "    {:<14} {} — a local label, not an identity: Nerve has no accounts and nothing \
+         verified this",
+        "author",
+        inert_text(&row.author_label)
+    ));
+    output.line(format!("    {:<14} {}", "created_at", row.created_at));
+    output.line(format!(
+        "    {:<14} {}",
+        "content",
+        inert_text(&row.content)
+    ));
+    if detail.citations.is_empty() {
+        output.line(format!(
+            "    {:<14} {}",
+            "citations", "(none — this record cites no passage)"
+        ));
+    }
+    for citation in &detail.citations {
+        output.line(format!(
+            "    {:<14} #{}  {}{}  at {}",
+            "citation",
+            citation.citation_id.unwrap_or_default(),
+            inert_text(&citation.cited_path),
+            match &citation.cited_span {
+                Some(span) => format!(":{}", inert_text(span)),
+                None => " (whole file)".to_string(),
+            },
+            citation.cited_at_state
+        ));
+    }
+    if detail.events.is_empty() {
+        output.line(format!(
+            "    {:<14} {}",
+            "events", "(none recorded — this record's history begins with what is above)"
+        ));
+    }
+    for event in &detail.events {
+        output.line(format!(
+            "    {:<14} #{}  {:<12} {} → {}  {}",
+            "event",
+            event.event_id.unwrap_or_default(),
+            event.operation.as_str(),
+            event
+                .from_status
+                .map(|status| status.as_str())
+                .unwrap_or("(none)"),
+            event.to_status.as_str(),
+            match &event.note {
+                Some(note) => inert_text(note),
+                None => String::new(),
+            }
+        ));
+    }
+}
+
+/// The object every memory command prints under `--json`.
+fn memory_object(
+    output: &Output,
+    command: &'static str,
+    root: &Path,
+    records: Vec<serde_json::Value>,
+) {
+    output.object(json!({
+        "command": command,
+        "ok": true,
+        "root": root.display().to_string(),
+        "count": records.len(),
+        "records": records,
+    }));
+}
+
+/// Print a whole answer: the records, then the JSON object carrying the same facts.
+fn render_memory(output: &Output, command: &'static str, root: &Path, details: &[MemoryDetail]) {
+    for detail in details {
+        print_memory(output, detail);
+    }
+    memory_object(
+        output,
+        command,
+        root,
+        details.iter().map(memory_json).collect(),
+    );
+}
+
+/// `nerve memory propose`'s arguments.
+struct MemoryProposeArguments {
+    subject: String,
+    scope: String,
+    content: String,
+    claim_key: Option<String>,
+    author: Option<String>,
+    id: Option<String>,
+}
+
+/// `nerve memory supersede`'s arguments.
+struct MemorySupersedeArguments {
+    predecessor_id: String,
+    content: String,
+    scope: Option<String>,
+    claim_key: Option<String>,
+    author: Option<String>,
+    id: Option<String>,
+    note: Option<String>,
+}
+
+/// `nerve memory list`'s filters.
+struct MemoryListArguments {
+    scope: Option<String>,
+    subject: Option<String>,
+    status: Option<String>,
+}
+
+/// The default `author_label`.
+///
+/// Deliberately not the operating-system user name. Nerve has no accounts, and a field defaulting
+/// to something identity-shaped invites being read as authentication — which is the reading the
+/// column's own documentation exists to refuse.
+const DEFAULT_AUTHOR_LABEL: &str = "local";
+
+/// Refuse a value the schema would refuse anyway, but at the point of entry and by name.
+///
+/// A `CHECK` failing is a correct outcome with an unhelpful sentence: *"CHECK constraint failed"*
+/// does not say which field was empty or why an empty one is not a value.
+fn refuse_empty(
+    output: &Output,
+    command: &'static str,
+    field: &str,
+    value: &str,
+    because: &str,
+) -> Option<i32> {
+    if !value.trim().is_empty() {
+        return None;
+    }
+    Some(output.failure_detail(
+        command,
+        exit::USAGE,
+        &format!("{field} is empty, and {because}"),
+        &["  nothing was written; this is a refusal, not a partial result".to_string()],
+        json!({ "field": field }),
+    ))
+}
+
+fn run_memory_propose(output: &Output, path: &Path, arguments: MemoryProposeArguments) -> i32 {
+    const COMMAND: &str = "memory propose";
+    let scope = match parse_memory_scope(&arguments.scope) {
+        Ok(scope) => scope,
+        Err(message) => return output.failure(COMMAND, exit::USAGE, &message),
+    };
+    if let Some(code) = refuse_empty(
+        output,
+        COMMAND,
+        "--content",
+        &arguments.content,
+        "a note that says nothing is not a note",
+    ) {
+        return code;
+    }
+    if let Some(key) = &arguments.claim_key {
+        if let Some(code) = refuse_empty(
+            output,
+            COMMAND,
+            "--claim-key",
+            key,
+            "an empty key would gather every keyless record into one competing claim and report \
+             ordinary notes as contradictions",
+        ) {
+            return code;
+        }
+    }
+
+    let (opened, repo_id) = match open_registry(output, COMMAND, path, true) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    let anchor = match memory_anchor(output, COMMAND, &opened.conn, &repo_id) {
+        Ok(anchor) => anchor,
+        Err(code) => return code,
+    };
+    let resolution = match resolve_one(output, COMMAND, &opened.conn, "subject", &arguments.subject)
+    {
+        Ok(resolution) => resolution,
+        Err(code) => return code,
+    };
+
+    let entity = &resolution.entity;
+    let row = nerve_store::MemoryRow {
+        memory_id: arguments.id.unwrap_or_else(generated_memory_id),
+        subject: nerve_store::MemorySubject {
+            entity_id: entity.entity_id.clone(),
+            kind: entity.kind.clone(),
+            name: entity.name.clone(),
+            // Empty for an entity no path names — the repository itself is not a file, and the
+            // column records that honestly rather than inventing a location for it.
+            path: entity.repository_path().unwrap_or_default(),
+            // Verbatim. Re-deriving it from the fields above would silently rewrite what the human
+            // asked about.
+            selector: arguments.subject.clone(),
+        },
+        anchor_state_id: anchor,
+        scope: scope.as_str().to_string(),
+        claim_key: arguments.claim_key,
+        content: arguments.content,
+        author_label: arguments
+            .author
+            .unwrap_or_else(|| DEFAULT_AUTHOR_LABEL.to_string()),
+        created_at: String::new(),
+        // Ignored by `propose_memory`, which enters the record at `proposed` because that is what
+        // proposing is. Stated here rather than left to a default so the two agree in the source.
+        status: MemoryStatus::Proposed,
+        supersedes_memory_id: None,
+        invalidated_at: None,
+        invalidation_reason: None,
+    };
+
+    let written = match nerve_store::propose_memory(&opened.conn, &repo_id, &row) {
+        Ok(written) => written,
+        Err(err) => return output.failure(COMMAND, memory_exit_code(&err), &err.to_string()),
+    };
+    let detail = match memory_detail(output, COMMAND, &opened.conn, &repo_id, &written.memory_id) {
+        Ok(detail) => detail,
+        Err(code) => return code,
+    };
+    output.line(format!(
+        "Proposed {} in {}",
+        inert_text(&written.memory_id),
+        opened.root.display()
+    ));
+    output.line(format!(
+        "  confirm it with `nerve memory confirm {}` — nothing treats a proposal as settled",
+        inert_text(&written.memory_id)
+    ));
+    render_memory(output, COMMAND, &opened.root, &[detail]);
+    exit::SUCCESS
+}
+
+fn run_memory_confirm(output: &Output, path: &Path, memory_id: &str, note: Option<&str>) -> i32 {
+    const COMMAND: &str = "memory confirm";
+    let (opened, repo_id) = match open_registry(output, COMMAND, path, true) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    if let Err(err) = nerve_store::confirm_memory(&opened.conn, &repo_id, memory_id, note) {
+        return output.failure(COMMAND, memory_exit_code(&err), &err.to_string());
+    }
+    let detail = match memory_detail(output, COMMAND, &opened.conn, &repo_id, memory_id) {
+        Ok(detail) => detail,
+        Err(code) => return code,
+    };
+    output.line(format!(
+        "Confirmed {} in {}",
+        inert_text(memory_id),
+        opened.root.display()
+    ));
+    render_memory(output, COMMAND, &opened.root, &[detail]);
+    exit::SUCCESS
+}
+
+fn run_memory_supersede(output: &Output, path: &Path, arguments: MemorySupersedeArguments) -> i32 {
+    const COMMAND: &str = "memory supersede";
+    if let Some(code) = refuse_empty(
+        output,
+        COMMAND,
+        "--content",
+        &arguments.content,
+        "a replacement that says nothing replaces nothing",
+    ) {
+        return code;
+    }
+    let scope = match arguments
+        .scope
+        .as_deref()
+        .map(parse_memory_scope)
+        .transpose()
+    {
+        Ok(scope) => scope,
+        Err(message) => return output.failure(COMMAND, exit::USAGE, &message),
+    };
+
+    let (opened, repo_id) = match open_registry(output, COMMAND, path, true) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    let anchor = match memory_anchor(output, COMMAND, &opened.conn, &repo_id) {
+        Ok(anchor) => anchor,
+        Err(code) => return code,
+    };
+    // Read first, because the successor inherits the predecessor's subject: a replacement about a
+    // different subject would not be a replacement. The store reads it again inside its own
+    // transaction and refuses on what it finds there, so this read decides nothing.
+    let predecessor = match nerve_store::memory(&opened.conn, &repo_id, &arguments.predecessor_id) {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            return output.failure_detail(
+                COMMAND,
+                exit::USAGE,
+                &format!(
+                    "no memory record {} in this repository",
+                    inert_text(&arguments.predecessor_id)
+                ),
+                &["  nothing was written; this is a refusal, not a partial result".to_string()],
+                json!({ "memory_id": inert_text(&arguments.predecessor_id) }),
+            )
+        }
+        Err(err) => return output.failure(COMMAND, memory_exit_code(&err), &err.to_string()),
+    };
+
+    let successor = nerve_store::MemoryRow {
+        memory_id: arguments.id.unwrap_or_else(generated_memory_id),
+        subject: predecessor.subject.clone(),
+        anchor_state_id: anchor,
+        scope: scope
+            .map(|scope| scope.as_str().to_string())
+            .unwrap_or_else(|| predecessor.scope.clone()),
+        claim_key: arguments
+            .claim_key
+            .or_else(|| predecessor.claim_key.clone()),
+        content: arguments.content,
+        author_label: arguments
+            .author
+            .unwrap_or_else(|| DEFAULT_AUTHOR_LABEL.to_string()),
+        created_at: String::new(),
+        // The successor enters `proposed`. `confirm_memory` is the only door into `active`, and a
+        // record inserted straight into it would be confirmed with nothing in its history saying
+        // so.
+        status: MemoryStatus::Proposed,
+        supersedes_memory_id: Some(arguments.predecessor_id.clone()),
+        invalidated_at: None,
+        invalidation_reason: None,
+    };
+
+    let written = match nerve_store::supersede_memory(
+        &opened.conn,
+        &repo_id,
+        &successor,
+        nerve_core::vocab::MemoryOperation::Superseded,
+        arguments.note.as_deref(),
+    ) {
+        Ok(written) => written,
+        Err(err) => return output.failure(COMMAND, memory_exit_code(&err), &err.to_string()),
+    };
+
+    // Both records are shown, in the order the change happened: what was retired, then what
+    // replaced it. Printing only the successor would leave the caller to check for themselves that
+    // the predecessor is intact, which is the property this verb is most often distrusted about.
+    let mut reports = Vec::new();
+    for id in [&arguments.predecessor_id, &written.memory_id] {
+        match nerve_store::read_memory(&opened.conn, &repo_id, id) {
+            // The write committed, so both rows are there. A `None` here would mean the database
+            // moved under the transaction that just returned, which is reported rather than
+            // quietly leaving one of the two records out of the answer.
+            Ok(Some(report)) => reports.push(report),
+            Ok(None) => {
+                return output.failure(
+                    COMMAND,
+                    exit::INTERNAL,
+                    &format!("{} was written and could not be read back", inert_text(id)),
+                )
+            }
+            Err(err) => return output.failure(COMMAND, memory_exit_code(&err), &err.to_string()),
+        }
+    }
+    let details = match memory_details(&opened.conn, &repo_id, reports) {
+        Ok(details) => details,
+        Err(err) => return output.failure(COMMAND, memory_exit_code(&err), &err.to_string()),
+    };
+    output.line(format!(
+        "Superseded {} with {} in {}",
+        inert_text(&arguments.predecessor_id),
+        inert_text(&written.memory_id),
+        opened.root.display()
+    ));
+    output.line(format!(
+        "  confirm it with `nerve memory confirm {}` — the successor enters as a proposal, like \
+         every other note",
+        inert_text(&written.memory_id)
+    ));
+    render_memory(output, COMMAND, &opened.root, &details);
+    exit::SUCCESS
+}
+
+fn run_memory_invalidate(
+    output: &Output,
+    path: &Path,
+    memory_id: &str,
+    reason: Option<&str>,
+    note: Option<&str>,
+) -> i32 {
+    const COMMAND: &str = "memory invalidate";
+    let (opened, repo_id) = match open_registry(output, COMMAND, path, true) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    if let Err(err) =
+        nerve_store::invalidate_memory(&opened.conn, &repo_id, memory_id, reason, note)
+    {
+        return output.failure(COMMAND, memory_exit_code(&err), &err.to_string());
+    }
+    let detail = match memory_detail(output, COMMAND, &opened.conn, &repo_id, memory_id) {
+        Ok(detail) => detail,
+        Err(code) => return code,
+    };
+    output.line(format!(
+        "Invalidated {} in {} — it stopped being true and nothing replaced it",
+        inert_text(memory_id),
+        opened.root.display()
+    ));
+    render_memory(output, COMMAND, &opened.root, &[detail]);
+    exit::SUCCESS
+}
+
+/// Refuse a `--file` that is not a repository-relative path.
+///
+/// An absolute path would put one machine's directory layout inside a record meant to be exported
+/// and read elsewhere, and a `..` segment names something outside the repository the citation
+/// claims to be about. Neither is narrowed to a guess.
+fn check_cited_path(output: &Output, command: &'static str, file: &str) -> Option<i32> {
+    let refusal = if file.trim().is_empty() {
+        Some("a citation with no place is not a citation")
+    } else if Path::new(file).is_absolute() || file.starts_with('/') {
+        Some(
+            "a citation is repository-relative; an absolute path records one machine's layout \
+             inside a record meant to outlive it",
+        )
+    } else if Path::new(file)
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        Some("a `..` segment names something outside the repository this record is about")
+    } else {
+        None
+    }?;
+    Some(output.failure_detail(
+        command,
+        exit::USAGE,
+        &format!("{} is refused: {refusal}", inert_text(file)),
+        &["  nothing was written; this is a refusal, not a partial result".to_string()],
+        json!({ "file": inert_text(file), "reason": refusal }),
+    ))
+}
+
+/// Parse `--span`, which is `START:END` and nothing else.
+fn parse_cited_span(span: &str) -> Result<String, String> {
+    let malformed =
+        || format!("--span {span:?} is not START:END, where both are line numbers from 1");
+    let (start, end) = span.split_once(':').ok_or_else(malformed)?;
+    let start: u32 = start.trim().parse().map_err(|_| malformed())?;
+    let end: u32 = end.trim().parse().map_err(|_| malformed())?;
+    if start == 0 || end < start {
+        return Err(format!(
+            "--span {span:?} does not name a range: lines are numbered from 1 and the end may not \
+             precede the start"
+        ));
+    }
+    Ok(format!("{start}:{end}"))
+}
+
+fn run_memory_cite(
+    output: &Output,
+    path: &Path,
+    memory_id: &str,
+    file: &str,
+    span: Option<&str>,
+    note: Option<&str>,
+) -> i32 {
+    const COMMAND: &str = "memory cite";
+    if let Some(code) = check_cited_path(output, COMMAND, file) {
+        return code;
+    }
+    let span = match span.map(parse_cited_span).transpose() {
+        Ok(span) => span,
+        Err(message) => return output.failure(COMMAND, exit::USAGE, &message),
+    };
+
+    let (opened, repo_id) = match open_registry(output, COMMAND, path, true) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    let state = match memory_anchor(output, COMMAND, &opened.conn, &repo_id) {
+        Ok(state) => state,
+        Err(code) => return code,
+    };
+
+    // The cited entity is deliberately left unnamed. Slice 14a ships the citation's durable
+    // snapshot and defers its resolution verdict, so naming an entity here would be a claim no
+    // reader could re-check — a path and a span are what the human pointed at, and they are what is
+    // recorded.
+    let citation = nerve_store::MemoryCitationRow {
+        citation_id: None,
+        memory_id: memory_id.to_string(),
+        cited_entity_id: None,
+        cited_kind: None,
+        cited_name: None,
+        cited_path: file.to_string(),
+        cited_span: span,
+        cited_at_state: state,
+        created_at: String::new(),
+    };
+    let citation_id = match nerve_store::cite_memory(&opened.conn, &repo_id, &citation, note) {
+        Ok(citation_id) => citation_id,
+        Err(err) => return output.failure(COMMAND, memory_exit_code(&err), &err.to_string()),
+    };
+    let detail = match memory_detail(output, COMMAND, &opened.conn, &repo_id, memory_id) {
+        Ok(detail) => detail,
+        Err(code) => return code,
+    };
+    output.line(format!(
+        "Cited {} on {} — a citation changes no status",
+        inert_text(file),
+        inert_text(memory_id)
+    ));
+    output.line(format!("  citation_id    #{citation_id}"));
+    render_memory(output, COMMAND, &opened.root, &[detail]);
+    exit::SUCCESS
+}
+
+fn run_memory_list(output: &Output, path: &Path, arguments: MemoryListArguments) -> i32 {
+    const COMMAND: &str = "memory list";
+    let scope = match arguments
+        .scope
+        .as_deref()
+        .map(parse_memory_scope)
+        .transpose()
+    {
+        Ok(scope) => scope,
+        Err(message) => return output.failure(COMMAND, exit::USAGE, &message),
+    };
+    let status = match arguments
+        .status
+        .as_deref()
+        .map(parse_memory_status)
+        .transpose()
+    {
+        Ok(status) => status,
+        Err(message) => return output.failure(COMMAND, exit::USAGE, &message),
+    };
+
+    let (opened, repo_id) = match open_registry(output, COMMAND, path, false) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+
+    let subject = match arguments.subject.as_deref() {
+        Some(selector) => match resolve_one(output, COMMAND, &opened.conn, "subject", selector) {
+            Ok(resolution) => Some(resolution.entity.entity_id),
+            Err(code) => return code,
+        },
+        None => None,
+    };
+
+    let reports = match (&subject, scope) {
+        (Some(entity_id), _) => {
+            nerve_store::read_memory_for_subject(&opened.conn, &repo_id, entity_id)
+        }
+        (None, Some(scope)) => {
+            nerve_store::read_memory_in_scope(&opened.conn, &repo_id, scope.as_str())
+        }
+        (None, None) => nerve_store::read_memory_all(&opened.conn, &repo_id),
+    };
+    let mut reports = match reports {
+        Ok(reports) => reports,
+        Err(err) => return output.failure(COMMAND, memory_exit_code(&err), &err.to_string()),
+    };
+    // The remaining filters are applied over the rows the store returned. Filtering a list is
+    // rendering; the queries themselves stay in `nerve-store`.
+    if let Some(scope) = scope {
+        reports.retain(|report| report.row.scope == scope.as_str());
+    }
+    if let Some(status) = status {
+        reports.retain(|report| report.row.status == status);
+    }
+
+    let details = match memory_details(&opened.conn, &repo_id, reports) {
+        Ok(details) => details,
+        Err(err) => return output.failure(COMMAND, memory_exit_code(&err), &err.to_string()),
+    };
+    if details.is_empty() {
+        output.line(format!(
+            "No memory records in {} matching this question",
+            opened.root.display()
+        ));
+        output.line(
+            "  memory         empty — nothing is written here except by `nerve memory propose`; \
+             this is an absence, and every filter above was accepted",
+        );
+    } else {
+        output.line(format!(
+            "{} memory record(s) in {}",
+            details.len(),
+            opened.root.display()
+        ));
+    }
+    render_memory(output, COMMAND, &opened.root, &details);
+    exit::SUCCESS
+}
+
+fn run_memory_show(output: &Output, path: &Path, memory_id: &str) -> i32 {
+    const COMMAND: &str = "memory show";
+    let (opened, repo_id) = match open_registry(output, COMMAND, path, false) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    let detail = match memory_detail(output, COMMAND, &opened.conn, &repo_id, memory_id) {
+        Ok(detail) => detail,
+        Err(code) => return code,
+    };
+    render_memory(output, COMMAND, &opened.root, &[detail]);
+    exit::SUCCESS
+}
+
+fn run_memory_search(output: &Output, path: &Path, query: &str) -> i32 {
+    const COMMAND: &str = "memory search";
+    let (opened, repo_id) = match open_registry(output, COMMAND, path, false) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    let reports = match nerve_store::search_memory(&opened.conn, &repo_id, query) {
+        Ok(reports) => reports,
+        Err(err) => return output.failure(COMMAND, memory_exit_code(&err), &err.to_string()),
+    };
+    let details = match memory_details(&opened.conn, &repo_id, reports) {
+        Ok(details) => details,
+        Err(err) => return output.failure(COMMAND, memory_exit_code(&err), &err.to_string()),
+    };
+    if details.is_empty() {
+        output.line(format!(
+            "No memory record in {} contains {}",
+            opened.root.display(),
+            inert_text(query)
+        ));
+        output.line(
+            "  search         literal substring over content and claim key; the subject snapshot \
+             is not searched, so a path finds nothing here by design",
+        );
+    } else {
+        output.line(format!(
+            "{} memory record(s) contain {}",
+            details.len(),
+            inert_text(query)
+        ));
+    }
+    render_memory(output, COMMAND, &opened.root, &details);
+    exit::SUCCESS
+}
+
+fn run_memory_events(output: &Output, path: &Path, memory_id: &str) -> i32 {
+    const COMMAND: &str = "memory events";
+    let (opened, repo_id) = match open_registry(output, COMMAND, path, false) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    let detail = match memory_detail(output, COMMAND, &opened.conn, &repo_id, memory_id) {
+        Ok(detail) => detail,
+        Err(code) => return code,
+    };
+    output.line(format!(
+        "{} event(s) for {} — every one ever appended, oldest first",
+        detail.events.len(),
+        inert_text(memory_id)
+    ));
+    render_memory(output, COMMAND, &opened.root, &[detail]);
+    exit::SUCCESS
+}
+
+/// The exported form of one record.
+///
+/// **Stored columns only.** `potentially_stale`, `conflicted`, `multiple_active`, the subject's
+/// current resolution and the repository's current state are all query-time verdicts, and exporting
+/// one as though it were stored is exactly the confusion the read/stored split exists to prevent: a
+/// file saying `potentially_stale` would be a derived value with no query behind it, kept true by
+/// nothing.
+///
+/// `anchor_state_id` **is** here, because it is a column rather than a verdict — and it is the one
+/// the staleness of every re-imported record would be re-derived against.
+fn memory_export_record(detail: &MemoryDetail) -> serde_json::Value {
+    let row = &detail.report.row;
+    json!({
+        "memory_id": row.memory_id,
+        "subject": {
+            "entity_id": row.subject.entity_id,
+            "kind": row.subject.kind,
+            "name": row.subject.name,
+            "path": row.subject.path,
+            "selector": row.subject.selector,
+        },
+        "anchor_state_id": row.anchor_state_id,
+        "scope": row.scope,
+        "claim_key": row.claim_key,
+        "content": row.content,
+        "author_label": row.author_label,
+        "created_at": row.created_at,
+        "status": row.status.as_str(),
+        "supersedes_memory_id": row.supersedes_memory_id,
+        "invalidated_at": row.invalidated_at,
+        "invalidation_reason": row.invalidation_reason,
+        "citations": detail
+            .citations
+            .iter()
+            .map(|citation| json!({
+                "citation_id": citation.citation_id,
+                "cited_entity_id": citation.cited_entity_id,
+                "cited_kind": citation.cited_kind,
+                "cited_name": citation.cited_name,
+                "cited_path": citation.cited_path,
+                "cited_span": citation.cited_span,
+                "cited_at_state": citation.cited_at_state,
+                "created_at": citation.created_at,
+            }))
+            .collect::<Vec<_>>(),
+        "events": detail
+            .events
+            .iter()
+            .map(|event| json!({
+                "event_id": event.event_id,
+                "at": event.at,
+                "operation": event.operation.as_str(),
+                "from_status": event.from_status.map(|status| status.as_str()),
+                "to_status": event.to_status.as_str(),
+                "note": event.note,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// The whole export, as one document.
+///
+/// Three omissions, each deliberate and each with a test behind it.
+///
+/// 1. **No timestamp of the export itself.** The same database must export byte-identically twice,
+///    and an `exported_at` field would break exactly that — a determinism claim that fails on the
+///    only field nobody needed.
+/// 2. **No derived state.** See [`memory_export_record`].
+/// 3. **No absolute path.** Every path here is a repository-relative snapshot, so the document says
+///    nothing about the machine it was written on and can be read on another.
+///
+/// Key order is not sorted by hand: `serde_json`'s map is a `BTreeMap` in this build, so keys
+/// serialise in sorted order, and a test asserts that rather than trusting it. Records are ordered
+/// by `memory_id`, citations by `citation_id` and events by `event_id` — all three of which the
+/// store's own ordering already guarantees.
+fn memory_export_document(repo_id: &str, details: &[MemoryDetail]) -> serde_json::Value {
+    json!({
+        "format": "nerve-memory-export",
+        "format_version": 1,
+        "schema_version": nerve_store::SCHEMA_VERSION,
+        "repo_id": repo_id,
+        "record_count": details.len(),
+        "records": details.iter().map(memory_export_record).collect::<Vec<_>>(),
+    })
+}
+
+fn run_memory_export(output: &Output, path: &Path, out: Option<&Path>) -> i32 {
+    const COMMAND: &str = "memory export";
+    let (opened, repo_id) = match open_registry(output, COMMAND, path, false) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    let reports = match nerve_store::read_memory_all(&opened.conn, &repo_id) {
+        Ok(reports) => reports,
+        Err(err) => return output.failure(COMMAND, memory_exit_code(&err), &err.to_string()),
+    };
+    let details = match memory_details(&opened.conn, &repo_id, reports) {
+        Ok(details) => details,
+        Err(err) => return output.failure(COMMAND, memory_exit_code(&err), &err.to_string()),
+    };
+    let document = memory_export_document(&repo_id, &details);
+    let Ok(text) = serde_json::to_string_pretty(&document) else {
+        return output.failure(
+            COMMAND,
+            exit::INTERNAL,
+            "the export could not be serialised",
+        );
+    };
+
+    match out {
+        Some(file) => {
+            if let Err(err) = std::fs::write(file, format!("{text}\n")) {
+                return output.failure(
+                    COMMAND,
+                    exit::INTERNAL,
+                    &format!("{}: {err}", file.display()),
+                );
+            }
+            output.line(format!(
+                "Exported {} record(s) from {} to {}",
+                details.len(),
+                opened.root.display(),
+                file.display()
+            ));
+            output.object(json!({
+                "command": COMMAND,
+                "ok": true,
+                "root": opened.root.display().to_string(),
+                "out": file.display().to_string(),
+                "format": "nerve-memory-export",
+                "format_version": 1,
+                "schema_version": nerve_store::SCHEMA_VERSION,
+                "repo_id": repo_id,
+                "record_count": details.len(),
+            }));
+        }
+        // With no `--out` the document **is** the answer, in both modes. There is no second,
+        // human-readable rendering of an export: one would be a second format nothing could read
+        // back, and the whole point of this command is that its output is exact.
+        None => println!("{text}"),
+    }
     exit::SUCCESS
 }
 

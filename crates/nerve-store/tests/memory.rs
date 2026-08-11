@@ -24,11 +24,12 @@ use nerve_core::vocab::{
     MemoryOperation, MemoryScope, MemoryStatus, MemorySubjectResolution, MemoryView,
 };
 use nerve_store::memory::{
-    append_memory_event, cite_memory, confirm_memory, insert_memory, insert_memory_citation,
-    invalidate_memory, list_memory, memory, memory_citations, memory_events, memory_for_subject,
-    memory_in_scope, propose_memory, read_memory, read_memory_all, read_memory_for_subject,
-    read_memory_in_scope, resolve_memory_subject, supersede_memory, superseded_by,
-    MemoryCitationRow, MemoryEventRow, MemoryRow, MemorySubject,
+    append_memory_event, cite_memory, confirm_memory, current_repository_state, insert_memory,
+    insert_memory_citation, invalidate_memory, list_memory, memory, memory_citations,
+    memory_events, memory_for_subject, memory_in_scope, propose_memory, read_memory,
+    read_memory_all, read_memory_for_subject, read_memory_in_scope, resolve_memory_subject,
+    search_memory, supersede_memory, superseded_by, MemoryCitationRow, MemoryEventRow, MemoryRow,
+    MemorySubject,
 };
 use nerve_store::{migrate, open_in_memory, Connection};
 
@@ -1022,7 +1023,9 @@ fn no_memory_operation_moves_a_single_byte_of_the_evidence_tables() {
     // The memory tables did fill up, so the invariant above is not holding because nothing happened.
     assert_eq!(scalar(&conn, "SELECT count(*) FROM memory"), 2);
     assert_eq!(scalar(&conn, "SELECT count(*) FROM memory_citation"), 1);
-    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory_event"), 2);
+    // Three, not two: a supersession writes the successor's creating event as well as the
+    // predecessor's `superseded` one. Two records change, so two events are recorded.
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory_event"), 3);
 }
 
 /// The control for the test above: a probe that *does* write evidence is caught.
@@ -1279,8 +1282,9 @@ fn every_refused_transition_leaves_all_three_tables_exactly_as_they_were() {
     // Anti-vacuity: there is a database here, so "unchanged" is a measurement.
     let before = memory_tables(&conn);
     assert!(before.contains("team A owns this"), "{before}");
-    // Three labels, three records, one citation and five events.
-    assert_eq!(before.lines().count(), 3 + 3 + 1 + 5, "{before}");
+    // Three labels, three records, one citation and six events. Six because a supersession
+    // appends two: the successor's creating event and the predecessor's `superseded` one.
+    assert_eq!(before.lines().count(), 3 + 3 + 1 + 6, "{before}");
 
     /// One refused call: what it is, how to make it, and the word its message must contain.
     ///
@@ -1487,7 +1491,9 @@ fn no_lifecycle_operation_moves_a_single_byte_of_the_evidence_tables() {
     // The memory tables did fill up, so the invariant is not holding because nothing happened.
     assert_eq!(scalar(&conn, "SELECT count(*) FROM memory"), 2);
     assert_eq!(scalar(&conn, "SELECT count(*) FROM memory_citation"), 1);
-    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory_event"), 5);
+    // Six, not five: a supersession appends the successor's creating event beside the
+    // predecessor's `superseded` one, so no record is left unable to say it was written.
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory_event"), 6);
 }
 
 /// The scope column holds only vocabulary values, and the database refuses anything else.
@@ -1545,6 +1551,126 @@ fn the_database_itself_refuses_a_scope_outside_the_vocabulary() {
             panic!("`{operation}` is a real operation and was refused: {error}")
         });
     }
+}
+
+// ---- the text search, and the anchor the surfaces read (Slice 14b-ii) --------------------------
+
+/// Search reads the two columns a human wrote, in either case, and reports the qualifications.
+#[test]
+fn search_matches_content_and_claim_key_case_insensitively() {
+    let conn = store();
+    propose_memory(
+        &conn,
+        "r",
+        &note("m1", Some("retry-policy"), "The retry budget is three"),
+    )
+    .unwrap();
+    propose_memory(&conn, "r", &note("m2", None, "nothing to do with budgets")).unwrap();
+    let mut elsewhere = note("m3", None, "The retry budget is three");
+    elsewhere.subject.entity_id = "local2".to_string();
+    elsewhere.anchor_state_id = "s2".to_string();
+    insert_memory(&conn, "r2", &elsewhere).unwrap();
+
+    let hits = search_memory(&conn, "r", "RETRY BUDGET").unwrap();
+    assert_eq!(
+        hits.iter()
+            .map(|h| h.row.memory_id.as_str())
+            .collect::<Vec<_>>(),
+        ["m1"],
+        "content is matched without regard to ASCII case, and only in this repository"
+    );
+
+    // The claim key is searched too: it is the other thing the human typed.
+    let by_key = search_memory(&conn, "r", "retry-policy").unwrap();
+    assert_eq!(by_key.len(), 1);
+    assert_eq!(by_key[0].row.memory_id, "m1");
+    // A hit carries the derived read, not a bare row.
+    assert_eq!(
+        by_key[0].subject.resolution,
+        MemorySubjectResolution::Resolved
+    );
+    assert_eq!(by_key[0].current_state_id.as_deref(), Some("s"));
+
+    // A record with no claim key is still reachable by its content, and the NULL column does not
+    // swallow the match.
+    assert_eq!(search_memory(&conn, "r", "budgets").unwrap().len(), 1);
+    assert!(search_memory(&conn, "r", "nothing at all here")
+        .unwrap()
+        .is_empty());
+}
+
+/// **A `%` or a `_` in a query is a character, not a wildcard.**
+///
+/// Unescaped, `%` matches every record — a false positive produced by punctuation, which is worse
+/// than no search. Both directions are asserted: the literal query finds only the literal record,
+/// and the record containing the wildcard is still findable by it.
+#[test]
+fn search_treats_like_wildcards_as_literal_text() {
+    let conn = store();
+    propose_memory(
+        &conn,
+        "r",
+        &note("m1", None, "the cache hit rate is 100% here"),
+    )
+    .unwrap();
+    propose_memory(&conn, "r", &note("m2", None, "an ordinary sentence")).unwrap();
+    propose_memory(&conn, "r", &note("m3", None, "the flag is named max_walk")).unwrap();
+    propose_memory(&conn, "r", &note("m4", None, "the flag is named maxXwalk")).unwrap();
+
+    let percent = search_memory(&conn, "r", "%").unwrap();
+    assert_eq!(
+        percent
+            .iter()
+            .map(|h| h.row.memory_id.as_str())
+            .collect::<Vec<_>>(),
+        ["m1"],
+        "`%` was treated as a wildcard and matched every record"
+    );
+    assert_eq!(search_memory(&conn, "r", "100%").unwrap().len(), 1);
+
+    let underscore = search_memory(&conn, "r", "max_walk").unwrap();
+    assert_eq!(
+        underscore
+            .iter()
+            .map(|h| h.row.memory_id.as_str())
+            .collect::<Vec<_>>(),
+        ["m3"],
+        "`_` was treated as a single-character wildcard and matched `maxXwalk`"
+    );
+
+    // The escape character itself is escaped, or a query ending in one would be a syntax error.
+    propose_memory(&conn, "r", &note("m5", None, r"a windows path C:\tmp")).unwrap();
+    assert_eq!(search_memory(&conn, "r", r"C:\tmp").unwrap().len(), 1);
+    assert!(search_memory(&conn, "r", "\\").unwrap().len() == 1);
+}
+
+/// The anchor a surface stamps into a new record is read off the latest run, and never re-derived.
+#[test]
+fn the_current_repository_state_is_the_latest_runs_state_or_nothing() {
+    let conn = store();
+    assert_eq!(
+        current_repository_state(&conn, "r").unwrap().as_deref(),
+        Some("s")
+    );
+    assert_eq!(
+        current_repository_state(&conn, "r2").unwrap().as_deref(),
+        Some("s2"),
+        "the anchor is scoped by repository"
+    );
+
+    reindex_to_later_state(&conn);
+    assert_eq!(
+        current_repository_state(&conn, "r").unwrap().as_deref(),
+        Some("s-later")
+    );
+
+    conn.execute("DELETE FROM extractor_run WHERE repo_id = 'r'", [])
+        .unwrap();
+    assert_eq!(
+        current_repository_state(&conn, "r").unwrap(),
+        None,
+        "a repository nothing has indexed has no state, and that is not an empty string"
+    );
 }
 
 // ---- the source scans --------------------------------------------------------------------------

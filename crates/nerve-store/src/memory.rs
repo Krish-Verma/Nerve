@@ -442,6 +442,35 @@ pub fn supersede_memory(
 
     let written = insert_memory(&tx, repo_id, successor)?;
 
+    // The successor gets its **own** creating event, and it is not optional.
+    //
+    // Slice 14b-ii found this missing and it was a real hole: this function reached
+    // [`insert_memory`] — the raw writer, which appends nothing — so a record born by supersession
+    // arrived with an **empty audit history**, while an otherwise identical record born by
+    // [`propose_memory`] arrived with a `proposed` event. `nerve memory events <successor>` then
+    // printed nothing, and the record could not say it had ever been written. That is the same
+    // defect as a status change without its event, one table over, and §4's *"every mutating
+    // lifecycle operation appends a typed event"* does not carve out the operation that creates a
+    // record.
+    //
+    // `from_status` is `None` for the reason it is in [`propose_memory`]: there was no prior
+    // status. The event is the successor's, and the `superseded` event appended below is the
+    // predecessor's — two records change here, so two events are recorded, and reading either
+    // record's history now tells the whole of what happened to it.
+    append_memory_event(
+        &tx,
+        repo_id,
+        &MemoryEventRow {
+            event_id: None,
+            memory_id: successor.memory_id.clone(),
+            at: String::new(),
+            operation,
+            from_status: None,
+            to_status: written.status,
+            note: note.map(str::to_string),
+        },
+    )?;
+
     let changed = tx.execute(
         "UPDATE memory SET status = ?3
           WHERE repo_id = ?1 AND memory_id = ?2 AND status = ?4",
@@ -784,6 +813,54 @@ pub fn memory_in_scope(conn: &Connection, repo_id: &str, scope: &str) -> Result<
     )
 }
 
+/// The `LIKE` pattern that matches one literal substring.
+///
+/// `%` and `_` are `LIKE`'s two wildcards and `\` is the escape character the statement names, so
+/// all three are escaped here. A human searching for `100%` means those four characters, and a
+/// pattern that let the `%` through would match **every** record and report the lot as hits — a
+/// false positive produced by punctuation, which is worse than no search at all.
+fn like_contains_pattern(query: &str) -> String {
+    let mut out = String::with_capacity(query.len() + 2);
+    out.push('%');
+    for character in query.chars() {
+        if matches!(character, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(character);
+    }
+    out.push('%');
+    out
+}
+
+/// Every record whose `content` or `claim_key` contains `query`, each with its qualifications.
+///
+/// A substring match over the two columns a human wrote, and deliberately not over the subject
+/// snapshot: a search that also matched paths would answer *"records near this file"* with the same
+/// result set as *"records that say this"*, and the caller could not tell which question was
+/// answered. Subject is already its own lookup — [`read_memory_for_subject`].
+///
+/// **Case-insensitive for ASCII only.** That is SQLite's `LIKE` without ICU, and the limit is
+/// stated rather than hidden: a query containing non-ASCII letters matches case-sensitively.
+/// Nothing here folds case itself, because `lower()` is ASCII-only too and doing it twice would
+/// look like a promise this can keep.
+///
+/// Ordered by `memory_id`, like every other read here, and retired records are included for the
+/// reason [`memory`] returns them: *"what did we once believe"* is exactly the question a search
+/// over a superseded sentence answers.
+pub fn search_memory(conn: &Connection, repo_id: &str, query: &str) -> Result<Vec<MemoryReport>> {
+    let rows = collect_memory(
+        conn,
+        &format!(
+            "SELECT {MEMORY_COLUMNS} FROM memory
+              WHERE repo_id = ?1
+                AND (content LIKE ?2 ESCAPE '\\' OR claim_key LIKE ?2 ESCAPE '\\')
+              ORDER BY memory_id"
+        ),
+        params![repo_id, like_contains_pattern(query)],
+    )?;
+    reports(conn, repo_id, rows)
+}
+
 fn collect_memory(
     conn: &Connection,
     sql: &str,
@@ -861,7 +938,14 @@ pub fn superseded_by(conn: &Connection, repo_id: &str, memory_id: &str) -> Resul
 /// it from. `None` means nothing has been indexed, and every subject verdict then becomes
 /// [`MemorySubjectResolution::RepositoryStateUnavailable`] rather than
 /// [`MemorySubjectResolution::Missing`] — unknown is not an absence.
-fn current_state_id(conn: &Connection, repo_id: &str) -> Result<Option<String>> {
+///
+/// **Public because the surfaces need the anchor and must not re-derive it.** `nerve memory
+/// propose` stamps this value into `anchor_state_id`, and a second derivation on the CLI side
+/// would be a second answer to *"which state does this database describe?"* — the duplication
+/// Slice 12c-i-a existed to remove. A caller that gets `None` has a repository nothing has indexed,
+/// and a note anchored to nothing has no staleness to derive, so proposing one is refused there
+/// rather than anchored to a state invented here.
+pub fn current_repository_state(conn: &Connection, repo_id: &str) -> Result<Option<String>> {
     Ok(conn
         .query_row(
             "SELECT s.state_id
@@ -1002,7 +1086,7 @@ pub fn resolve_memory_subject(
     repo_id: &str,
     subject_entity_id: &str,
 ) -> Result<MemorySubjectReport> {
-    let current = current_state_id(conn, repo_id)?;
+    let current = current_repository_state(conn, repo_id)?;
     resolve_with_state(conn, repo_id, subject_entity_id, current.as_deref())
 }
 
@@ -1064,7 +1148,7 @@ pub fn read_memory(
     let Some(row) = memory(conn, repo_id, memory_id)? else {
         return Ok(None);
     };
-    let current = current_state_id(conn, repo_id)?;
+    let current = current_repository_state(conn, repo_id)?;
     let groups = ActiveGroups::load(conn, repo_id)?;
     Ok(Some(report(
         conn,
@@ -1103,7 +1187,7 @@ pub fn read_memory_in_scope(
 }
 
 fn reports(conn: &Connection, repo_id: &str, rows: Vec<MemoryRow>) -> Result<Vec<MemoryReport>> {
-    let current = current_state_id(conn, repo_id)?;
+    let current = current_repository_state(conn, repo_id)?;
     let groups = ActiveGroups::load(conn, repo_id)?;
     // One resolution per *distinct* subject, so a hundred notes about one file cost one lookup.
     let mut resolved: BTreeMap<String, MemorySubjectReport> = BTreeMap::new();

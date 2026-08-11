@@ -267,7 +267,11 @@ fn memory_operations_leave_the_indexer_s_evidence_byte_identical() {
         "a memory operation moved the evidence tables"
     );
     assert_eq!(scalar(&conn, "SELECT count(*) FROM memory"), 2);
-    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory_event"), 1);
+    // Two, not one: a supersession appends the successor's creating event as well as the
+    // predecessor's `superseded` one. Two records change, so two events are recorded — and the
+    // point of this floor is unchanged, that the memory tables really did fill up, so the
+    // byte-identical claim above is a measurement rather than a comparison of two empty sets.
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM memory_event"), 2);
 }
 
 /// A re-index that changes nothing leaves the note resolving exactly as it did.
