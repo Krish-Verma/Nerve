@@ -169,10 +169,25 @@ of machine observations.
 
 These are **gaps, not refusals**, and they are the functional UI parity phase's worklist:
 
-1. **Impact** has no UI view.
-2. **Selector alternatives** are not rendered when a selector is ambiguous.
-3. **Trace / test-observed-call evidence** has no dedicated UI surface.
-4. **`check`'s trust verdict** is not on HTTP, MCP or the UI.
+1. ~~**Impact** has no UI view.~~ **CLOSED `e13af61`** — `views/Impact.tsx`, with the unresolved
+   account rendered **unconditionally and above the results**, because on `ts-basic` `add` has 3
+   dependants beside 4 unresolved sites and a view that hides the caveat hides something larger
+   than the answer.
+2. ~~**Selector alternatives** are not rendered when a selector is ambiguous.~~ **CLOSED
+   `e13af61`** — and the framing here was wrong twice over. It is not about *ambiguity*: an
+   ambiguous selector is a `409` refusal with every candidate attached, which was already
+   rendered. The unrendered case is a selector that **resolved** — one path with two readings,
+   where the server's rule is *content wins, container is reported*. And the "alternatives"
+   already named in `Search.tsx:182` (query widenings) and `Path.tsx:61` (the failure picker) are
+   a **different concept**; the string `selectors` appeared nowhere in the interface before.
+3. ~~**Trace / test-observed-call evidence** has no dedicated UI surface.~~ **CLOSED `e13af61`,
+   and it needed no new route** — Entry 5 of the handoff says so and the code agrees: trace
+   observations are ordinary observations reachable through `/api/why` and `/api/entity`. The real
+   defect was rendering — `Evidence.tsx` printed `observation.environment`, a JSON document in a
+   text column, as a raw string. Acceptance now asserts `/api/trace`, `/api/traces` and
+   `/api/trace/runs` all 404, so "no route" is a checked claim rather than an omission.
+4. **`check`'s trust verdict** is not on HTTP, MCP or the UI. **Still open, and it is a full
+   vertical slice rather than the UI-only gap this line implies: there is no `/api/check` route.**
 5. **Keyboard navigation** — tested 2026-08-08 with `scripts/viewport_qa.mjs`'s sibling keyboard
    probe (real `Input.dispatchKeyEvent` Tab presses, so what is recorded is what a keyboard user
    gets, not a model of focus order). Mostly clean: **no positive `tabindex`**, no unnamed buttons,
