@@ -16,9 +16,10 @@
 import type { ReactNode } from 'react';
 
 import { ApiError, TransportError } from '../api/client';
-import type { Entity, Json, SearchHit } from '../api/types';
+import type { Entity, Json, SearchHit, SelectorNotes } from '../api/types';
 import { count, elide, type Tone } from '../format';
 import { entityHref } from '../routing';
+import { alternativesFor, matchedBy, matchedByReading, passedOverReading, selectorFor } from '../selectors';
 
 export function Chip({
   tone = 'plain',
@@ -160,6 +161,66 @@ export function EntityLink({
     >
       {max > 0 ? elide(label, max) : label}
     </a>
+  );
+}
+
+/**
+ * What the selector resolved to, and **what it passed over**.
+ *
+ * The server has reported this on every selector answer since Slice 8b-i and nothing rendered it,
+ * which made the report worth as much as not making it. One path can hold two entities —
+ * `src/app.ts` is both a `Module` and a `File`, `docs/architecture.md` both a `Document` and a
+ * `File` — and the rule is content wins, container is reported. A reader who types the path and is
+ * shown one entity has no way to learn the other exists unless this says so.
+ *
+ * Renders **nothing** in the ordinary case, and that is deliberate rather than a shortcut:
+ * `alternatives` is empty for the overwhelming majority of selectors, so a permanent strip saying
+ * "no alternatives" would be noise on every screen in the app in order to be information on almost
+ * none. The absence of this block is not the absence of a check — the check is on every answer,
+ * and this is what it looks like when it found nothing to report.
+ *
+ * Note this is **not** ambiguity. An ambiguous selector is a `409` with every candidate attached
+ * and no choice made, which `Failure` renders. This is a choice made *by a stated rule*, and the
+ * two must not read alike.
+ */
+export function SelectorReading({
+  selectors,
+  parameter,
+  chosen,
+}: {
+  selectors: SelectorNotes | undefined;
+  /** The query parameter name the server keyed this by: `subject`, `selector`, `from`, `to`. */
+  parameter: string;
+  /** What the selector resolved to, so the sentence can name the kind that won. */
+  chosen: Pick<Entity, 'kind'>;
+}) {
+  const alternatives = alternativesFor(selectors, parameter);
+  if (alternatives.length === 0) return null;
+
+  const stage = matchedBy(selectors, parameter);
+  const stageNote = matchedByReading(stage);
+
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      <div className="row row--wrap">
+        <span className="micro">also at this path</span>
+        {alternatives.map((entity) => (
+          <Chip key={entity.entity_id} tone="quiet" title={selectorFor(entity)}>
+            {entity.kind} · <EntityLink entity={entity} max={40} />
+          </Chip>
+        ))}
+      </div>
+      <p className="prose">{passedOverReading(chosen.kind, alternatives)}</p>
+      {stageNote === '' ? null : <p className="hash wrapany">{stageNote}</p>}
+      <div className="row row--wrap">
+        <span className="micro">ask for it by name</span>
+        {alternatives.map((entity) => (
+          <code key={entity.entity_id} className="hash wrapany">
+            {selectorFor(entity)}
+          </code>
+        ))}
+      </div>
+    </div>
   );
 }
 

@@ -739,6 +739,67 @@ export function memoryOperationGloss(value: string): string {
 }
 
 /**
+ * How far a traced run got before it stopped.
+ *
+ * The value on an observation is the **weakest** across every run that contributed to it, so a
+ * site observed by one complete run and one interrupted run reads as `partial`. That is why
+ * `complete` is worded as a claim about the suite rather than about the site: a site can be
+ * completely observed by a run that never finished, and the distinction the vocabulary draws is
+ * about the run.
+ */
+const TRACE_COMPLETION: Record<string, string> = {
+  complete:
+    'The run reached the end of the suite and said when. Whatever it did not observe, it did not observe by not executing it — not by stopping early.',
+  partial:
+    'The run stopped early and gave a reason. Edges it never reached were never looked for, so an absence here is especially uninformative.',
+  crashed:
+    'The process died. Everything after the point it died is unobserved, and nothing says where that point was.',
+};
+
+export function traceCompletionGloss(value: string): string {
+  return TRACE_COMPLETION[value] ?? 'This build has no description for that trace completion state.';
+}
+
+/**
+ * Whether the artifact was checked against the tree that is indexed here.
+ *
+ * **Three values, and the third is the one that has to survive.** `unverified` is the absence of a
+ * check, not a failed check and not a pass; collapsing it into either would be a lie in one
+ * direction or the other. It is the same shape as `CoverageEvidence::Absent` and `gaps totals:
+ * null` — absence of verification is not verification of absence.
+ */
+const TRACE_BINDING: Record<string, string> = {
+  bound:
+    'Every state field the artifact declared agrees with the index. It was made against this exact tree, and that was checked.',
+  stale:
+    'The artifact names a different tree from the one indexed here. Still about this repository, but the code has moved since it ran.',
+  unverified:
+    'The artifact declared no state field, so nothing was compared. This is the absence of a check rather than a failed one — not stale, and not a pass.',
+};
+
+export function traceBindingGloss(value: string): string {
+  return TRACE_BINDING[value] ?? 'This build has no description for that repository binding.';
+}
+
+/**
+ * Whether the recorded locations are of the source a person wrote or of what actually executed.
+ *
+ * `unavailable` is the value that changes how a line number should be read: a source map was
+ * needed and was not there, so the location may point into generated code. It is not an error and
+ * it is not nothing.
+ */
+const TRACE_SOURCE_MAP: Record<string, string> = {
+  none: 'No source map was involved. The recorded locations are the executed locations.',
+  applied: 'A source map was applied, so the locations are of the original source.',
+  unavailable:
+    'A source map was needed and was not available, so these locations may be of generated code rather than of anything a person wrote.',
+};
+
+export function traceSourceMapGloss(value: string): string {
+  return TRACE_SOURCE_MAP[value] ?? 'This build has no description for that source map state.';
+}
+
+/**
  * A reading for a key/value pair inside an extractor's `details` blob, where one exists.
  *
  * `details` is an open JSON object — most of it is paths, names and line numbers that need no

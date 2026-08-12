@@ -137,8 +137,15 @@ a product decision and is yours.
 ### What it answers
 
 *"If I change this symbol, what else might break?"* — a reverse dependency closure. Everything
-that reaches the subject through `CALLS`, `REFERENCES`, `EXTENDS` or `IMPLEMENTS`, transitively,
-with the evidence for the edge that reached it.
+that reaches the subject through `CALLS`, `REFERENCES`, `EXTENDS`, `IMPLEMENTS` or `SERVED_BY`,
+transitively, with the evidence for the edge that reached it.
+
+> **Corrected 2026-08-11.** This entry said **four** relations and omitted `SERVED_BY`, which
+> Slice 10a appended to `DEFAULT_RELATIONS` precisely so that a live route handler stops being
+> indistinguishable from dead code — 10a *measured* `nerve impact` printing byte-identical
+> answers for a served handler and a genuinely dead function. The authority is
+> `nerve-store/src/impact.rs:131`, which is **five**. A client must read `relations` off the
+> answer rather than mirroring any list, including this one.
 
 ### The contract
 
@@ -225,7 +232,7 @@ no data to do it with.
 {
   "subject": { "entity_id": "fn_5fcd…", "kind": "function", "name": "add",
                "file_path": "src/math.ts", "start_line": 3 },
-  "relations": ["CALLS", "REFERENCES", "EXTENDS", "IMPLEMENTS"],
+  "relations": ["CALLS", "REFERENCES", "EXTENDS", "IMPLEMENTS", "SERVED_BY"],
   "max_depth": 6, "limit": 1,
   "totals": { "entities": 3, "by_depth": [{ "depth": 1, "entities": 3 }],
               "by_relation": { "CALLS": 3 }, "by_kind": { "function": 3 }, "stale": 0 },
@@ -465,7 +472,19 @@ they are observations like any other and those endpoints are generic over the ev
 
 **1. `TEST_OBSERVED_CALL` is deliberately *not* in the default impact closure.**
 
-`/api/impact` returns a closure over `CONTAINS`, `IMPORTS`, `CALLS`, `REFERENCES` and `SERVED_BY`. It
+`/api/impact` returns a closure over `CALLS`, `REFERENCES`, `EXTENDS`, `IMPLEMENTS` and
+`SERVED_BY`. It
+
+> **Corrected 2026-08-11, and this one was wrong in both directions.** It listed `CONTAINS` and
+> `IMPORTS` as walked and omitted `EXTENDS` and `IMPLEMENTS` — so it described the **opposite**
+> of a deliberate decision. `nerve-store/src/impact.rs` excludes both by name and says why:
+> `CONTAINS` would walk from a function to its module, file, directory and the repository
+> itself, so *every symbol would "impact" the repository — true, and useless*; and `IMPORTS`
+> is the right closure for incremental invalidation, where a false positive costs a reparse,
+> and the wrong one for a person, because a module that imports another without calling the
+> changed function is not affected and reporting it *trains the reader to ignore the output*.
+> Both remain available explicitly. A UI built from the sentence this replaced would have
+> rendered structural noise as impact.
 does **not** include `TEST_OBSERVED_CALL`, and that is a decision rather than an omission — see
 `docs/plans/slice-11a-trace-ingestion.md` §8. A trace says *one run took this edge*; a blast radius
 built on it would grow and shrink with which tests happened to run. There is also a security reading in

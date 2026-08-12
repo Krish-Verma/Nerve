@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { historyFragment, isHistoryTab, type HistoryTab } from './history';
+import { impactFragment } from './impact';
 import { memoryFragment } from './memory';
 
 export type EntityTab = 'relations' | 'evidence' | 'graph' | 'source';
@@ -55,7 +56,12 @@ export type Route =
   // One route with free options rather than two, and `record` names the one being read. A
   // `memory_id` is caller-supplied text that may hold a `/` or a `#`, so it cannot be a path
   // segment — the same reason the API takes it as a query parameter rather than as `/api/memory/<id>`.
-  | { view: 'memory'; options: Record<string, string> };
+  | { view: 'memory'; options: Record<string, string> }
+  // The subject is a *selector*, and the selector grammar uses `#` as its symbol separator, so it
+  // can never be a path segment: `#/impact/src/app.ts#Thing` would lose everything from the second
+  // `#` before the request left the browser. It is a query parameter for the same reason a
+  // `memory_id` is, one screen over.
+  | { view: 'impact'; options: Record<string, string> };
 
 function parse(hash: string): Route {
   const raw = hash.startsWith('#') ? hash.slice(1) : hash;
@@ -104,6 +110,13 @@ function parse(hash: string): Route {
       });
       return { view: 'memory', options };
     }
+    case 'impact': {
+      const options: Record<string, string> = {};
+      search.forEach((value, key) => {
+        options[key] = value;
+      });
+      return { view: 'impact', options };
+    }
     default:
       return { view: 'overview' };
   }
@@ -148,6 +161,11 @@ export function href(route: Route): string {
     // left — the request would be answered, correctly, about a different record.
     case 'memory':
       return memoryFragment(route.options);
+    // Built in `impact.ts`, and for the sharpest version of the reason the other two are: a subject
+    // is a selector, `#` is the selector grammar's symbol separator, and a raw one would truncate
+    // the request at the browser rather than at the server.
+    case 'impact':
+      return impactFragment(route.options);
   }
 }
 

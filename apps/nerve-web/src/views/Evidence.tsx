@@ -37,10 +37,25 @@ import {
   stamp,
   statusGloss,
 } from '../format';
-import { detailGloss } from '../vocab';
+import { detailGloss, traceBindingGloss, traceCompletionGloss, traceSourceMapGloss } from '../vocab';
 import { useApi } from '../hooks';
 import { entityHref, href } from '../routing';
-import { Chip, Empty, Failure, Loading, Panel } from '../ui/parts';
+import {
+  bindingReading,
+  bindingTone,
+  completionTone,
+  EXISTENTIAL_STATEMENT,
+  isTraceObservation,
+  NOT_OBSERVED_STATEMENT,
+  parseTraceEnvironment,
+  runSetReading,
+  sourceMapTone,
+  summariseRuns,
+  testCountReading,
+  testsNamed,
+} from '../trace';
+import type { TraceEnvironment } from '../api/types';
+import { Chip, Empty, Failure, Loading, Panel, SelectorReading } from '../ui/parts';
 
 export function Evidence({ id, options }: { id: string; options: Record<string, string> }) {
   const object = options['object'] ?? null;
@@ -86,6 +101,12 @@ export function Evidence({ id, options }: { id: string; options: Record<string, 
             extractor that made it, the exact source it read, and whether that source has changed
             since — measured on this request, by re-hashing the file.
           </p>
+
+          <SelectorReading
+            selectors={report.selectors}
+            parameter="subject"
+            chosen={report.subject}
+          />
 
           {object === null ? null : (
             <div className="row row--wrap">
@@ -139,6 +160,8 @@ export function Evidence({ id, options }: { id: string; options: Record<string, 
         </div>
       </section>
 
+      <WatchedExecution report={report} />
+
       {shown.length === 0 ? (
         <Panel title="Nothing matches that filter">
           <p className="prose">
@@ -160,6 +183,227 @@ export function Evidence({ id, options }: { id: string; options: Record<string, 
             expand={shown.length <= 3}
           />
         ))
+      )}
+    </div>
+  );
+}
+
+/**
+ * Trace evidence, as its own surface — and it is fed by `/api/why`, not by a route of its own.
+ *
+ * **There is deliberately no `/api/trace`.** Import is a write path and is CLI-only; a trace
+ * observation is an observation like any other, and the evidence endpoints are generic over the
+ * evidence model, so the data is already here. Adding a read route would have created a second way
+ * to ask one question, with a second chance to answer it differently.
+ *
+ * What this panel exists to prevent is a specific misreading. `TEST_OBSERVED_CALL` is **existential**
+ * evidence: one run took this edge. It is not a `CALLS` edge, it must never be drawn as one, and
+ * the neighbouring precedent is ADR-0005 — coverage is not a call graph, for the same reason.
+ *
+ * The empty case is the one that matters most, and it is why this panel renders even when there is
+ * nothing to show. A repository nobody has traced has no trace evidence anywhere; drawing that the
+ * way "no callers" is drawn would turn missing instrumentation into an apparent fact about the
+ * code. So the absence is named as an absence of observation.
+ */
+function WatchedExecution({ report }: { report: WhyReport }) {
+  const environments = useMemo(() => {
+    const found: TraceEnvironment[] = [];
+    for (const assertion of report.assertions) {
+      for (const observation of assertion.observations) {
+        if (!isTraceObservation(observation)) continue;
+        const parsed = parseTraceEnvironment(observation.environment);
+        if (parsed !== null) found.push(parsed);
+      }
+    }
+    return found;
+  }, [report.assertions]);
+
+  const runs = useMemo(() => summariseRuns(environments), [environments]);
+
+  if (environments.length === 0) {
+    return (
+      <Panel title="Watched execution" aside={<Chip tone="unknown">nothing observed</Chip>}>
+        <div className="stack" style={{ gap: 10 }}>
+          <p className="prose">{NOT_OBSERVED_STATEMENT}</p>
+          <p className="hash wrapany">{EXISTENTIAL_STATEMENT}</p>
+          <p className="hash wrapany">
+            Nerve runs no tests. A trace arrives from a tracer you ran yourself, imported with{' '}
+            <code>nerve trace import</code>.
+          </p>
+        </div>
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel
+      title="Watched execution"
+      aside={
+        <Chip tone="quiet">
+          {count(runs.length)} {runs.length === 1 ? 'run' : 'runs'}
+        </Chip>
+      }
+    >
+      <div className="stack" style={{ gap: 12 }}>
+        <p className="prose">{EXISTENTIAL_STATEMENT}</p>
+        <p className="hash wrapany">
+          These edges are recorded as <code>TEST_OBSERVED_CALL</code> and are kept apart from{' '}
+          <code>CALLS</code> throughout. A call Nerve read out of the source and a call a tracer
+          watched happen are different claims, and neither one implies the other.
+        </p>
+
+        {runs.map((summary) => (
+          <div key={summary.run.run_id ?? 'unnamed'} className="stack" style={{ gap: 8 }}>
+            <div className="row row--wrap">
+              <span className="fact__value fact__value--strong">
+                {summary.run.run_id ?? 'a run that declared no id'}
+              </span>
+              <Chip
+                tone={completionTone(summary.run.completion_state)}
+                title={traceCompletionGloss(summary.run.completion_state ?? '')}
+              >
+                {summary.run.completion_state ?? 'completion not declared'}
+              </Chip>
+              <Chip
+                tone={bindingTone(summary.run.repository_binding)}
+                title={traceBindingGloss(summary.run.repository_binding ?? '')}
+              >
+                {summary.run.repository_binding ?? 'binding not declared'}
+              </Chip>
+              <Chip
+                tone={sourceMapTone(summary.run.source_map_state)}
+                title={traceSourceMapGloss(summary.run.source_map_state ?? '')}
+              >
+                source map: {summary.run.source_map_state ?? 'not declared'}
+              </Chip>
+            </div>
+
+            <p className="prose">{bindingReading(summary.run.repository_binding)}</p>
+
+            {summary.run.partial_reason === null ? null : (
+              <p className="hash wrapany">
+                It stopped early, and said why: {summary.run.partial_reason}
+              </p>
+            )}
+
+            <div className="row row--wrap">
+              <span className="hash">
+                {summary.run.producer ?? 'an unnamed producer'}
+                {summary.run.producer_version === null ? '' : ` ${summary.run.producer_version}`}
+              </span>
+              {summary.run.test_framework === null ? null : (
+                <span className="hash">framework: {summary.run.test_framework}</span>
+              )}
+              {summary.run.runtime === null ? null : (
+                <span className="hash">
+                  runtime: {summary.run.runtime}
+                  {summary.run.runtime_version === null ? '' : ` ${summary.run.runtime_version}`}
+                </span>
+              )}
+              {summary.run.platform === null ? null : (
+                <span className="hash">platform: {summary.run.platform}</span>
+              )}
+              <span className="hash">{stamp(summary.run.started_at)}</span>
+            </div>
+
+            {/*
+              Sites, not calls. A run that took one edge a thousand times counts once here, and
+              that is the honest number: per-edge counts belong beside the run that produced them,
+              which is where the observation below prints them.
+            */}
+            <span className="hash">
+              named by {count(summary.sites)} observed{' '}
+              {summary.sites === 1 ? 'site' : 'sites'} on this screen — a count of sites, not of
+              calls
+            </span>
+
+            {summary.tests.length === 0 ? null : (
+              <div className="row row--wrap">
+                <span className="micro">tests</span>
+                {summary.tests.map((test) => (
+                  <Chip key={test} tone="quiet">
+                    {test}
+                  </Chip>
+                ))}
+              </div>
+            )}
+
+            {summary.run.producer_limitations.length === 0 ? null : (
+              <div className="stack" style={{ gap: 4 }}>
+                <div className="micro">the producer said it could not see</div>
+                {summary.run.producer_limitations.map((limitation) => (
+                  <p key={limitation} className="hash wrapany">
+                    {limitation}
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+/**
+ * The run set behind one trace observation, rendered where its raw JSON used to be printed.
+ *
+ * `environment` is a text column holding a JSON document, and this screen used to render it as the
+ * string it is — a wall of braces in a field labelled "environment". Everything the handoff note
+ * calls load-bearing was in there and none of it was legible.
+ *
+ * A **list**, always, because two tests reaching one callee from one line are one observation
+ * naming both: `idx_observation_identity` has no column that could hold a second row per test. And
+ * the derived scalars are printed from the object rather than recomputed from `runs[0]`, because
+ * they are the weakest value across contributing runs — a site observed by one complete run and one
+ * interrupted run reads as `partial`, and reading the first run would report it as complete.
+ */
+function TraceEnvironmentFacts({ environment }: { environment: TraceEnvironment }) {
+  const tests = testsNamed(environment);
+  return (
+    <div className="stack" style={{ gap: 10 }}>
+      <div className="row row--wrap">
+        <Chip
+          tone={completionTone(environment.completion_state)}
+          title={traceCompletionGloss(environment.completion_state ?? '')}
+        >
+          {environment.completion_state ?? 'completion not declared'}
+        </Chip>
+        <Chip
+          tone={bindingTone(environment.repository_binding)}
+          title={traceBindingGloss(environment.repository_binding ?? '')}
+        >
+          {environment.repository_binding ?? 'binding not declared'}
+        </Chip>
+        <span className="hash">weakest value across every contributing run</span>
+      </div>
+
+      <p className="prose">{runSetReading(environment)}</p>
+
+      {environment.runs.map((run, index) => (
+        <div key={`${run.run_id ?? 'unnamed'}:${index}`} className="stack" style={{ gap: 4 }}>
+          <span className="fact__value">{run.run_id ?? 'a run that declared no id'}</span>
+          {Object.keys(run.tests).length === 0 ? (
+            <span className="hash">This run named no test at this site.</span>
+          ) : (
+            <div className="row row--wrap">
+              {Object.keys(run.tests)
+                .sort()
+                .map((test) => (
+                  <Chip key={test} tone="quiet" prose title={testCountReading(run, test)}>
+                    {test} — {testCountReading(run, test)}
+                  </Chip>
+                ))}
+            </div>
+          )}
+        </div>
+      ))}
+
+      {tests.length === 0 ? null : (
+        <span className="hash wrapany">
+          A count is how many times that one run took this edge. It is not a frequency, and two
+          runs&apos; counts are recorded per run rather than added together.
+        </span>
       )}
     </div>
   );
@@ -226,6 +470,18 @@ function Claim({
             {count(assertion.observation_count)}{' '}
             {assertion.observation_count === 1 ? 'observation' : 'observations'}
           </Chip>
+          {/*
+            An existential edge is labelled on the claim itself, not only in the panel above. The
+            sentence one line up reads "A was observed calling B", which is already hedged — but a
+            reader skimming a list of claims needs the qualification attached to the row rather
+            than inferred from a verb, because the row beside it may be a static `CALLS` and the
+            two must never be read as the same strength of statement.
+          */}
+          {assertion.relation === 'TEST_OBSERVED_CALL' ? (
+            <Chip tone="unknown" prose title={EXISTENTIAL_STATEMENT}>
+              one run took this edge — not that every run does
+            </Chip>
+          ) : null}
           <span className="spacer" />
           <span className="hash">
             {outgoing ? 'recorded from this entity outwards' : 'recorded towards this entity'}
@@ -258,6 +514,12 @@ function Observed({ observation, alone }: { observation: Observation; alone: boo
   const [open, setOpen] = useState(alone);
   const reading = freshnessOf(observation.freshness);
   const detail = pairs(observation.details);
+  // Null for every observation that is not a watched execution, and also for a trace observation
+  // whose environment could not be parsed — the source type is what separates those two, and the
+  // second is left to fall through to the raw field rather than be rendered as an empty run set.
+  const traced = isTraceObservation(observation)
+    ? parseTraceEnvironment(observation.environment)
+    : null;
 
   return (
     <div className={`obs ${directnessClass(observation.directness)}`}>
@@ -316,11 +578,19 @@ function Observed({ observation, alone }: { observation: Observation; alone: boo
                   : 'How the name was matched to a declaration.'
               }
             />
-            <Fact
-              label="environment"
-              value={observation.environment ?? 'none recorded'}
-              note="The environment the observation was made in, where that changes what is true."
-            />
+            {/*
+              A trace observation's `environment` is a JSON document rather than a word, and it is
+              rendered as the run set it is — see `TraceEnvironmentFacts` below the fold. Printing
+              it here as the raw string would put the whole of the run provenance on screen in a
+              form nobody can read, which is what this field did before.
+            */}
+            {traced === null ? (
+              <Fact
+                label="environment"
+                value={observation.environment ?? 'none recorded'}
+                note="The environment the observation was made in, where that changes what is true."
+              />
+            ) : null}
             <Fact label="recorded" value={stamp(observation.created_at)} note="When the extractor ran." />
             <Fact
               label="repository state"
@@ -330,6 +600,15 @@ function Observed({ observation, alone }: { observation: Observation; alone: boo
           </div>
 
           <FileCheck observation={observation} />
+
+          {traced === null ? null : (
+            <div>
+              <div className="micro" style={{ marginBottom: 6 }}>
+                the runs that observed this, and the tests they were running
+              </div>
+              <TraceEnvironmentFacts environment={traced} />
+            </div>
+          )}
 
           {detail === null ? null : (
             <div>

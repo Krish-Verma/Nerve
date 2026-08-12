@@ -1524,6 +1524,279 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------
+section "4h. The three surfaces the UI had no view for, and what each must not say"
+
+# The functional UI parity slice. `/api/impact` had existed since Slice 7b with no view, selector
+# alternatives had been reported on every answer since 8b-i and rendered nowhere, and Slice 11a's
+# trace evidence had no surface at all. Each is checked on behaviour rather than on a route
+# existing, and then on the *shipped bundle*, because the interface is compiled into the binary and
+# a rebuilt-but-not-re-embedded screen passes every source-side test — `82a6ff3`'s defect.
+#
+# `fixtures/trace-basic` is the subject rather than this repository's own checkout, for three
+# reasons that no other fixture gives at once: it holds a real `TEST_OBSERVED_CALL` edge, its
+# `src/parse.py` is a path with **two readings** (a module and a file), and two of its artifacts
+# bind differently — `stale.jsonl` names a tree that is not this one and `unverified.jsonl` names no
+# tree at all. That pair is the distinction the whole trace surface turns on.
+#
+# The directory must be named `repo`: the artifacts declare `repository_root_name: "repo"`, and an
+# import into a differently-named checkout is refused as `other-repository` — correctly.
+if command -v python3 >/dev/null 2>&1; then
+  UIWORK=$(mktemp -d)
+  TRACED="$UIWORK/repo"
+  cp -R "$ROOT/fixtures/trace-basic" "$TRACED"
+
+  if (cd "$TRACED" && "$NERVE" init >/dev/null 2>&1 && "$NERVE" index >/dev/null 2>&1 &&
+      "$NERVE" trace import trace/unverified.jsonl >/dev/null 2>&1 &&
+      "$NERVE" trace import trace/stale.jsonl >/dev/null 2>&1); then
+
+    "$NERVE" serve "$TRACED" --json >"$UIWORK/serve.json" 2>"$UIWORK/serve.err" &
+    UI_SERVE_PID=$!
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      grep -q '"token"' "$UIWORK/serve.json" 2>/dev/null && break
+      sleep 0.25
+    done
+
+    if grep -q '"token"' "$UIWORK/serve.json" 2>/dev/null; then
+
+      # ---- impact -----------------------------------------------------------------------------
+      # The account of what the answer cannot see is a present object on *every* answer, and the
+      # relation set that was walked is echoed. Both are what the view renders, so both are checked
+      # here on the values rather than assumed from the endpoint answering at all.
+      check "/api/impact states what it cannot see, and the caveat can exceed the answer" bash -c "
+        python3 - '$UIWORK/serve.json' <<'PY'
+import json, sys, urllib.request
+meta = json.load(open(sys.argv[1]))
+def get(route):
+    request = urllib.request.Request(meta['base_url'] + route,
+                                     headers={meta['token_header']: meta['token']})
+    return json.load(urllib.request.urlopen(request, timeout=20))
+
+answer = get('/api/impact?subject=parse_all')
+
+# Present, never null, never omitted — including when a count is zero. A short results array with
+# no account beside it reads as 'few things depend on this, safe to change'.
+assert 'unresolved' in answer, sorted(answer)
+account = answer['unresolved']
+assert account is not None
+for field in ('sites', 'assertions', 'targets', 'by_category'):
+    assert field in account, (field, account)
+    assert account[field] is not None
+# sites counts observations and is the number a view shows; it is never below the coarser grains.
+assert account['sites'] >= account['assertions'] >= account['targets'], account
+
+# The zero case is present rather than omitted, which is the case the panel exists for.
+zero = get('/api/impact?subject=Parser')
+assert 'unresolved' in zero and zero['unresolved'] is not None, zero
+
+# The relation set actually walked, echoed. Empty means these five, NOT every relation — following
+# CONTAINS would answer that every symbol impacts the whole repository.
+subject = get('/api/impact?subject=function:parse')
+assert subject['relations'] == ['CALLS', 'REFERENCES', 'EXTENDS', 'IMPLEMENTS', 'SERVED_BY'], \
+       subject['relations']
+
+# Anti-vacuity, and the sharpest check in this section: this database *does* hold a
+# TEST_OBSERVED_CALL edge — 4h imports two trace artifacts above — and it is still not in the
+# closure. So the exclusion is a decision being kept, not an empty set being reported.
+assert 'TEST_OBSERVED_CALL' not in subject['relations'], subject['relations']
+why = get('/api/why?subject=function:parse')
+assert any(a['relation'] == 'TEST_OBSERVED_CALL' for a in why['assertions']), \
+       'the fixture must hold a trace edge for the exclusion above to mean anything'
+
+# On this fixture the caveat is a real one rather than a zero: unresolved sites outstanding beside
+# a non-empty closure is the shape the view is designed around.
+assert subject['unresolved']['sites'] > 0, subject['unresolved']
+assert subject['totals']['entities'] > 0, subject['totals']
+
+# The cap applies to rows only; every tally stays exact. A view that presented the totals as capped
+# would turn the one trustworthy number on the screen into a lower bound.
+capped = get('/api/impact?subject=function:parse&limit=1')
+assert capped['count'] == 1, capped['count']
+assert capped['truncated'] is True, capped
+assert capped['results_total'] == subject['results_total'], (capped, subject)
+assert capped['totals'] == subject['totals'], 'a cap on rows changed a tally'
+PY"
+
+      # ---- selector alternatives --------------------------------------------------------------
+      # 'content wins, container is reported' — and the report has to reach a human. `src/parse.py`
+      # is both a module and a file, which is the case the field exists for.
+      check "a path with two readings reports the one it passed over, on every selector surface" bash -c "
+        python3 - '$UIWORK/serve.json' <<'PY'
+import json, sys, urllib.request
+meta = json.load(open(sys.argv[1]))
+def get(route):
+    request = urllib.request.Request(meta['base_url'] + route,
+                                     headers={meta['token_header']: meta['token']})
+    return json.load(urllib.request.urlopen(request, timeout=20))
+
+# Every endpoint that resolves a selector carries the object, keyed by the query parameter name.
+for route, key in (('/api/entity?selector=src/parse.py', 'selector'),
+                   ('/api/why?subject=src/parse.py', 'subject'),
+                   ('/api/neighbourhood?selector=src/parse.py', 'selector'),
+                   ('/api/impact?subject=src/parse.py', 'subject')):
+    answer = get(route)
+    assert 'selectors' in answer, (route, sorted(answer))
+    note = answer['selectors'][key]
+    assert note['matched_by'] == 'path', (route, note)
+
+    # The container was passed over by a stated rule, and it is named rather than dropped.
+    alternatives = note['alternatives']
+    assert len(alternatives) == 1, (route, alternatives)
+    assert alternatives[0]['kind'] == 'file', (route, alternatives)
+    assert alternatives[0]['file_path'] == 'src/parse.py', (route, alternatives)
+
+# The content won: the same path resolved to the module, not to the file it reported.
+assert get('/api/entity?selector=src/parse.py')['entity']['kind'] == 'module'
+
+# And the passed-over entity is addressable, so the offer a view makes is one that works.
+assert get('/api/entity?selector=file:src/parse.py')['entity']['kind'] == 'file'
+
+# The ordinary case stays empty rather than inventing a second reading.
+plain = get('/api/impact?subject=Parser')
+assert plain['selectors']['subject']['alternatives'] == [], plain['selectors']
+
+# A refusal to choose is a different event from a choice made by rule, and keeps its own status.
+# The bare name 'parse' names both a function and a module, and Nerve refuses rather than picking.
+#
+# No backticks anywhere in this heredoc. It sits inside a double-quoted bash -c argument, which the
+# outer shell expands *before* the heredoc exists, so a backtick pair here is a command substitution
+# that silently rewrites the Python below. It cost two spurious 'command not found' lines on the run
+# that added this section, and the assertions still passed — which is what makes it worth a comment.
+try:
+    urllib.request.urlopen(urllib.request.Request(
+        meta['base_url'] + '/api/why?subject=parse',
+        headers={meta['token_header']: meta['token']}), timeout=20)
+    raise AssertionError('an ambiguous selector was answered')
+except urllib.error.HTTPError as error:
+    assert error.code == 409, error.code
+    body = json.load(error)
+    assert body['error']['code'] == 'ambiguous_selector', body
+    assert len(body['error']['detail']['candidates']) == 2, body['error']['detail']
+PY"
+
+      # ---- trace ------------------------------------------------------------------------------
+      # No read route was added, and none is needed: a trace observation is an observation, and the
+      # evidence endpoints are generic over the evidence model. What is checked is that the
+      # existential evidence arrives intact through the routes that already exist.
+      check "trace evidence reaches the UI through the evidence routes, with no /api/trace" bash -c "
+        python3 - '$UIWORK/serve.json' <<'PY'
+import json, sys, urllib.request
+meta = json.load(open(sys.argv[1]))
+def get(route):
+    request = urllib.request.Request(meta['base_url'] + route,
+                                     headers={meta['token_header']: meta['token']})
+    return json.load(urllib.request.urlopen(request, timeout=20))
+
+# Import is a write path and is CLI-only. There is no trace read route, and its absence is checked
+# so that adding one silently would be a decision somebody had to make rather than a drift.
+for route in ('/api/trace', '/api/traces', '/api/trace/runs'):
+    try:
+        urllib.request.urlopen(urllib.request.Request(
+            meta['base_url'] + route,
+            headers={meta['token_header']: meta['token']}), timeout=20)
+        raise AssertionError(route + ' answered; there is no trace read route')
+    except urllib.error.HTTPError as error:
+        assert error.code == 404, (route, error.code)
+
+why = get('/api/why?subject=function:parse')
+traced = [a for a in why['assertions'] if a['relation'] == 'TEST_OBSERVED_CALL']
+assert traced, 'no trace edge reached /api/why'
+
+# The relation is kept distinct from CALLS. A trace says one run took this edge; a static call says
+# the source contains it. Neither implies the other, and the same pair of frames may hold both.
+observations = [o for a in traced for o in a['observations']]
+assert observations, traced
+assert all(o['evidence_source_type'] == 'TEST_CALL_TRACE' for o in observations), observations
+
+# A *set* of runs, not a run: two artifacts observed the same site, and one observation names both
+# because idx_observation_identity has no column that could hold a second row per test.
+environment = json.loads(observations[0]['environment'])
+runs = environment['runs']
+assert len(runs) == 2, runs
+bindings = sorted(r['repository_binding'] for r in runs)
+assert bindings == ['stale', 'unverified'], bindings
+
+# The derived scalar is the WEAKEST claim across contributing runs. One run said nothing about
+# which tree it ran against and one named a different tree; the answer is the worse of the two, and
+# 'unverified' is never upgraded into a pass by sitting beside anything.
+assert environment['repository_binding'] == 'stale', environment['repository_binding']
+assert environment['completion_state'] == 'complete', environment['completion_state']
+
+# The tests are a list, because two tests reaching one callee from one line are one observation.
+assert isinstance(environment['tests'], list), environment['tests']
+assert environment['tests'], environment
+
+# A count belongs to one run and is never summed into a frequency across runs.
+for run in runs:
+    assert isinstance(run['tests'], dict), run['tests']
+    assert all(isinstance(v, int) for v in run['tests'].values()), run['tests']
+PY"
+
+      # ---- the shipped interface --------------------------------------------------------------
+      # Fetched from the running server rather than read off disk. The bundle is a tracked build
+      # artifact compiled in with include_bytes!, so a screen that was rebuilt and never re-embedded
+      # passes every source-side test and ships the old interface.
+      check "the shipped interface can display all three, and hedges the trace edge" bash -c "
+        python3 - '$UIWORK/serve.json' <<'PY'
+import json, sys, urllib.request
+meta = json.load(open(sys.argv[1]))
+def asset(route):
+    # Unauthenticated on purpose: a browser cannot put a header on a <script src>.
+    with urllib.request.urlopen(meta['base_url'] + route, timeout=20) as answer:
+        assert answer.status == 200, (route, answer.status)
+        return answer.read().decode('utf-8', 'replace')
+
+bundle = asset('/assets/nerve.js')
+
+# It can ask the endpoint, and it has a route of its own to be linked to.
+for needle in ('/api/impact', '#/impact'):
+    assert needle in bundle, needle
+
+# Both branches of the unresolved account are in the shipped screen. The zero branch is the one
+# that matters: a build carrying only the warning would omit the panel exactly when its absence
+# most invites the wrong conclusion.
+assert 'cannot rule them out' in bundle, 'the unresolved warning is not shipped'
+assert 'no failed resolution is hiding a dependency' in bundle, 'the zero case is not shipped'
+
+# And the screen never relabels the closure as test impact. The 'nerve affected' command is
+# refused rather than deferred: LCOV carries no per-test attribution (ADR-0008 A.2).
+for forbidden in ('affected tests', 'test impact', 'impacted tests'):
+    assert forbidden not in bundle.lower(), forbidden
+
+# Selector alternatives reach the screen.
+for needle in ('also at this path', 'content wins'):
+    assert needle in bundle, needle
+
+# The trace surface, and the wording that has to stay existential.
+assert 'not that every run does' in bundle, 'the existential sentence is not shipped'
+assert 'absence of an edge is absence of observation' in bundle, bundle[:0]
+assert 'not the observation of an absence' in bundle, 'the empty trace case is not shipped'
+
+# One sentence from each of the three trace vocabularies, so a gloss that reached the source and
+# not the binary fails here as well as in cargo test.
+for gloss in ('The run reached the end of the suite',
+              'This is the absence of a check rather than a failed one',
+              'these locations may be of generated code'):
+    assert gloss in bundle, gloss
+
+# The three-valued binding survives into the shipped build: unverified must be renderable as
+# itself rather than as either of the other two.
+for value in ('bound', 'stale', 'unverified'):
+    assert value in bundle, value
+PY"
+    else
+      skip "the impact, selector and trace UI surfaces" "nerve serve did not report a url"
+    fi
+    kill "$UI_SERVE_PID" >/dev/null 2>&1
+    wait "$UI_SERVE_PID" 2>/dev/null
+  else
+    skip "the impact, selector and trace UI surfaces" "the trace fixture did not index and import"
+  fi
+  rm -rf "$UIWORK"
+else
+  skip "the impact, selector and trace UI surfaces" "python3 is unavailable"
+fi
+
+# ---------------------------------------------------------------------------------------------
 section "5. Supply chain"
 
 LOCKED=$(grep -c '^name = ' "$ROOT/Cargo.lock")

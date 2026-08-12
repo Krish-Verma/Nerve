@@ -23,6 +23,7 @@ import { Contracts } from './views/Contracts';
 import { Coverage } from './views/Coverage';
 import { Entity } from './views/Entity';
 import { History } from './views/History';
+import { Impact } from './views/Impact';
 import { Memory } from './views/Memory';
 import { Overview } from './views/Overview';
 import { Search } from './views/Search';
@@ -169,6 +170,23 @@ export function App() {
         </div>
 
         {/*
+          Grouped with "what is missing" rather than with the index, and the placement is an
+          argument. An impact answer is mostly a number of dependants, but the half that changes a
+          decision is the count of reference sites that resolved to nothing and could be hiding one
+          more. It sits beside Unresolved because it is the same fact asked from the other end.
+
+          No count beside it, because there is nothing to count until a symbol has been named.
+        */}
+        <div className="rail__group">
+          <div className="rail__label micro">before you change something</div>
+          <RailLink
+            to={{ view: 'impact', options: {} }}
+            current={route.view === 'impact'}
+            label="Impact"
+          />
+        </div>
+
+        {/*
           Its own group, because it answers a different kind of question from either of the two
           above. Those are about the index as it stands; this one is about what the repository has
           been doing, over whatever slice of its history somebody told Nerve to read. There is no
@@ -244,6 +262,8 @@ export function App() {
           <Contracts tab={route.tab} options={route.options} />
         ) : route.view === 'memory' ? (
           <Memory options={route.options} />
+        ) : route.view === 'impact' ? (
+          <Impact options={route.options} />
         ) : (
           <Unresolved />
         )}

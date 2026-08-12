@@ -19,7 +19,7 @@ import type { EntityDetail, Neighbourhood } from '../api/types';
 import { count, relationPhrase } from '../format';
 import { useApi } from '../hooks';
 import { ENTITY_TABS, href, type EntityTab } from '../routing';
-import { Chip, Empty, EntityLink, Failure, Loading, Panel, Where } from '../ui/parts';
+import { Chip, Empty, EntityLink, Failure, Loading, Panel, SelectorReading, Where } from '../ui/parts';
 import { kindGloss } from '../vocab';
 import { Evidence } from './Evidence';
 import { Graph } from './Graph';
@@ -86,6 +86,12 @@ export function Entity({
             declared inside <span className="hash">{entity.scope_path}</span>
           </p>
         ) : null}
+        {/*
+          Usually renders nothing: this screen is normally reached with an entity id, which names
+          exactly one thing. It matters when a path was typed — `src/app.ts` is both a module and a
+          file, and without this the reader is shown one of them with no sign the other exists.
+        */}
+        <SelectorReading selectors={detail.selectors} parameter="selector" chosen={entity} />
       </div>
 
       <nav className="tabs" aria-label="Views of this entity">

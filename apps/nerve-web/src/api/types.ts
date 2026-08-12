@@ -21,6 +21,37 @@ export interface Entity {
   end_line: number | null;
 }
 
+/**
+ * What one selector parameter matched, and **what it passed over**.
+ *
+ * Every endpoint that resolves a selector carries this, keyed by the query parameter name. It is
+ * an addition rather than a replacement: `subject` still holds the entity that was chosen.
+ *
+ * `alternatives` is the field the whole thing exists for. `src/app.ts` holds both a `Module` and a
+ * `File`, and `docs/architecture.md` both a `Document` and a `File`; the rule is **content wins,
+ * container is reported**, and without this the container was passed over with no indication a
+ * choice had been made. It is `[]` for the overwhelming majority of selectors and is only ever
+ * non-empty when one path had a second reading.
+ */
+export interface SelectorNote {
+  /** Which stage matched: `entity_id`, `path`, `path_qualified` or `name`. */
+  matched_by: string;
+  /** Entities the same selector also names, which a stated rule passed over. Usually empty. */
+  alternatives: Entity[];
+}
+
+/**
+ * The `selectors` object, keyed by query parameter name.
+ *
+ * Optional on these types because the shape is an addition and an older server would omit it —
+ * not because a view may skip rendering it. Absent and empty are read the same way here, and that
+ * is sound: both mean *no second reading was reported*.
+ *
+ * Note the CLI emits the same information as an **array** of `{role, selector, …}`. Two shapes,
+ * each uniform within its own surface; this app only ever sees the object.
+ */
+export type SelectorNotes = Record<string, SelectorNote>;
+
 export interface Occurrence {
   occurrence_id: string;
   file_path: string;
@@ -134,6 +165,8 @@ export interface Neighbourhood {
   direction?: string;
   relations?: string[];
   resolved_only?: boolean;
+  /** Keyed `selector`. */
+  selectors?: SelectorNotes;
 }
 
 /** One traversed step. `traversed_backwards` means the edge was followed against its recorded direction. */
@@ -171,6 +204,8 @@ export interface PathReport {
   direction?: string;
   relations?: string[];
   resolved_only?: boolean;
+  /** Keyed `from` and `to` — two selectors, so two possible second readings. */
+  selectors?: SelectorNotes;
 }
 
 export interface EntityDetail {
@@ -182,6 +217,8 @@ export interface EntityDetail {
     incoming: Record<string, number>;
   };
   defining_edges: Neighbourhood;
+  /** Keyed `selector`. */
+  selectors?: SelectorNotes;
 }
 
 /** One observation and its whole evidence profile. There is no `confidence: float` by design. */
@@ -226,6 +263,8 @@ export interface WhyReport {
   assertions: Assertion[];
   direction?: string;
   relations?: string[];
+  /** Keyed `subject` (and `object` where one was asked for). */
+  selectors?: SelectorNotes;
 }
 
 export interface UnresolvedRow {
@@ -1067,4 +1106,148 @@ export interface MemoryBlock {
   /** The sentence for whichever absence this is, or `null` when records were returned. */
   absence_statement: string | null;
   records: MemoryRecord[];
+}
+
+/*
+ * ---- Impact: the reverse closure, and the account of what it cannot see ------------------------
+ *
+ * `/api/impact` has existed since Slice 7b and had no view until now. The difficulty of the shape
+ * is not the traversal — it is that a short `results` array reads as *"few things depend on this,
+ * it is safe to change"*, and on a repository where a share of the reference sites resolve to
+ * nothing that reading is unsupported. Hence `unresolved`, which is a **present object on every
+ * answer**, never null and never omitted, including the answer where every count in it is zero.
+ */
+
+/** One entity that depends on the subject, and the edge that reached it. */
+export interface ImpactRow {
+  entity: Entity;
+  /** Always ≥ 1. The subject itself is never a row. */
+  depth: number;
+  relation: string;
+  direction: string;
+  reached_entity_id: string;
+  assertion_id: string;
+  status: string;
+  strongest_source_type: string;
+  observation_count: number;
+  /** The edge itself points at something Nerve could not name. */
+  is_unresolved: boolean;
+  file_path: string | null;
+  start_line: number | null;
+  /** `fresh`, `stale`, `file-missing`, … or `null` where freshness could not be measured. */
+  evidence_freshness: string | null;
+}
+
+/**
+ * The tallies, which are **exact over the whole closure** whatever `limit` cut from `results`.
+ *
+ * `by_depth` is an array rather than an object, and that is load-bearing: JSON object keys are
+ * strings, so `"10"` would sort before `"2"` and put the tally in an order no reader expects.
+ */
+export interface ImpactTotals {
+  entities: number;
+  by_depth: { depth: number; entities: number }[];
+  by_relation: Record<string, number>;
+  by_kind: Record<string, number>;
+  /** Reached through evidence that no longer matches its file. */
+  stale: number;
+}
+
+/**
+ * What the answer **cannot** see. Never a footnote, never hidden when zero.
+ *
+ * Nerve has no type inference, so a method call on a typed receiver (`shape.area()`) is recorded
+ * as unresolved rather than guessed at — Slice 2a measured 38.1% of call sites on the resolution
+ * corpus as unresolved. Any one of these sites could reach the subject and this answer cannot rule
+ * them out.
+ *
+ * `sites` counts **observations** — individual reference sites — and is the number to show.
+ * `assertions` and `targets` are the same fact at coarser grain, and `sites >= assertions` always.
+ */
+export interface ImpactUnresolved {
+  sites: number;
+  assertions: number;
+  targets: number;
+  /** Split by category: a broken Markdown link and an unresolvable method call are not one warning. */
+  by_category: Record<string, number>;
+}
+
+export interface ImpactReport {
+  /** The symbol asked about. It never appears in `results`. */
+  subject: Entity;
+  /** The relations **actually walked**, echoed by the server. Never assumed by this app. */
+  relations: string[];
+  max_depth: number;
+  limit: number;
+  totals: ImpactTotals;
+  unresolved: ImpactUnresolved;
+  count: number;
+  results_total: number;
+  truncated: boolean;
+  files_probed: number;
+  results: ImpactRow[];
+  /** Keyed `subject`. */
+  selectors?: SelectorNotes;
+}
+
+/*
+ * ---- Trace: existential evidence, and the wording that has to stay existential -----------------
+ *
+ * A trace says *one run took this edge*, not *every run does*, and **absence of an edge is absence
+ * of observation** rather than evidence that no call exists. There is deliberately no `/api/trace`:
+ * import is a write path and is CLI-only, and trace observations reach this app through the
+ * endpoints that already exist because they are observations like any other.
+ *
+ * Everything below is parsed out of `observation.environment`, which is a JSON **string** on the
+ * wire because the column is text. It is written by `nerve-index/src/trace_ingest.rs`, from an
+ * artifact a user's own tracer produced — so it is untrusted input twice over and is parsed
+ * defensively, never trusted to have a shape.
+ */
+
+/** One run's entry in `environment.runs[]`. Every field is producer-supplied text. */
+export interface TraceRun {
+  run_id: string | null;
+  artifact_path: string | null;
+  artifact_content_hash: string | null;
+  producer: string | null;
+  producer_version: string | null;
+  test_framework: string | null;
+  runtime: string | null;
+  runtime_version: string | null;
+  platform: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  completion_state: string | null;
+  partial_reason: string | null;
+  source_map_state: string | null;
+  repository_binding: string | null;
+  producer_limitations: string[];
+  records: number | null;
+  observed_count: number | null;
+  /**
+   * Test name to how many times **this one run** took the edge.
+   *
+   * Never a frequency and never a claim about runs in general. Two runs' counts are recorded per
+   * run rather than summed, so a count may only ever be labelled beside the run that produced it.
+   */
+  tests: Record<string, number>;
+}
+
+/**
+ * The parsed `observation.environment` of a trace observation.
+ *
+ * `runs` is an **array** because `idx_observation_identity` has no column that could hold a second
+ * row per test: two tests reaching one callee from one line are *one* observation naming both. A
+ * view that renders "which test observed this" must therefore render a list.
+ *
+ * `completion_state` and `repository_binding` are the **weakest** value across contributing runs,
+ * not the first one's — a site observed by one complete run and one interrupted run reads as
+ * `partial`. They are read off this object and never recomputed from `runs[0]`.
+ */
+export interface TraceEnvironment {
+  runs: TraceRun[];
+  completion_state: string | null;
+  repository_binding: string | null;
+  /** The union of every test named by every contributing run, already sorted by the writer. */
+  tests: string[];
 }

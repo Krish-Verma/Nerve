@@ -27,7 +27,7 @@ import {
 } from '../graph/layout';
 import { useApi } from '../hooks';
 import { entityHref, href, replaceRoute } from '../routing';
-import { Chip, Empty, EntityLink, Failure, Loading, Panel, Where } from '../ui/parts';
+import { Chip, Empty, EntityLink, Failure, Loading, Panel, SelectorReading, Where } from '../ui/parts';
 import { PathFinder } from './Path';
 
 const WIDTH = 980;
@@ -190,6 +190,16 @@ function Neighbours({ id, options }: { id: string; options: Record<string, strin
             );
           })}
         </div>
+
+        {state.status === 'ready' ? (
+          <div className="panel__body">
+            <SelectorReading
+              selectors={state.data.selectors}
+              parameter="selector"
+              chosen={state.data.focus}
+            />
+          </div>
+        ) : null}
 
         {state.status === 'loading' ? (
           <Loading label="Expanding the neighbourhood" />

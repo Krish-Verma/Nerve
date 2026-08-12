@@ -16,7 +16,7 @@ import type { FoundPath, PathReport, SearchResponse } from '../api/types';
 import { count, relationPhrase } from '../format';
 import { useApi, useDebounced } from '../hooks';
 import { entityHref, href, replaceRoute } from '../routing';
-import { Chip, Empty, EntityLink, Failure, Loading, Panel, Where } from '../ui/parts';
+import { Chip, Empty, EntityLink, Failure, Loading, Panel, SelectorReading, Where } from '../ui/parts';
 
 const DEPTHS = [3, 6, 10, 16];
 
@@ -181,6 +181,13 @@ function Result({ report, maxDepth }: { report: PathReport; maxDepth: number }) 
               ? 'entity was expanded to find it.'
               : 'entities were expanded to find them.'}
           </p>
+          {/*
+            Two selectors, so two possible second readings, and each is reported against the end it
+            belongs to. A route whose far end is the *file* at a path rather than the module at it
+            is a different route, and a reader who cannot see which was chosen cannot tell.
+          */}
+          <SelectorReading selectors={report.selectors} parameter="from" chosen={report.from} />
+          <SelectorReading selectors={report.selectors} parameter="to" chosen={report.to} />
         </div>
       </section>
 

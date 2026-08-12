@@ -37,6 +37,8 @@ use nerve_index::contracts::{Ambiguity, ContractRule};
 use nerve_index::docref;
 use nerve_index::docs::{AdrStatus, STATUS_UNPARSED};
 use nerve_index::refs::{UnresolvedReason, UNMODELLED_FORMS};
+use nerve_index::trace::{CompletionState, SourceMapState};
+use nerve_index::trace_ingest::TraceBinding;
 use nerve_store::Freshness;
 
 // ---- locating and reading the interface source ----------------------------------------------
@@ -70,7 +72,7 @@ fn types_ts() -> String {
 ///
 /// One list, used by both the source-side vocabulary tests' companion below and the
 /// bundle-staleness check, so a new gloss table cannot be added to one and forgotten by the other.
-const GLOSS_TABLES: [(&str, &str); 33] = [
+const GLOSS_TABLES: [(&str, &str); 36] = [
     ("format.ts", "FRESHNESS"),
     ("format.ts", "SOURCE_TYPES"),
     ("format.ts", "DIRECTNESS"),
@@ -123,6 +125,14 @@ const GLOSS_TABLES: [(&str, &str); 33] = [
     ("vocab.ts", "MEMORY_SUBJECT_RESOLUTION"),
     ("vocab.ts", "MEMORY_SCOPE"),
     ("vocab.ts", "MEMORY_OPERATION"),
+    // The functional UI parity slice. Slice 11a landed the trace relation and its evidence source
+    // type with no view for either, so the three vocabularies a trace observation carries in
+    // `environment` had no gloss at all and reached the screen as raw JSON. They arrive here
+    // directly rather than by way of `DECLARED_NOT_RENDERED` because the change that declares them
+    // is the change that renders them — `views/Evidence.tsx` imports all three.
+    ("vocab.ts", "TRACE_COMPLETION"),
+    ("vocab.ts", "TRACE_BINDING"),
+    ("vocab.ts", "TRACE_SOURCE_MAP"),
 ];
 
 /// Gloss tables the interface **declares and does not yet render**.
@@ -759,6 +769,67 @@ fn every_unresolved_category_is_glossed() {
         "UNRESOLVED_CATEGORY (apps/nerve-web/src/vocab.ts)",
         &expected,
         &object_keys(&vocab_ts(), "UNRESOLVED_CATEGORY"),
+    );
+}
+
+/// The three vocabularies a trace observation carries in `observation.environment`.
+///
+/// These live in `nerve-index` rather than in `nerve-core::vocab`, because they describe an
+/// artifact a user's own tracer produced rather than a member of the evidence model. They reach the
+/// interface all the same — `environment` is a JSON document and the view renders it — so they need
+/// the same guard as every other closed set, and they had none until the trace surface existed.
+///
+/// `TraceBinding` is the one worth stating twice. It has **three** values, and `unverified` is the
+/// absence of a check rather than a failed one; a gloss table that covered two of them would be how
+/// a two-state badge gets built.
+#[test]
+fn every_trace_completion_state_is_glossed() {
+    let expected: Vec<String> = CompletionState::ALL
+        .iter()
+        .map(|state| state.as_str().to_string())
+        .collect();
+    covers(
+        "CompletionState::ALL",
+        "TRACE_COMPLETION (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "TRACE_COMPLETION"),
+    );
+}
+
+#[test]
+fn every_trace_repository_binding_is_glossed() {
+    let expected: Vec<String> = TraceBinding::ALL
+        .iter()
+        .map(|binding| binding.as_str().to_string())
+        .collect();
+    // Anti-vacuity, and it is the specific thing this vocabulary exists to keep: the reassuring
+    // value and the two unreassuring ones are all present, so "every member is glossed" is not
+    // being satisfied by a set that quietly lost one.
+    assert_eq!(
+        expected.len(),
+        3,
+        "the binding vocabulary must stay three-valued"
+    );
+    assert!(expected.contains(&"unverified".to_string()));
+    covers(
+        "TraceBinding::ALL",
+        "TRACE_BINDING (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "TRACE_BINDING"),
+    );
+}
+
+#[test]
+fn every_trace_source_map_state_is_glossed() {
+    let expected: Vec<String> = SourceMapState::ALL
+        .iter()
+        .map(|state| state.as_str().to_string())
+        .collect();
+    covers(
+        "SourceMapState::ALL",
+        "TRACE_SOURCE_MAP (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "TRACE_SOURCE_MAP"),
     );
 }
 
