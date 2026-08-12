@@ -886,3 +886,185 @@ export interface ContractVocabulary extends ContractBlock {
     scan_refusals: ContractTerm[];
   };
 }
+
+/*
+ * ---- Slice 14d: human-confirmed memory ---------------------------------------------------------
+ *
+ * A memory record is the one thing in this database a human wrote, and almost every string on it
+ * is therefore free text a person typed: the note itself, the author label, the claim key, the
+ * reason a note ended, an event's note, a citation's path, and every field of the subject snapshot.
+ * They are hostile on exactly the terms the head of this file sets and none of them is ever treated
+ * as markup.
+ *
+ * **The two kinds are separate types on purpose.** `status` is stored and holds one of four values;
+ * `views` are computed at read time and nothing writes one. They arrive under different keys, and
+ * this file keeps them under different keys, because a mirror that merged them would be the first
+ * place the distinction quietly healed itself.
+ */
+
+/** Where memory is written. Every memory answer carries it, and it names commands. */
+export interface MemoryBoundary {
+  /** Always `true`. `nerve serve` is read-only and is proven so on the database bytes. */
+  read_only: boolean;
+  statement: string;
+  /**
+   * Every `nerve memory` verb, as static text the server owns.
+   *
+   * Rendered **verbatim**, never with a record's own id substituted into one. A `memory_id` is
+   * caller-supplied text that may hold any character, and a command assembled from one is a line a
+   * reader is invited to paste into a shell.
+   */
+  commands: string[];
+}
+
+export interface MemoryTruncation {
+  returned: number;
+  /** What the store handed over before the window was taken. */
+  total: number;
+  truncated: boolean;
+  limit: number;
+}
+
+export interface MemoryContinuation {
+  supported: boolean;
+  offset: number | null;
+  next_offset: number | null;
+  /** Why there is no continuation, when there is none. Present on the single-record route. */
+  statement: string | null;
+}
+
+/**
+ * The three closed sets, carried on every answer.
+ *
+ * A filter control is built from these rather than from a list mirrored in this app: two of them
+ * are filterable and one is not, and a client that hard-coded the difference could offer a filter
+ * on a value nothing ever wrote.
+ */
+export interface MemoryVocabulary {
+  scopes: string[];
+  stored_statuses: string[];
+  derived_views: string[];
+}
+
+/** What the caller asked for, echoed verbatim, so an answer is never read as a wider one. */
+export interface MemoryRequested {
+  memory_id: string | null;
+  scope: string | null;
+  status: string | null;
+  query: string | null;
+  subject: string | null;
+}
+
+/** The subject as it was when the note was written. Every field is a copy; none is a pointer. */
+export interface MemorySubjectSnapshot {
+  entity_id: string;
+  kind: string;
+  name: string;
+  /** Repository-relative. Empty for the repository entity, which is no file. */
+  path: string;
+  /** The selector the human named it with, verbatim. */
+  selector: string;
+}
+
+export interface MemoryCitation {
+  citation_id: number | null;
+  cited_entity_id: string | null;
+  cited_kind: string | null;
+  cited_name: string | null;
+  cited_path: string;
+  cited_span: string | null;
+  cited_at_state: string;
+  created_at: string;
+}
+
+/** One entry of the append-only audit history. Nothing deletes one, including invalidation. */
+export interface MemoryEvent {
+  event_id: number | null;
+  at: string;
+  /** A `MemoryOperation` member. */
+  operation: string;
+  operation_note: string;
+  /**
+   * Carried off the vocabulary, never inferred from the two statuses being equal.
+   *
+   * Exactly one operation answers `false`, and an event whose `from_status` equals its `to_status`
+   * is well-formed for that one and a defect for every other.
+   */
+  changes_status: boolean;
+  from_status: string | null;
+  to_status: string;
+  note: string | null;
+}
+
+/** One record: everything stored about it, and everything true of it right now. */
+export interface MemoryRecord {
+  memory_id: string;
+  /** **Stored.** A `MemoryStatus` member — one of four. */
+  status: string;
+  status_note: string;
+  /** **Derived at read time.** A `MemoryView` member with the sentence it owns. */
+  views: { view: string; note: string }[];
+  /** Always `true`. Sent so no client has to decide which kind `views` is. */
+  views_are_derived: boolean;
+  subject: MemorySubjectSnapshot;
+  /** **Derived.** A `MemorySubjectResolution` member: what the snapshot reaches now. */
+  subject_resolution: string;
+  subject_resolution_note: string;
+  /** **Derived.** Every candidate, where the subject may have moved to more than one place. */
+  subject_live_entity_ids: string[];
+  /** A `MemoryScope` member. */
+  scope: string;
+  /** The scope's own sentence, or `null` where the stored value is outside the vocabulary. */
+  scope_note: string | null;
+  claim_key: string | null;
+  /** The repository state the record was confirmed against. */
+  anchor_state_id: string;
+  /** **Derived.** The state this index describes now, or `null` when nothing is indexed. */
+  current_state_id: string | null;
+  content: string;
+  author_label: string;
+  /** Always `false`. There are no accounts, so the label is never an authentication. */
+  author_label_is_an_identity: boolean;
+  created_at: string;
+  /** **Stored**, and the only writable direction of supersession. */
+  supersedes_memory_id: string | null;
+  /** **Derived** from the column above. There is no such column. */
+  superseded_by_memory_id: string | null;
+  superseded_by_is_derived: boolean;
+  invalidated_at: string | null;
+  invalidation_reason: string | null;
+  citations: MemoryCitation[];
+  events: MemoryEvent[];
+}
+
+/** The block every `/api/memory*` answer carries, assembled in one place on the server. */
+export interface MemoryBlock {
+  repository_id: string;
+  current_repository_state: string | null;
+  requested: MemoryRequested;
+  /**
+   * Which answer this is. **Three values, and two of them are absences that differ.**
+   *
+   * `no_memory_recorded` — nothing has ever been written here. `no_memory_matches` — records
+   * exist and this question matches none. A client that rendered them alike would report the
+   * second as the first.
+   */
+  result_kind: string;
+  records_in_repository: number;
+  records_matching: number;
+  truncation: MemoryTruncation | null;
+  continuation: MemoryContinuation;
+  boundary: MemoryBoundary;
+  vocabulary: MemoryVocabulary;
+  limitations: {
+    views_are_derived: string;
+    superseded_by_is_derived: string;
+    author_label_is_not_an_identity: string;
+    subject_is_a_snapshot: string;
+    no_delete_verb: string;
+    memory_is_not_evidence: string;
+  };
+  /** The sentence for whichever absence this is, or `null` when records were returned. */
+  absence_statement: string | null;
+  records: MemoryRecord[];
+}

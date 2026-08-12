@@ -593,13 +593,14 @@ export function contractAmbiguityGloss(value: string): string {
 }
 
 /*
- * ---- Slice 14a: the memory vocabularies -------------------------------------------------------
+ * ---- the memory vocabularies ------------------------------------------------------------------
  *
- * Three tables, declared one sub-slice before any view imports them, exactly as Slice 12c-ii's
- * Pass A and Slice 13a-i's four did. They sit on `DECLARED_NOT_RENDERED` in
- * `crates/nerve-server/tests/ui_vocabulary.rs` until 14d ships the view, and a test proves that
- * claim by checking their prose is absent from the shipped bundle — which is what stops the
- * deferred list becoming a way to opt out of the staleness check.
+ * Three declared by Slice 14a and two by 14b-i, all five glossed in the change that declared them.
+ * The first three sat on `DECLARED_NOT_RENDERED` in `crates/nerve-server/tests/ui_vocabulary.rs`
+ * while row 14 had storage and no surface; **Slice 14d moved all five onto `GLOSS_TABLES` in the
+ * same change that made `views/Memory.tsx` import them**, which is the rule that pair of lists
+ * exists to enforce — a table left on the deferred list once a view imports it would make the
+ * bundle-staleness check stop covering a gloss that is now on screen.
  *
  * Declaring the gloss beside the vocabulary rather than waiting for the view is the point: a
  * vocabulary that reaches a surface before its gloss does renders "this build has no description"
@@ -679,6 +680,62 @@ export function memorySubjectResolutionGloss(value: string): string {
     MEMORY_SUBJECT_RESOLUTION[value] ??
     'This build has no description for that subject resolution.'
   );
+}
+
+/**
+ * Which facet of its subject a note's claim is about.
+ *
+ * Four, and the axis is neither *what kind of thing the subject is* — the subject snapshot holds
+ * that — nor *what question the note answers*, which is the claim key. It is which side of the
+ * subject the claim is about, and it earns its place by keeping two notes apart: "the payments team
+ * owns this code" and "platform owns its deployment" answer the same named question about the same
+ * file and are not a disagreement.
+ *
+ * A misfiled note is not a lost note. It is still found by its subject and by searching its text;
+ * it only stops competing with a note filed elsewhere.
+ */
+const MEMORY_SCOPE: Record<string, string> = {
+  implementation:
+    'The claim is about what the code does and why it is written this way — the decision inside the thing, rather than the promise it makes outward.',
+  interface:
+    'The claim is about what the thing promises to whoever calls or consumes it. A fact about the boundary, not about what happens behind it.',
+  operations:
+    'The claim is about how it behaves when it runs: configuration, deployment, environment. A policy that is written in code belongs under implementation and the same policy configured belongs here, and a person may reasonably file it either way.',
+  process:
+    'The claim is about how people work on it: ownership, review, convention. Ownership is a facet here and never a scope of its own, because owner is a question a note answers rather than a side of the subject.',
+};
+
+export function memoryScopeGloss(value: string): string {
+  return MEMORY_SCOPE[value] ?? 'This build has no description for that memory scope.';
+}
+
+/**
+ * What one entry of a note's audit history records having been done.
+ *
+ * Five, and four of them are status changes. `cited` is the one that is not: attaching a citation
+ * changes no status, so its entry arrives with the same status on both sides — which is
+ * well-formed for this one operation and a defect for every other. That is the whole reason this is
+ * a separate vocabulary from the stored statuses, and it is why an event carries a flag saying
+ * whether it changed anything rather than leaving a reader to compare the two.
+ *
+ * There is no entry for a deletion, and there must never be one: nothing removes a record or an
+ * entry, and a verb for it is how *history is preserved* would stop being true.
+ */
+const MEMORY_OPERATION: Record<string, string> = {
+  proposed:
+    'The note was written down. The entry that creates the record, so there is no status before it.',
+  confirmed:
+    'A person at the command line confirmed it. This is the act the whole feature turns on, and what makes it a human act is the surface it arrived on — there is no identity here to check.',
+  superseded:
+    'A later note replaced this one. The words are kept exactly as they were, so what was once believed can still be read.',
+  invalidated:
+    'It stopped being true and nothing replaced it. Every entry the record ever had is still here, including this one.',
+  cited:
+    'A passage was attached as a citation. The only entry that changes no status, so it arrives with the same status on both sides.',
+};
+
+export function memoryOperationGloss(value: string): string {
+  return MEMORY_OPERATION[value] ?? 'This build has no description for that memory operation.';
 }
 
 /**

@@ -975,6 +975,54 @@ a.claim__party:hover {
   padding: 14px 16px 16px;
 }
 
+/*
+ * ---- stored against derived --------------------------------------------------------------
+ *
+ * A memory record carries two kinds of value and they must not read as one. `status` is a column a
+ * command wrote; `potentially_stale`, `conflicted`, `multiple_active`, what the subject reaches now
+ * and what replaced the note are worked out at the moment it is read and are stored nowhere.
+ *
+ * The difference is drawn as a **different kind of line** rather than as another hue, for a reason
+ * this stylesheet already commits to: on these screens hue means a claim's *state*, and spending it
+ * on "who computed this" would leave two vocabularies sharing one channel. So both groups carry a
+ * rule down their left edge — solid for what is on disk, dashed for what was worked out — and each
+ * one is labelled with which kind it is, because a line alone is a convention and a label is not.
+ *
+ * `.kind` wraps rather than scrolls, and the label sits on its own line at a narrow viewport, so a
+ * long derived group cannot push a card wider than the panel that holds it.
+ */
+.kinds {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.kind {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  padding-left: 10px;
+}
+
+.kind__label {
+  color: var(--bone-3);
+}
+
+.kind--stored {
+  border-left: 2px solid var(--rule);
+}
+
+.kind--derived {
+  border-left: 2px dashed var(--rule);
+}
+
+.kind--derived .kind__label {
+  font-style: italic;
+}
+
 .spine {
   position: relative;
   display: flex;

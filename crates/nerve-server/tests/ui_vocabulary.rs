@@ -28,9 +28,10 @@ use std::path::{Path, PathBuf};
 use nerve_core::vocab::{
     AssertionStatus, ChangeKind, ChangesEnumerated, ContractFreshness, ContractLinkStatus,
     ContractResolutionMethod, Directness, EntityKind, EvidenceSourceType, FirstObservedKind,
-    HistoryFreshness, MemoryStatus, MemorySubjectResolution, MemoryView, ParentCompleteness,
-    RegistryEntryStatus, Relation, RenameAmbiguity, RenameAnalysisCompleteness, RenameEvidence,
-    SimilarityUnmeasured, SummaryTruncation, UnresolvedCategory, WalkTermination,
+    HistoryFreshness, MemoryOperation, MemoryScope, MemoryStatus, MemorySubjectResolution,
+    MemoryView, ParentCompleteness, RegistryEntryStatus, Relation, RenameAmbiguity,
+    RenameAnalysisCompleteness, RenameEvidence, SimilarityUnmeasured, SummaryTruncation,
+    UnresolvedCategory, WalkTermination,
 };
 use nerve_index::contracts::{Ambiguity, ContractRule};
 use nerve_index::docref;
@@ -69,7 +70,7 @@ fn types_ts() -> String {
 ///
 /// One list, used by both the source-side vocabulary tests' companion below and the
 /// bundle-staleness check, so a new gloss table cannot be added to one and forgotten by the other.
-const GLOSS_TABLES: [(&str, &str); 28] = [
+const GLOSS_TABLES: [(&str, &str); 33] = [
     ("format.ts", "FRESHNESS"),
     ("format.ts", "SOURCE_TYPES"),
     ("format.ts", "DIRECTNESS"),
@@ -111,6 +112,17 @@ const GLOSS_TABLES: [(&str, &str); 28] = [
     ("vocab.ts", "CONTRACT_FRESHNESS"),
     ("vocab.ts", "CONTRACT_KIND"),
     ("vocab.ts", "CONTRACT_AMBIGUITY"),
+    // Slice 14d. The three Slice 14a declared and the two 14b-i declared, all five moved here in
+    // the same change that made `views/Memory.tsx` import them — which empties
+    // `DECLARED_NOT_RENDERED` for the second time and is the rule that pair of lists exists for.
+    // `MEMORY_SCOPE` and `MEMORY_OPERATION` never sat on the deferred list at all: their
+    // vocabularies were closed in 14b-i on the stated ground that 14d's guard *is* the thing that
+    // makes an event renderable, so they arrive here directly.
+    ("vocab.ts", "MEMORY_STATUS"),
+    ("vocab.ts", "MEMORY_VIEW"),
+    ("vocab.ts", "MEMORY_SUBJECT_RESOLUTION"),
+    ("vocab.ts", "MEMORY_SCOPE"),
+    ("vocab.ts", "MEMORY_OPERATION"),
 ];
 
 /// Gloss tables the interface **declares and does not yet render**.
@@ -126,18 +138,19 @@ const GLOSS_TABLES: [(&str, &str); 28] = [
 /// four, so all four moved to [`GLOSS_TABLES`] in the same change — the rule this pair of lists
 /// exists to enforce.
 ///
-/// **Slice 14a's three memory vocabularies are what it holds now**, and for the same reason: 14a is
-/// storage and a read model, with no surface until 14d. They move to [`GLOSS_TABLES`] in the same
-/// change that makes a view import one, and not before.
+/// Slice 14a's three memory vocabularies sat here while row 14 had storage and a read model and no
+/// surface. **Slice 14d ships `views/Memory.tsx`, which imports all three — plus the two 14b-i
+/// added — so all five moved to [`GLOSS_TABLES`] in the same change**, and the list is empty again.
+///
+/// It stays as a list rather than being deleted, because the next vocabulary declared ahead of its
+/// view needs somewhere honest to sit, and because
+/// [`every_gloss_table_the_source_declares_is_on_exactly_one_list`] is what makes a new table
+/// choose a side at all.
 ///
 /// A table listed here must be genuinely unrendered: the test proves it by asserting its prose is
 /// **absent** from the shipped bundle, which is what stops this becoming a way to opt out of the
 /// staleness check.
-const DECLARED_NOT_RENDERED: [(&str, &str); 3] = [
-    ("vocab.ts", "MEMORY_STATUS"),
-    ("vocab.ts", "MEMORY_VIEW"),
-    ("vocab.ts", "MEMORY_SUBJECT_RESOLUTION"),
-];
+const DECLARED_NOT_RENDERED: [(&str, &str); 0] = [];
 
 /// Every `const NAME: Record<…>` a gloss source declares, in declaration order.
 ///
@@ -1076,11 +1089,17 @@ fn every_contract_link_status_is_glossed() {
 
 // ---- the memory vocabularies -------------------------------------------------------------------
 //
-// Three of them, added by Slice 14a and glossed in the same change, which is the point. 14a ships
-// storage and a read model and no surface, so all three sit on `DECLARED_NOT_RENDERED` rather than
-// `GLOSS_TABLES` — the guard above proves that claim by checking their prose is absent from the
-// bundle — but the per-value coverage below is asserted now, so a fifth subject verdict cannot be
-// added in 14b without the sentence a reader would need for it.
+// Five of them. Three arrived with Slice 14a and two with 14b-i, and every one was glossed in the
+// change that declared it, which is the point. The first three sat on `DECLARED_NOT_RENDERED` while
+// row 14 had storage and no surface; **Slice 14d moved all five onto `GLOSS_TABLES`** in the same
+// change that made `views/Memory.tsx` import them, so the bundle-staleness check now covers their
+// prose too.
+//
+// `MemoryScope` and `MemoryOperation` are the two 14b-i closed, and it closed them naming *this
+// file* as the reason: a guard can only guard a vocabulary it knows exists, and 12c-iv found eight
+// for which it could not fail. An open string is one more of those. So the two tests below are the
+// thing that argument was made for, and neither could have been written before the vocabularies
+// were closed.
 
 /// The four **stored** statuses, and none of the three derived views may be among them.
 ///
@@ -1196,6 +1215,104 @@ fn every_memory_subject_resolution_is_glossed_and_unknown_is_not_missing() {
         linked.contains("similar"),
         "the link gloss must refuse name similarity by name: {linked}"
     );
+}
+
+/// The four facets a note's claim can be about, and the one word that must not be among them.
+///
+/// `ownership` is deliberately not a scope: *owner* is a `claim_key` in row 14's own text, and
+/// promoting it would put one concept on two axes — which is exactly the redundancy the scope
+/// vocabulary was written to avoid. A gloss for it would be a sentence for a facet nothing can
+/// store, in the manner `generated_client_stale` is refused one table up.
+///
+/// The pair that must not collapse is `implementation` and `operations`: a retry policy that is
+/// coded and the same policy configured are different facets of one subject, and two notes that
+/// disagreed only in that respect are not a contradiction. A shared gloss would erase the axis.
+#[test]
+fn every_memory_scope_is_glossed_and_ownership_is_not_one() {
+    let expected: Vec<String> = MemoryScope::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    assert_eq!(expected.len(), 4);
+    covers(
+        "MemoryScope::ALL",
+        "MEMORY_SCOPE (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "MEMORY_SCOPE"),
+    );
+
+    let source = vocab_ts();
+    let keys = object_keys(&source, "MEMORY_SCOPE");
+    assert!(
+        !keys.iter().any(|key| key == "ownership"),
+        "`ownership` is glossed as a scope and is not one: *owner* is a claim key, and one concept \
+         must not sit on two axes"
+    );
+    assert_ne!(
+        gloss_for(
+            &source,
+            "MEMORY_SCOPE",
+            MemoryScope::Implementation.as_str()
+        ),
+        gloss_for(&source, "MEMORY_SCOPE", MemoryScope::Operations.as_str()),
+        "`implementation` and `operations` share a gloss, which erases the facet axis and turns \
+         two notes about different sides of one subject into a disagreement"
+    );
+}
+
+/// The five things an audit entry can record, and the one that changes no status.
+///
+/// `cited` is why this is a vocabulary of its own rather than a second reading of `MemoryStatus`,
+/// so its gloss has to say what the other four do not: nothing moved. An interface that glossed it
+/// as a transition would describe an entry whose two statuses are equal as a defect, when for this
+/// one operation that is the well-formed shape.
+///
+/// `deleted` must never appear. There is no `nerve memory delete` — a delete verb is how *history
+/// preserved* stops being true — and a gloss for one would be a sentence for a command this
+/// product refuses to have.
+#[test]
+fn every_memory_operation_is_glossed_and_only_one_of_them_changes_no_status() {
+    let expected: Vec<String> = MemoryOperation::ALL
+        .iter()
+        .map(|value| value.as_str().to_string())
+        .collect();
+    assert_eq!(expected.len(), 5);
+    covers(
+        "MemoryOperation::ALL",
+        "MEMORY_OPERATION (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "MEMORY_OPERATION"),
+    );
+
+    let source = vocab_ts();
+    let keys = object_keys(&source, "MEMORY_OPERATION");
+    for forbidden in ["deleted", "removed", "purged", "forgotten"] {
+        assert!(
+            !keys.iter().any(|key| key == forbidden),
+            "`{forbidden}` is glossed as a memory operation and no command can produce one"
+        );
+    }
+
+    // Exactly one operation leaves the status alone, and its sentence is the only one that may say
+    // so. Anti-vacuity: the count is asserted, so a vocabulary that lost the distinction fails
+    // here rather than passing by having nothing to check.
+    let unchanging: Vec<MemoryOperation> = MemoryOperation::ALL
+        .into_iter()
+        .filter(|operation| !operation.changes_status())
+        .collect();
+    assert_eq!(unchanging, vec![MemoryOperation::Cited]);
+    let cited = gloss_for(&source, "MEMORY_OPERATION", MemoryOperation::Cited.as_str());
+    assert!(
+        cited.contains("no status"),
+        "the citation gloss must say it changes no status: {cited}"
+    );
+    for operation in MemoryOperation::ALL {
+        if operation == MemoryOperation::Cited {
+            continue;
+        }
+        let gloss = gloss_for(&source, "MEMORY_OPERATION", operation.as_str());
+        assert_ne!(gloss, cited, "{operation} shares the citation's gloss");
+    }
 }
 
 /// All twelve freshness situations, and the two pairs that must not read as one.
@@ -1328,6 +1445,8 @@ fn no_gloss_is_empty_or_the_fallback_sentence() {
         (vocab_ts(), "MEMORY_STATUS"),
         (vocab_ts(), "MEMORY_VIEW"),
         (vocab_ts(), "MEMORY_SUBJECT_RESOLUTION"),
+        (vocab_ts(), "MEMORY_SCOPE"),
+        (vocab_ts(), "MEMORY_OPERATION"),
         (format_ts(), "SOURCE_TYPES"),
         (format_ts(), "DIRECTNESS"),
         (format_ts(), "STATUS_GLOSS"),

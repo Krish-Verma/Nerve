@@ -1408,6 +1408,65 @@ assert refused == 8, refused
 PY
       after=\$(shasum -a 256 '$WORK/.nerve/nerve.db' | cut -d' ' -f1)
       [ \"\$after\" = '$MEM_BEFORE' ] || { echo \"the database changed: $MEM_BEFORE != \$after\"; exit 1; }"
+
+    # Slice 14d, and row 14 §7.9's last surface. The interface is compiled into this binary, so it
+    # is fetched from the running server rather than read off disk — a bundle that was rebuilt and
+    # never re-embedded would pass a file check and ship the old screen, which is `82a6ff3`'s
+    # defect and the reason the source-side gloss tests all passed while the binary served
+    # something else.
+    #
+    # What is asserted is what the screen can *say*, not that a file exists: it can ask for the
+    # records, it tells the two absences apart, it labels the stored half and the derived half
+    # separately, it carries the prose for all five memory vocabularies, and it has no write verb
+    # anywhere in it. A page that could not do those would render a note as a row of bare tokens
+    # with no way to tell what was recorded from what was worked out.
+    check "the shipped interface can display a note, and carries no way to write one" bash -c "
+      python3 - '$WORK/memory-serve.json' <<'PY'
+import json, re, sys, urllib.request
+meta = json.load(open(sys.argv[1]))
+
+def asset(route):
+    # Deliberately unauthenticated: a browser cannot put a header on a <script src>, so the
+    # interface's own files are the one exemption, and this is exercising it as a browser does.
+    with urllib.request.urlopen(meta['base_url'] + route, timeout=20) as answer:
+        assert answer.status == 200, (route, answer.status)
+        return answer.read().decode('utf-8', 'replace')
+
+page = asset('/')
+bundle = asset('/assets/nerve.js')
+style = asset('/assets/nerve.css')
+assert '/assets/nerve.js' in page, page[:400]
+
+# It can ask both memory routes, and it can tell the two absences apart. They are different
+# absences with different next steps, and a screen that rendered them alike would report
+# 'nobody has written anything here' as 'your filters matched nothing'.
+for needle in ('/api/memory', '/api/memory/record', 'no_memory_recorded', 'no_memory_matches'):
+    assert needle in bundle, needle
+
+# Stored and derived are drawn as two labelled groups with different rules beside them. Both the
+# label and the rule are checked: a label with no rule is a claim the stylesheet does not keep.
+assert 'worked out when read' in bundle, 'the derived half is not labelled'
+assert 'kind--derived' in bundle and 'kind--derived' in style, 'the derived half has no rule'
+assert 'dashed' in style
+
+# One sentence from each of the five memory vocabularies, so a gloss that reached the source and
+# not the binary fails here as well as in cargo test.
+for gloss in ('It stopped being true and nothing replaced it',
+              'Several notes are about this subject',
+              'The note follows it because that record exists',
+              'The claim is about how people work on it',
+              'The only entry that changes no status'):
+    assert gloss in bundle, gloss
+
+# And the shipped interface issues exactly one HTTP method. Asserted on the request the page
+# actually builds rather than on the words, twice over: PUT occurs inside INPUT and DELETE inside
+# DELETED, so a substring search would fail on React's own strings; and the quote characters are
+# required rather than matched with a wildcard, because the gloss for a method entity begins
+# 'method:\"A function declared on…' and a wildcard reads its first word as a verb.
+methods = set(re.findall(r'method:\s*\"([A-Z]{3,7})\"', bundle))
+assert methods == {'GET'}, methods
+assert '<form' not in page and '<form' not in bundle, 'the interface ships a form'
+PY"
   else
     skip "the memory HTTP surface" "nerve serve did not report a url"
   fi

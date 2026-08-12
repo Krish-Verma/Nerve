@@ -23,6 +23,7 @@ import { Contracts } from './views/Contracts';
 import { Coverage } from './views/Coverage';
 import { Entity } from './views/Entity';
 import { History } from './views/History';
+import { Memory } from './views/Memory';
 import { Overview } from './views/Overview';
 import { Search } from './views/Search';
 import { Unresolved } from './views/Unresolved';
@@ -198,6 +199,22 @@ export function App() {
           />
         </div>
 
+        {/*
+          Its own group, and the only screen here whose contents no extractor produced. Everything
+          else in this rail was read off the repository; a note exists because a person typed one.
+          There is no count beside it for the same reason History and Contracts have none — a
+          number of notes says nothing without how many still describe the code, and that is
+          decided when the notes are read rather than stored anywhere a rail could ask.
+        */}
+        <div className="rail__group">
+          <div className="rail__label micro">what a person wrote</div>
+          <RailLink
+            to={{ view: 'memory', options: {} }}
+            current={route.view === 'memory'}
+            label="Memory"
+          />
+        </div>
+
         {data ? (
           <div className="rail__focus">
             <div className="micro">index state</div>
@@ -225,6 +242,8 @@ export function App() {
           <History tab={route.tab} options={route.options} />
         ) : route.view === 'contracts' ? (
           <Contracts tab={route.tab} options={route.options} />
+        ) : route.view === 'memory' ? (
+          <Memory options={route.options} />
         ) : (
           <Unresolved />
         )}

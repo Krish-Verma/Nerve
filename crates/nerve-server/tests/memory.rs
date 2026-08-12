@@ -337,6 +337,89 @@ fn one_record_is_served_with_every_citation_and_every_event_it_has() {
     assert_eq!(operations, vec!["proposed", "confirmed", "superseded"]);
 }
 
+/// **Every field a person typed is served as an escaped string, and none of it is lost.** T7, and
+/// the widest instance of it in the product.
+///
+/// Slice 14d puts these values on a page. A memory record is the one thing in this database a human
+/// wrote, so the note itself, the author label, the claim key, the reason it ended, an event's note,
+/// a citation's path and every field of the subject snapshot are all free text — and on a project
+/// that accepts contributions, all of it is attacker-influencable. `respond::to_json_bytes` escapes
+/// `<`, `>` and `&` on the way out, which is what makes the bytes safe to hand to a renderer, and
+/// this asserts it for **this family of routes** rather than trusting the general test: a route
+/// that assembled its body some other way would pass that one and fail here.
+///
+/// Both halves are asserted, because either alone is worthless. The bytes carry no raw `<` — and
+/// the payload still decodes to exactly what was typed, which is what makes the escaping a
+/// rendering decision rather than a lossy filter that quietly damages a person's note.
+#[test]
+fn every_field_a_person_typed_is_served_escaped_and_decodes_back_unchanged() {
+    let (_dir, _root, session) = common::served_memory();
+
+    for target in [
+        "/api/memory?limit=200",
+        "/api/memory/record?memory_id=m1",
+        "/api/memory/record?memory_id=m6",
+    ] {
+        let response = session.get(target);
+        assert_eq!(response.status, 200, "{target}: {}", response.body);
+        for character in ['<', '>', '&'] {
+            assert!(
+                !response.body.contains(character),
+                "{target} served a raw {character:?}:\n{}",
+                response.body
+            );
+        }
+        // Anti-vacuity. A body with nothing hostile in it would satisfy the three assertions above
+        // by carrying no repository text at all, which is the way this check goes quietly empty.
+        assert!(
+            response.body.contains("\\u003c"),
+            "{target} carries no escaped payload, so the check above proved nothing:\n{}",
+            response.body
+        );
+    }
+
+    // And nothing was damaged on the way. Seven fields, each one text somebody typed, each read
+    // back through a JSON decode and compared byte for byte against what was written.
+    let listed = session.json("/api/memory?limit=200");
+    let note = record(&listed, "m1");
+    assert_eq!(note["content"], common::HOSTILE_NOTE);
+    assert_eq!(note["author_label"], common::HOSTILE_AUTHOR);
+    assert_eq!(note["claim_key"], common::HOSTILE_CLAIM_KEY);
+    assert_eq!(note["subject"]["path"], common::HOSTILE_FILE);
+    assert_eq!(note["subject"]["selector"], common::HOSTILE_FILE);
+    assert_eq!(note["citations"][0]["cited_path"], common::HOSTILE_FILE);
+    assert_eq!(note["events"][1]["note"], common::HOSTILE_EVENT_NOTE);
+    assert_eq!(
+        record(&listed, "m6")["invalidation_reason"],
+        common::HOSTILE_REASON
+    );
+
+    // The prompt-injection prose is carried as a **string value** and never as a key, a vocabulary
+    // member or a code, which is the property that keeps it renderable as text. Asserted by
+    // walking the whole answer rather than by inspecting the fields above.
+    fn keys(value: &Value, into: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                for (key, item) in map {
+                    into.push(key.clone());
+                    keys(item, into);
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|item| keys(item, into)),
+            _ => {}
+        }
+    }
+    let mut every_key = Vec::new();
+    keys(&listed, &mut every_key);
+    assert!(every_key.len() > 100, "the walk found {}", every_key.len());
+    for key in &every_key {
+        assert!(
+            !key.contains('<') && !key.contains("DISREGARD"),
+            "repository text reached a JSON key: {key}"
+        );
+    }
+}
+
 /// A record that is not here is a refusal, never an empty one.
 #[test]
 fn an_unknown_memory_id_is_a_refusal_rather_than_an_empty_record() {
