@@ -27,6 +27,11 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 1
 ROOT="$PWD"
+
+# How many MCP tools the build declares, read from the source of truth so no check has to
+# carry a literal that goes stale the next time a tool is admitted.
+DECLARED_TOOLS=$(grep -oE 'TOOL_NAMES: \[&str; [0-9]+\]' "$ROOT/crates/nerve-server/src/mcp.rs" | grep -oE '[0-9]+')
+: "${DECLARED_TOOLS:?could not read TOOL_NAMES from crates/nerve-server/src/mcp.rs}"
 export PATH="$HOME/.cargo/bin:$PATH"
 
 PASS=0
@@ -1018,17 +1023,25 @@ PY"
         printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"nerve_contracts\",\"arguments\":{\"question\":\"registry\",\"registry_id\":\"pkg-map\"}}}'
         printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"nerve_contracts\",\"arguments\":{\"question\":\"vocabulary\"}}}'
       } | '$NERVE' mcp --path '$SWORK/host' > '$SWORK/mcp.jsonl' 2>'$SWORK/mcp.err'
-      python3 - '$SWORK/mcp.jsonl' <<'PY'
+      python3 - '$SWORK/mcp.jsonl' '$DECLARED_TOOLS' <<'PY'
 import json, sys
 rows = {r['id']: r for r in (json.loads(line) for line in open(sys.argv[1]) if line.strip())}
 assert set(rows) == {1, 2, 3, 4, 5}, sorted(rows)
 names = [t['name'] for t in rows[2]['result']['tools']]
 assert 'nerve_contracts' in names, names
-# The whole advertised set rather than one tool, so a tool that stopped being advertised fails
-# here as well as in cargo test. The number is mcp::TOOL_NAMES.len(), which a shell script cannot
-# read, so it moves with the table: five in 8b-ii, six in 12c-iii-b, seven in 13d, eight in 14c.
 assert 'nerve_memory' in names, names
-assert len(names) == 8, names
+# The whole advertised set rather than one tool, so a tool that stopped being advertised fails
+# here as well as in cargo test.
+#
+# The expected count is READ OUT OF mcp.rs rather than written here. It used to be a literal, and
+# the comment beside it claimed a shell script could not read TOOL_NAMES.len() -- which was untrue,
+# and the literal then broke this check twice: 14c raised it seven to eight, and the check-verdict
+# slice raised it eight to nine, each time turning a correct new tool into a red acceptance run.
+# A number that has to be edited whenever the thing it describes changes is a second copy of that
+# thing. Now there is one copy, and a tool that is declared but never advertised still fails.
+declared = int(sys.argv[2])
+assert declared >= 5, declared
+assert len(names) == declared, (sorted(names), declared)
 
 answered = rows[3]['result']
 assert answered['isError'] is False, answered
@@ -1794,6 +1807,259 @@ PY"
   rm -rf "$UIWORK"
 else
   skip "the impact, selector and trace UI surfaces" "python3 is unavailable"
+fi
+
+# ---------------------------------------------------------------------------------------------
+section "4i. Can this index be trusted, and do the three surfaces agree about it"
+
+# The fourth gap of the same slice. `nerve check`'s five-valued verdict was reachable only from a
+# shell: HTTP had no route, MCP had no tool and the interface had no screen, so every other answer
+# on those surfaces could be drawn from a graph built against a tree that had since moved on with
+# nothing on the wire saying so.
+#
+# What is checked is behaviour and then agreement, in that order. Agreement alone is worth little —
+# three surfaces that all answered "current" about a repository nobody touched would agree and prove
+# nothing — so the comparison is made on a repository in a **real non-current state**, which is
+# 13d-ii's shape for a link's freshness applied one row down.
+#
+# The added-file case is the sharpest of the three. The freshness sweep walks the index's own cache,
+# so a file added since the last index has no row to compare and is invisible to it: the sweep still
+# reports every hash as matching. A check that missed it would be the exact defect Slice 7c-i was
+# written to fix, and it is asserted on all three surfaces.
+#
+# NO BACKTICKS anywhere in the heredocs below. They sit inside double-quoted bash -c arguments,
+# which the outer shell expands *before* the heredoc exists — the note beside section 4h records
+# what that cost. No bare '$' either, for the same reason.
+if command -v python3 >/dev/null 2>&1; then
+  TRUSTWORK=$(mktemp -d)
+  TRUSTED="$TRUSTWORK/repo"
+  cp -R "$ROOT/fixtures/ts-basic" "$TRUSTED"
+
+  if (cd "$TRUSTED" && "$NERVE" init >/dev/null 2>&1 && "$NERVE" index >/dev/null 2>&1); then
+
+    # A freshly indexed repository, judged at the command line. Exit 0 is the whole assertion here:
+    # `check` exits 0 only for `current`, so a verdict of anything else fails without parsing.
+    check "a freshly indexed repository reports current, and exits 0" bash -c "
+      cd '$TRUSTED' && '$NERVE' check --json > '$TRUSTWORK/cli-current.json' || exit 1
+      python3 - '$TRUSTWORK/cli-current.json' <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1]))
+assert value['verdict'] == 'current', value
+assert value['exit_code'] == 0, value
+assert value['freshness']['stale'] == 0, value['freshness']
+assert value['added'] == 0, value
+PY"
+
+    # The database is byte-identical across every read below. Taken before the mutations so the
+    # comparison covers the whole session, including the two surfaces that walk the filesystem.
+    TRUST_BEFORE=$(shasum -a 256 "$TRUSTED/.nerve/nerve.db" | cut -d' ' -f1)
+
+    # Touch a tracked file. This is *measured* divergence, and it is the first of the two
+    # non-current states the agreement check below is run against.
+    cp "$TRUSTED/src/math.ts" "$TRUSTWORK/math.ts.orig"
+    printf 'export const changed = 1;\n' > "$TRUSTED/src/math.ts"
+    check "touching a tracked file makes the verdict stale, and exits 4" bash -c "
+      cd '$TRUSTED'
+      '$NERVE' check --json > '$TRUSTWORK/cli-stale.json'
+      code=\$?
+      [ \"\$code\" = '4' ] || { echo \"expected exit 4, got \$code\"; exit 1; }
+      python3 - '$TRUSTWORK/cli-stale.json' <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1]))
+assert value['verdict'] == 'stale', value
+assert value['freshness']['stale'] == 1, value['freshness']
+assert value['exit_code'] == 4, value
+PY"
+
+    # Restore the file byte for byte and add a new one instead. The sweep now sees nothing wrong —
+    # every hash it holds still matches — and only the walk of the tree can see the addition.
+    cp "$TRUSTWORK/math.ts.orig" "$TRUSTED/src/math.ts"
+    printf 'export const brandNew = 1;\n' > "$TRUSTED/src/brandnew.ts"
+    check "a file the index has never seen is detected, though the sweep reports nothing wrong" bash -c "
+      cd '$TRUSTED'
+      '$NERVE' check --json > '$TRUSTWORK/cli-added.json'
+      code=\$?
+      [ \"\$code\" = '4' ] || { echo \"expected exit 4, got \$code\"; exit 1; }
+      python3 - '$TRUSTWORK/cli-added.json' <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1]))
+assert value['verdict'] == 'stale', value
+assert value['added'] == 1, value
+assert value['added_paths'] == ['src/brandnew.ts'], value['added_paths']
+# The measurement the whole tree walk exists for: the sweep is clean and the index is not current.
+assert value['freshness']['stale'] == 0, value['freshness']
+assert value['freshness']['missing'] == 0, value['freshness']
+assert value['freshness']['fresh'] == value['freshness']['files_total'], value['freshness']
+PY"
+
+    "$NERVE" serve "$TRUSTED" --json >"$TRUSTWORK/serve.json" 2>"$TRUSTWORK/serve.err" &
+    TRUST_SERVE_PID=$!
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      grep -q '"token"' "$TRUSTWORK/serve.json" 2>/dev/null && break
+      sleep 0.25
+    done
+
+    if grep -q '"token"' "$TRUSTWORK/serve.json" 2>/dev/null; then
+
+      # A stale index is a *successful answer to the question that was asked*, so it is a 200 with
+      # a verdict. A 4xx would make it indistinguishable from "your request was wrong", and a client
+      # with a blanket throw-on-not-ok would turn the most useful answer here into an exception.
+      check "/api/check answers 200 with the verdict, and never encodes staleness in the status" bash -c "
+        python3 - '$TRUSTWORK/serve.json' <<'PY'
+import json, sys, urllib.request
+meta = json.load(open(sys.argv[1]))
+request = urllib.request.Request(meta['base_url'] + '/api/check',
+                                 headers={meta['token_header']: meta['token']})
+with urllib.request.urlopen(request, timeout=20) as answer:
+    assert answer.status == 200, answer.status
+    value = json.load(answer)
+assert value['ok'] is True, value
+assert value['verdict'] == 'stale', value
+assert value['trustworthy'] is False, value
+assert value['http_status'] == 200, value
+
+# The two families of evidence, under their own keys, never summed. An added file is a measurement,
+# so it belongs to the observed family and not to the one that means nobody looked.
+assert value['evidence']['observed']['added'] == 1, value['evidence']
+assert value['evidence']['not_established']['total'] == 0, value['evidence']
+assert value['tree']['added'] == 1, value['tree']
+assert value['tree']['added_paths'] == ['src/brandnew.ts'], value['tree']
+assert value['sweep']['stale'] == 0, value['sweep']
+
+# All five verdicts reach the wire with their own sentence, so a client meeting one it has not seen
+# renders it as itself rather than as a neighbour.
+terms = value['vocabulary']['verdicts']
+assert [t['verdict'] for t in terms] == \
+       ['current', 'no_index', 'unusable', 'stale', 'unverified'], terms
+assert len({t['note'] for t in terms}) == 5, terms
+assert [t['verdict'] for t in terms if t['trustworthy']] == ['current'], terms
+assert 'absence of a measurement' in value['limitations']['stale_is_not_unverified']
+
+# The remedy is a command rather than a control, because re-indexing writes and this API cannot.
+assert value['boundary']['read_only'] is True, value['boundary']
+assert value['remedy']['command'] == 'nerve index', value['remedy']
+assert value['remedy']['required'] is True, value['remedy']
+PY"
+
+      # Acceptance: the three surfaces agree, on a repository whose verdict is NOT current — so the
+      # comparison cannot pass on three identical trivial answers.
+      check "the CLI, HTTP and MCP agree on the verdict for one repository" bash -c "
+        printf '%s\n' \
+          '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"acceptance\",\"version\":\"1\"}}}' \
+          '{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}' \
+          '{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}' \
+          '{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"nerve_check\",\"arguments\":{}}}' \
+          '{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"nerve_check\",\"arguments\":{\"selector\":\"add\"}}}' |
+        '$NERVE' mcp '$TRUSTED' > '$TRUSTWORK/mcp-check.jsonl' || exit 1
+        python3 - '$TRUSTWORK/serve.json' '$TRUSTWORK/cli-added.json' '$TRUSTWORK/mcp-check.jsonl' <<'PY'
+import json, sys, urllib.request
+meta = json.load(open(sys.argv[1]))
+request = urllib.request.Request(meta['base_url'] + '/api/check',
+                                 headers={meta['token_header']: meta['token']})
+http = json.load(urllib.request.urlopen(request, timeout=20))
+cli = json.load(open(sys.argv[2]))
+lines = [json.loads(line) for line in open(sys.argv[3]) if line.strip()]
+answers = {line['id']: line for line in lines}
+assert len(lines) == 4, lines
+
+tools = [t['name'] for t in answers[2]['result']['tools']]
+assert 'nerve_check' in tools, tools
+mcp = answers[3]['result']['structuredContent']
+report = mcp['repository_content']['check']
+
+# Anti-vacuity, and the whole point of running the comparison here: the verdict is a real one that
+# is not 'current', so three surfaces agreeing is three surfaces agreeing about something.
+assert cli['verdict'] != 'current', cli
+assert cli['verdict'] == http['verdict'] == report['verdict'] == 'stale', \
+       (cli['verdict'], http['verdict'], report['verdict'])
+assert mcp['evidence']['verdict'] == 'stale', mcp['evidence']
+assert mcp['evidence']['trustworthy'] is False, mcp['evidence']
+
+# And on the measurement behind it, not only on the word. The added file is what the three have to
+# agree about: it is invisible to the freshness sweep, so a surface that skipped the tree walk would
+# answer 'current' here and the comparison above would catch it.
+assert cli['added'] == http['tree']['added'] == report['tree']['added'] == 1, \
+       (cli['added'], http['tree']['added'], report['tree']['added'])
+assert cli['added_paths'] == http['tree']['added_paths'] == report['tree']['added_paths'] == \
+       ['src/brandnew.ts']
+assert cli['freshness']['stale'] == http['sweep']['stale'] == report['sweep']['stale'] == 0
+assert cli['freshness']['fresh'] == http['sweep']['fresh'] == report['sweep']['fresh']
+assert cli['schema_version'] == http['schema']['version'] == report['schema']['version']
+
+# The agent surface names the command a human runs, and offers no control that runs it.
+assert report['boundary']['read_only'] is True, report['boundary']
+assert report['remedy']['command'] == 'nerve index', report['remedy']
+
+# A tool that takes no argument refuses one rather than answering a narrower question.
+assert answers[4]['error']['code'] == -32602, answers[4]
+assert answers[4]['error']['data']['argument'] == 'selector', answers[4]
+PY"
+
+      # Slice 7c-i's five verdicts, on the screen that is consulted before every other screen. The
+      # interface is compiled into this binary, so it is fetched from the running server rather than
+      # read off disk: a bundle that was rebuilt and never re-embedded passes every source-side test
+      # and ships the old screen, which is 82a6ff3's defect.
+      check "the shipped interface renders all five verdicts and never draws unverified as stale" bash -c "
+        python3 - '$TRUSTWORK/serve.json' <<'PY'
+import json, sys, urllib.request
+meta = json.load(open(sys.argv[1]))
+
+def asset(route):
+    # Unauthenticated on purpose: a browser cannot put a header on a <script src>.
+    with urllib.request.urlopen(meta['base_url'] + route, timeout=20) as answer:
+        assert answer.status == 200, (route, answer.status)
+        return answer.read().decode('utf-8', 'replace')
+
+bundle = asset('/assets/nerve.js')
+
+# It can ask the endpoint, and it has a route of its own to be linked to.
+for needle in ('/api/check', '#/check'):
+    assert needle in bundle, needle
+
+# Every verdict is renderable, and the two that must not collapse have their own hue in the shipped
+# build. The tone table is a switch with five arms and no default, so all five names are present.
+for verdict in ('current', 'no_index', 'unusable', 'stale', 'unverified'):
+    assert verdict in bundle, verdict
+
+# One sentence from each of the five glosses, so a gloss that reached the source and not the binary
+# fails here as well as in cargo test. The stale and unverified pair is checked as a pair.
+for gloss in ('Every indexed file was re-read and still matches',
+              'Nothing has been indexed here, so nothing was measured',
+              'An index exists and cannot be read as it stands',
+              'Divergence was measured',
+              'Nothing was observed to have changed, and part of the repository was never compared'):
+    assert gloss in bundle, gloss
+
+# The two families are drawn as two panels with their own headings, so the counts can never be read
+# as one list a reader adds up.
+assert 'Divergence that was measured' in bundle, 'the observed family has no panel'
+assert 'Repository that was never compared' in bundle, 'the unchecked family has no panel'
+
+# The measurement the sweep cannot make has its own panel and its own sentence.
+assert 'What the index has never seen' in bundle, 'the tree walk has no panel'
+assert 'a file added since the last index has nothing to compare' in bundle
+
+# The remedy is printed as a command, and the screen ships no way to run it.
+assert 'nerve index' in bundle, 'the remedy command is not shipped'
+assert '<form' not in bundle, 'the interface ships a form'
+PY"
+    else
+      skip "the trust verdict on HTTP, MCP and the interface" "nerve serve did not report a url"
+    fi
+    kill "$TRUST_SERVE_PID" >/dev/null 2>&1
+    wait "$TRUST_SERVE_PID" 2>/dev/null
+
+    # Judging is a read, on every surface, and the proof is on the bytes rather than on the absence
+    # of a write statement. `check` walks the filesystem — that is still a read.
+    check "judging the index leaves the database byte-identical on all three surfaces" bash -c "
+      after=\$(shasum -a 256 '$TRUSTED/.nerve/nerve.db' | cut -d' ' -f1)
+      [ \"\$after\" = '$TRUST_BEFORE' ] || { echo \"the database changed: $TRUST_BEFORE != \$after\"; exit 1; }"
+  else
+    skip "the trust verdict on HTTP, MCP and the interface" "the fixture did not index"
+  fi
+  rm -rf "$TRUSTWORK"
+else
+  skip "the trust verdict on HTTP, MCP and the interface" "python3 is unavailable"
 fi
 
 # ---------------------------------------------------------------------------------------------

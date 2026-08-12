@@ -1102,3 +1102,171 @@ fn every_resolved_parameter_is_reported_under_its_own_name() {
         .unwrap()
         .is_empty());
 }
+
+// ---- /api/check ---------------------------------------------------------------------------------
+
+/// The verdict, and the property that makes it readable: **a stale index is a 200**.
+///
+/// The status code describes the request and the verdict describes the index. A `4xx` for a stale
+/// index would be indistinguishable from a bad token or a route that does not exist, and a client
+/// with a blanket `if (!response.ok) throw` — which is most clients — would turn the most important
+/// answer this server can give into an exception with no verdict in it. So the status is asserted
+/// on the non-`current` answers rather than only on the clean one.
+#[test]
+fn check_answers_two_hundred_with_a_verdict_for_a_current_index_and_for_a_stale_one() {
+    let (_dir, root, session) = common::served();
+
+    let fresh = session.get("/api/check");
+    assert_eq!(fresh.status, 200, "{}", fresh.body);
+    let value = fresh.parse_json();
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["result_kind"], "trust_verdict");
+    assert_eq!(value["verdict"], "current", "{value}");
+    assert_eq!(value["trustworthy"], true);
+    assert_eq!(value["http_status"], 200);
+    assert_eq!(value["swept"], true);
+    assert_eq!(value["schema"]["version"], nerve_store::SCHEMA_VERSION);
+    assert_eq!(value["schema"]["readable"], true);
+    assert_eq!(value["runs_running"], 0);
+    assert!(value["sweep"]["fresh"].as_u64().unwrap() > 0, "{value}");
+    assert_eq!(value["sweep"]["probe_cap"], 5_000);
+    assert_eq!(value["tree"]["added"], 0);
+    assert_eq!(value["evidence"]["observed"]["total"], 0);
+    assert_eq!(value["evidence"]["not_established"]["total"], 0);
+    assert_eq!(value["remedy"]["required"], false);
+    assert_eq!(value["remedy"]["command"], "nerve index");
+    assert_eq!(value["boundary"]["read_only"], true);
+    assert!(value["reason"].as_str().unwrap().len() > 10);
+
+    // Touch a tracked file. The verdict changes and the status does not.
+    std::fs::write(root.join("src/math.ts"), "export const changed = 1;\n").unwrap();
+    let stale = session.get("/api/check");
+    assert_eq!(
+        stale.status, 200,
+        "a stale index is a successful answer to the question that was asked: {}",
+        stale.body
+    );
+    let value = stale.parse_json();
+    assert_eq!(
+        value["ok"], true,
+        "`ok` is the envelope's, not the verdict's; the verdict is in `verdict`"
+    );
+    assert_eq!(value["verdict"], "stale");
+    assert_eq!(value["trustworthy"], false);
+    assert_eq!(value["evidence"]["observed"]["changed"], 1);
+    assert_eq!(value["remedy"]["required"], true);
+    assert_eq!(value["remedy"]["command"], "nerve index");
+
+    // Every key a client branches on is present in both shapes, so one parser reads both.
+    for key in [
+        "verdict",
+        "verdict_note",
+        "reason",
+        "trustworthy",
+        "sweep",
+        "tree",
+        "evidence",
+        "remedy",
+        "vocabulary",
+        "limitations",
+    ] {
+        assert!(
+            value.get(key).is_some(),
+            "{key} is missing from a stale answer"
+        );
+    }
+}
+
+/// An added file is the case the tree walk exists for.
+///
+/// The freshness sweep walks the index's own cache, so a file with no row is never probed: a
+/// repository can grow a hundred modules with every recorded hash still matching. A `/api/check`
+/// that reported `current` here would be the defect Slice 7c-i was written to fix, arriving on a
+/// second surface.
+#[test]
+fn check_sees_a_file_the_index_has_never_heard_of() {
+    let (_dir, root, session) = common::served();
+    std::fs::write(root.join("src/brandnew.ts"), "export const brandNew = 1;\n").unwrap();
+
+    let value = session.json("/api/check");
+    assert_eq!(value["verdict"], "stale", "{value}");
+    assert_eq!(value["tree"]["added"], 1);
+    assert_eq!(
+        value["tree"]["added_paths"],
+        serde_json::json!(["src/brandnew.ts"])
+    );
+    assert_eq!(value["tree"]["added_paths_truncated"], false);
+    assert_eq!(
+        value["sweep"]["stale"], 0,
+        "the sweep itself sees nothing wrong; only the tree walk does"
+    );
+    assert_eq!(value["evidence"]["observed"]["added"], 1);
+    assert_eq!(
+        value["evidence"]["not_established"]["total"], 0,
+        "an added file is a measurement, not an absence of one"
+    );
+}
+
+/// The five verdicts reach the wire as five, and the two unreliable ones keep separate sentences.
+#[test]
+fn check_carries_the_whole_verdict_vocabulary_and_never_collapses_stale_into_unverified() {
+    let (_dir, _root, session) = common::served();
+    let value = session.json("/api/check");
+
+    let verdicts = value["vocabulary"]["verdicts"].as_array().unwrap();
+    assert_eq!(verdicts.len(), 5, "{verdicts:#?}");
+    let named: Vec<&str> = verdicts
+        .iter()
+        .map(|term| term["verdict"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        named,
+        vec!["current", "no_index", "unusable", "stale", "unverified"]
+    );
+    for (index, term) in verdicts.iter().enumerate() {
+        assert!(!term["note"].as_str().unwrap().is_empty());
+        for other in &verdicts[index + 1..] {
+            assert_ne!(term["note"], other["note"], "{term} shares a note");
+        }
+    }
+    let trustworthy: Vec<&str> = verdicts
+        .iter()
+        .filter(|term| term["trustworthy"] == serde_json::json!(true))
+        .map(|term| term["verdict"].as_str().unwrap())
+        .collect();
+    assert_eq!(trustworthy, vec!["current"]);
+
+    // And the answer says so in prose, on every answer rather than only on the ones it applies to.
+    let statement = value["limitations"]["stale_is_not_unverified"]
+        .as_str()
+        .unwrap();
+    assert!(
+        statement.contains("absence of a measurement"),
+        "{statement}"
+    );
+    assert!(value["status_is_not_the_verdict"]
+        .as_str()
+        .unwrap()
+        .contains("200"));
+}
+
+/// The walk is a read. Proved on the database bytes across a session that calls the route.
+#[test]
+fn check_leaves_the_database_byte_identical() {
+    let (_dir, root, session) = common::served();
+    let db = root.join(".nerve/nerve.db");
+    let before = std::fs::read(&db).unwrap();
+
+    session.json("/api/check");
+    std::fs::write(root.join("src/brandnew.ts"), "export const brandNew = 1;\n").unwrap();
+    session.json("/api/check");
+    session.json("/api/check");
+
+    let after = std::fs::read(&db).unwrap();
+    assert_eq!(
+        before.len(),
+        after.len(),
+        "the database changed size across a read"
+    );
+    assert!(before == after, "the database bytes changed across a read");
+}

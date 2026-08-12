@@ -81,6 +81,7 @@ pub mod resolve;
 pub mod similarity;
 pub mod trace;
 pub mod trace_ingest;
+pub mod trust;
 pub mod tsframework;
 
 pub use bind::{Binding, BindingTable, ThisResolution};
@@ -187,6 +188,7 @@ pub use trace::{
     TraceRecord, EXTRACTOR_ID as TRACE_EXTRACTOR_ID, EXTRACTOR_VERSION as TRACE_EXTRACTOR_VERSION,
 };
 pub use trace_ingest::{ingest_trace, TraceBinding, TraceOutcome};
+pub use trust::{trust, TrustMeasurement, TrustReport, Verdict, PROBE_CAP as TRUST_PROBE_CAP};
 pub use tsframework::{
     extract_framework as extract_ts_framework, TsEndpoint, TsFrameworkExtraction,
     DECLARED_RELATIONS as TS_FRAMEWORK_RELATIONS, EXTRACTOR_ID as TS_FRAMEWORK_EXTRACTOR_ID,

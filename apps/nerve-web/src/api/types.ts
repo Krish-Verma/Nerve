@@ -1251,3 +1251,141 @@ export interface TraceEnvironment {
   /** The union of every test named by every contributing run, already sorted by the writer. */
   tests: string[];
 }
+
+// ---- /api/check ---------------------------------------------------------------------------------
+
+/**
+ * The re-hash of every file the index has a row for. `null` when no sweep ran.
+ *
+ * Null rather than a row of zeroes, and the difference is load-bearing: a zeroed sweep is a
+ * measurement that came back clean, and no sweep at all is not a measurement. A view that rendered
+ * one as the other would report an unjudged index as a healthy one.
+ */
+export interface TrustSweep {
+  files_total: number;
+  files_probed: number;
+  fresh: number;
+  stale: number;
+  missing: number;
+  refused: number;
+  unreadable: number;
+  truncated: boolean;
+  probe_cap: number;
+}
+
+/**
+ * What the repository holds that the index has never seen. `null` when no walk ran.
+ *
+ * This is the half of the answer the freshness sweep **cannot** produce: the sweep walks the
+ * index's own cache, so a file added since the last index has no row to compare and is invisible to
+ * it. `added` is exact whatever `added_paths` was cut to.
+ */
+export interface TrustTree {
+  added: number;
+  added_paths: string[];
+  added_paths_returned: number;
+  added_paths_truncated: boolean;
+  added_paths_limit: number;
+  unindexable: number;
+}
+
+/** Divergence that was measured. Every field is a count of something that was looked at. */
+export interface TrustObserved {
+  changed: number;
+  removed: number;
+  added: number;
+  total: number;
+}
+
+/** Tree that was never looked at. **Not** divergence, and never added to the counts above. */
+export interface TrustNotEstablished {
+  refused: number;
+  unreadable: number;
+  never_probed: number;
+  truncated: boolean;
+  total: number;
+}
+
+/**
+ * The two families of evidence, under their own keys.
+ *
+ * They are separate because `stale` and `unverified` are separate: one is a measurement of
+ * divergence, the other is the absence of a measurement. Summing them would produce a number that
+ * means nothing, and rendering only one would make the verdict unexplainable in half the cases.
+ */
+export interface TrustEvidence {
+  observed: TrustObserved | null;
+  not_established: TrustNotEstablished | null;
+  statement: string;
+  families_are_separate: string;
+}
+
+/** What to run, and whether anything needs running. `required` is false for exactly one verdict. */
+export interface TrustRemedy {
+  required: boolean;
+  command: string;
+  verdict_command: string;
+  statement: string;
+}
+
+/** One verdict and what it means, as the server's own vocabulary sends it. */
+export interface TrustVerdictTerm {
+  verdict: string;
+  note: string;
+  trustworthy: boolean;
+}
+
+/**
+ * `/api/check` — whether this index can be believed right now.
+ *
+ * `verdict` is one of five and is **never** rounded to a neighbour. `stale` and `unverified` in
+ * particular are two values and not one: the first is measured divergence, the second is tree that
+ * was never compared, and a two-state payload would have to lie in one direction.
+ *
+ * `http_status` is always 200, including for the four verdicts that say the index cannot be relied
+ * on. The status describes the request and the verdict describes the index.
+ */
+export interface TrustReport {
+  result_kind: string;
+  verdict: string;
+  verdict_note: string;
+  reason: string;
+  trustworthy: boolean;
+  http_status: number;
+  status_is_not_the_verdict: string;
+  measured_at_this_request: boolean;
+  repository: {
+    repository_id: string | null;
+    project_id: string | null;
+    root_path: string | null;
+    state_id: string | null;
+    git_commit: string | null;
+    database_bytes: number | null;
+  };
+  schema: {
+    version: number | null;
+    supported_version: number;
+    readable: boolean;
+  };
+  runs_running: number;
+  swept: boolean;
+  sweep: TrustSweep | null;
+  tree: TrustTree | null;
+  evidence: TrustEvidence;
+  remedy: TrustRemedy;
+  boundary: {
+    read_only: boolean;
+    statement: string;
+    commands: string[];
+  };
+  vocabulary: {
+    verdicts: TrustVerdictTerm[];
+  };
+  limitations: {
+    stale_is_not_unverified: string;
+    sweep_is_bounded: string;
+    added_is_a_separate_measurement: string;
+    unindexable_is_not_added: string;
+    verdict_is_a_moment: string;
+  };
+}

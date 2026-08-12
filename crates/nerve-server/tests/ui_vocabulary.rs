@@ -39,6 +39,7 @@ use nerve_index::docs::{AdrStatus, STATUS_UNPARSED};
 use nerve_index::refs::{UnresolvedReason, UNMODELLED_FORMS};
 use nerve_index::trace::{CompletionState, SourceMapState};
 use nerve_index::trace_ingest::TraceBinding;
+use nerve_index::trust::Verdict;
 use nerve_store::Freshness;
 
 // ---- locating and reading the interface source ----------------------------------------------
@@ -72,7 +73,7 @@ fn types_ts() -> String {
 ///
 /// One list, used by both the source-side vocabulary tests' companion below and the
 /// bundle-staleness check, so a new gloss table cannot be added to one and forgotten by the other.
-const GLOSS_TABLES: [(&str, &str); 36] = [
+const GLOSS_TABLES: [(&str, &str); 37] = [
     ("format.ts", "FRESHNESS"),
     ("format.ts", "SOURCE_TYPES"),
     ("format.ts", "DIRECTNESS"),
@@ -133,6 +134,11 @@ const GLOSS_TABLES: [(&str, &str); 36] = [
     ("vocab.ts", "TRACE_COMPLETION"),
     ("vocab.ts", "TRACE_BINDING"),
     ("vocab.ts", "TRACE_SOURCE_MAP"),
+    // The fourth gap of the same slice. `nerve check`'s five-valued verdict was reachable only from
+    // a shell, so the vocabulary had no gloss at all; it arrives here directly rather than by way of
+    // `DECLARED_NOT_RENDERED` because the change that declares it is the change that renders it —
+    // `views/Check.tsx` imports it, and draws every member of the vocabulary the answer carries.
+    ("vocab.ts", "INDEX_VERDICT"),
 ];
 
 /// Gloss tables the interface **declares and does not yet render**.
@@ -833,6 +839,77 @@ fn every_trace_source_map_state_is_glossed() {
     );
 }
 
+/// The five answers to *can I trust this index right now?*, and the pair that must not read as one.
+///
+/// A missing gloss here would be worse than almost anywhere else on this list. The verdict is the
+/// screen a reader consults **before** deciding whether to believe every other screen, and an
+/// interface that fell back to "this build has no description" for one of them would be silent at
+/// exactly the moment silence reads as reassurance.
+///
+/// `stale` and `unverified` are the pair. They mean the same thing to a reader — do not rely on this
+/// index — and rest on opposite evidence: one is a measurement of divergence, the other is the
+/// absence of a measurement. `nerve check` gives them the same exit code because a shell has one way
+/// to say "do not proceed"; that is a property of exit codes and not of the evidence, and a shared
+/// gloss would put the interface back where a two-state freshness badge was — reporting a tree
+/// nobody looked at as a tree that changed. It is the same separation `missing` and
+/// `repository_state_unavailable` keep one vocabulary up.
+///
+/// `no_index` and `unusable` are the second pair, and they are checked too: nothing was ever
+/// measured, against an index that exists and cannot be read.
+#[test]
+fn every_index_verdict_is_glossed_and_unverified_is_not_stale() {
+    let expected: Vec<String> = Verdict::ALL
+        .iter()
+        .map(|verdict| verdict.as_str().to_string())
+        .collect();
+    // Anti-vacuity, and the thing this vocabulary exists to keep: five values, not two.
+    assert_eq!(
+        expected.len(),
+        5,
+        "the verdict vocabulary must stay five-valued"
+    );
+    assert!(expected.contains(&"unverified".to_string()));
+    covers(
+        "Verdict::ALL",
+        "INDEX_VERDICT (apps/nerve-web/src/vocab.ts)",
+        &expected,
+        &object_keys(&vocab_ts(), "INDEX_VERDICT"),
+    );
+
+    let source = vocab_ts();
+    assert_ne!(
+        gloss_for(&source, "INDEX_VERDICT", Verdict::Stale.as_str()),
+        gloss_for(&source, "INDEX_VERDICT", Verdict::Unverified.as_str()),
+        "`stale` and `unverified` share a gloss, so the interface would report a tree nobody \
+         looked at as a tree that changed"
+    );
+    assert_ne!(
+        gloss_for(&source, "INDEX_VERDICT", Verdict::NoIndex.as_str()),
+        gloss_for(&source, "INDEX_VERDICT", Verdict::Unusable.as_str()),
+        "`no_index` and `unusable` share a gloss, and only one of them means an index exists"
+    );
+
+    // The unverified gloss must say what it is the absence of, by name. A sentence that merely
+    // sounded unreassuring would be indistinguishable from the stale one to a reader skimming.
+    let unverified = gloss_for(&source, "INDEX_VERDICT", Verdict::Unverified.as_str());
+    assert!(
+        unverified.contains("never compared"),
+        "the unverified gloss must say the tree was never compared: {unverified}"
+    );
+    // And it must open by denying the change rather than merely sounding unreassuring: a gloss
+    // that only said "part of the repository was never compared" leaves a skimming reader free to
+    // supply the missing half themselves, which is the reading this pair exists to prevent.
+    assert!(
+        unverified.contains("Nothing was observed"),
+        "the unverified gloss must say nothing was observed to change: {unverified}"
+    );
+    let stale = gloss_for(&source, "INDEX_VERDICT", Verdict::Stale.as_str());
+    assert!(
+        stale.contains("measured"),
+        "the stale gloss must say the divergence was measured: {stale}"
+    );
+}
+
 #[test]
 fn every_unmodelled_form_is_glossed() {
     let expected: Vec<String> = UNMODELLED_FORMS.iter().map(|f| (*f).to_string()).collect();
@@ -1518,6 +1595,7 @@ fn no_gloss_is_empty_or_the_fallback_sentence() {
         (vocab_ts(), "MEMORY_SUBJECT_RESOLUTION"),
         (vocab_ts(), "MEMORY_SCOPE"),
         (vocab_ts(), "MEMORY_OPERATION"),
+        (vocab_ts(), "INDEX_VERDICT"),
         (format_ts(), "SOURCE_TYPES"),
         (format_ts(), "DIRECTNESS"),
         (format_ts(), "STATUS_GLOSS"),

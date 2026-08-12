@@ -833,3 +833,35 @@ export function detailGloss(key: string, value: string): string | undefined {
       return undefined;
   }
 }
+
+/**
+ * The five answers to *can I trust this index right now?*
+ *
+ * Two of these are the reason the table exists. `stale` and `unverified` mean the same thing to a
+ * reader — do not rely on this — and rest on opposite evidence: one is a measurement of divergence,
+ * the other is the absence of a measurement. `nerve check` gives them one exit code because a shell
+ * has one way to say "do not proceed"; a screen has room to say which, and a gloss shared between
+ * them would put this interface back where a two-state freshness badge was, reporting a tree nobody
+ * looked at as a tree that changed.
+ *
+ * The other pair a careless screen folds together is `no_index` and `unusable`: nothing was ever
+ * measured, against an index that exists and cannot be read. Both are fixed by the same command
+ * and they are not the same finding, and a reader deciding whether to trust a screenful of answers
+ * needs to know which.
+ */
+const INDEX_VERDICT: Record<string, string> = {
+  current:
+    'Every indexed file was re-read and still matches, and the repository holds nothing the index has never seen.',
+  no_index:
+    'Nothing has been indexed here, so nothing was measured. This is not a finding about the repository.',
+  unusable:
+    'An index exists and cannot be read as it stands — its schema is not this build’s, or a run never finished.',
+  stale:
+    'Divergence was measured: a file changed, a file the index describes is gone, or a file exists that no row describes.',
+  unverified:
+    'Nothing was observed to have changed, and part of the repository was never compared. This is a gap in the checking rather than a change in the code.',
+};
+
+export function indexVerdictGloss(value: string): string {
+  return INDEX_VERDICT[value] ?? 'This build has no description for that index verdict.';
+}

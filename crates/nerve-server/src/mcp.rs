@@ -62,6 +62,7 @@ use nerve_store::Connection;
 use crate::api;
 use crate::error::{Result, ServerError};
 
+pub mod check;
 pub mod contracts;
 pub mod gaps;
 pub mod history;
@@ -80,7 +81,7 @@ pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Every tool this server advertises, in the order `tools/list` returns them.
 ///
-/// Eight, and each earns its place by having a **materially different input/output contract**
+/// Nine, and each earns its place by having a **materially different input/output contract**
 /// (`docs/plans/slice-08-mcp.md`): a selector and its evidence; a free-text query and ranked
 /// hits; two selectors and an ordered chain; one selector and a reverse closure with an
 /// unresolved account; no selector at all, with a four-valued coverage verdict and a `totals`
@@ -109,7 +110,19 @@ pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// `question`, and that is the same rule applied honestly rather than an exception to it: naming
 /// one record and filtering a list return the same shape, so a mode switch would switch nothing.
 /// See `mcp/memory.rs`.
-pub const TOOL_NAMES: [&str; 8] = [
+///
+/// The ninth is the functional UI parity slice's, and it is the only one that is **not a question
+/// about the repository**: it judges whether the index still describes the tree, which is the
+/// precondition for every other answer here. Its input contract is *empty* — not "a selector is
+/// optional", but no argument at all, because the subject is the index rather than anything in it —
+/// and its output is a five-valued verdict over a re-hash and a tree walk. It is not `nerve_gaps`
+/// with a flag despite both taking no selector: gaps returns per-symbol coverage verdicts and a
+/// `totals` object, and two disjoint payloads behind one `question` switch is the shape 12c-iii-b's
+/// folding rule refuses rather than the shape it licenses. It is also not a block on the other
+/// eight: the repository block is read once when the session opens, and a verdict measured once and
+/// carried on every later answer would be a freshness claim that is itself out of date. See
+/// `mcp/check.rs` for the alternatives that were weighed and why each is worse.
+pub const TOOL_NAMES: [&str; 9] = [
     investigate::TOOL_NAME,
     search::TOOL_NAME,
     path::TOOL_NAME,
@@ -118,6 +131,7 @@ pub const TOOL_NAMES: [&str; 8] = [
     history::TOOL_NAME,
     contracts::TOOL_NAME,
     memory::TOOL_NAME,
+    check::TOOL_NAME,
 ];
 
 /// The `tools/list` payload.
@@ -131,6 +145,7 @@ pub fn descriptors() -> Vec<Value> {
         history::descriptor(),
         contracts::descriptor(),
         memory::descriptor(),
+        check::descriptor(),
     ]
 }
 
@@ -583,7 +598,7 @@ fn initialize_result(params: &Map<String, Value>) -> Value {
 
 /// `tools/call`: validate the envelope, run the named tool, shape the result.
 ///
-/// Dispatch is a match on a closed table of eight names. A name that is not one of them is
+/// Dispatch is a match on a closed table of nine names. A name that is not one of them is
 /// refused with the list, rather than falling through to a default tool — a client that
 /// mistypes `nerve_impact` must not silently receive an investigation.
 fn tools_call(session: &McpSession, id: Value, params: &Map<String, Value>) -> Value {
@@ -620,8 +635,9 @@ fn tools_call(session: &McpSession, id: Value, params: &Map<String, Value>) -> V
         history::TOOL_NAME => history::call(&ctx, repository, &arguments),
         contracts::TOOL_NAME => contracts::call(&ctx, repository, &arguments),
         memory::TOOL_NAME => memory::call(&ctx, repository, &arguments),
+        check::TOOL_NAME => check::call(&ctx, repository, &arguments),
         // `investigate` last: the guard above means only a name from `TOOL_NAMES` reaches here,
-        // and `tests/mcp.rs::every_advertised_tool_answers_over_the_wire` drives all eight so a
+        // and `tests/mcp.rs::every_advertised_tool_answers_over_the_wire` drives all nine so a
         // name that was advertised but never wired up cannot pass unnoticed.
         _ => investigate::call(&ctx, repository, &arguments),
     };
@@ -762,6 +778,7 @@ mod tests {
             (history::TOOL_NAME, history::ACCEPTED_ARGUMENTS.into()),
             (contracts::TOOL_NAME, contracts::ACCEPTED_ARGUMENTS.into()),
             (memory::TOOL_NAME, memory::ACCEPTED_ARGUMENTS.into()),
+            (check::TOOL_NAME, check::ACCEPTED_ARGUMENTS.into()),
         ]
     }
 

@@ -29,7 +29,8 @@ use serde_json::{json, Value};
 
 use nerve_core::vocab::{EntityKind, Relation};
 use nerve_server::mcp::{
-    self, contracts, gaps, history, impact, investigate, memory, path, search, tool, McpSession,
+    self, check, contracts, gaps, history, impact, investigate, memory, path, search, tool,
+    McpSession,
 };
 
 /// Injection prose a repository author controls. It is a heading, so it becomes a section name.
@@ -329,9 +330,10 @@ fn a_real_client_transcript_is_answered_in_order() {
     assert_eq!(
         tools.len(),
         mcp::TOOL_NAMES.len(),
-        "8b-ii shipped five, 12c-iii-b adds the sixth, 13d the seventh and 14c the eighth"
+        "8b-ii shipped five, 12c-iii-b adds the sixth, 13d the seventh, 14c the eighth and the \
+         functional UI parity slice the ninth"
     );
-    assert_eq!(tools.len(), 8);
+    assert_eq!(tools.len(), 9);
     assert_eq!(tools[0]["name"], investigate::TOOL_NAME);
     assert_eq!(tools[0]["inputSchema"]["required"], json!(["selector"]));
 
@@ -357,7 +359,7 @@ fn tools_list_returns_every_named_tool_each_stating_its_bounds_and_the_trust_lab
     assert_eq!(tools.len(), mcp::TOOL_NAMES.len(), "{tools:#?}");
     // A floor as well as an equality, so a table that lost an entry fails here rather than
     // agreeing with itself about a shorter list.
-    assert!(tools.len() >= 8, "{tools:#?}");
+    assert!(tools.len() >= 9, "{tools:#?}");
 
     let names: Vec<&str> = tools
         .iter()
@@ -402,6 +404,10 @@ fn every_advertised_tool_answers_over_the_wire() {
         // is ever discovered, so the tool reports which absence this is instead of an empty list
         // that would read as "there is nothing worth knowing about this project".
         (memory::TOOL_NAME, json!({})),
+        // The one tool with no argument at all. The fixture was indexed and then not touched, so
+        // the verdict here is `current` — which is the answer that has to work, because it is the
+        // one an agent reads as permission to believe the other eight.
+        (check::TOOL_NAME, json!({})),
     ];
     assert_eq!(calls.len(), mcp::TOOL_NAMES.len());
 
@@ -2208,6 +2214,11 @@ fn every_tool_enforces_the_answer_byte_ceiling() {
         // discovered, so a repository nobody wrote in has nothing to cut. The cut is proved in
         // `mcp::memory::tests`, where an oversized answer is built directly.
         (memory::TOOL_NAME, json!({ "limit": 100 })),
+        // The trust verdict takes no argument, so there is no limit to pass. Its one
+        // repository-sized list is the added paths, and this fixture was indexed whole, so nothing
+        // is untracked and the ceiling is unreachable here. The cut is proved in
+        // `api::check::tests`, where the list is built past the cap directly.
+        (check::TOOL_NAME, json!({})),
     ];
     assert_eq!(calls.len(), mcp::TOOL_NAMES.len());
 
@@ -3393,4 +3404,135 @@ fn every_hostile_field_of_a_note_is_confined_to_the_untrusted_field_and_the_coun
         let (inside, _) = occurrences(&whole["structuredContent"], marker);
         assert!(inside > 0, "the {what} never reached the answer");
     }
+}
+
+// ---- nerve_check (the functional UI parity slice) ------------------------------------------------
+
+/// The verdict an agent reads before it believes anything else, driven over the wire.
+///
+/// Three states on one fixture, in one test, because what matters is that they are **different
+/// answers** rather than that each is reachable: an index that was just built, the same index after
+/// a tracked file is touched, and the same index after a file is added. The third is the one the
+/// tree walk exists for — the freshness sweep compares only files the index has a row for, so an
+/// added file is invisible to it and an index that grew a hundred modules would report itself
+/// current.
+#[test]
+fn the_trust_tool_answers_current_then_stale_then_sees_an_added_file() {
+    let (_dir, root) = common::fixture_copy("ts-basic");
+    common::index(&root);
+
+    let fresh = result_of(&root, check::TOOL_NAME, json!({}));
+    let payload = &fresh["structuredContent"];
+    assert_eq!(fresh["isError"], false, "{fresh}");
+    assert_eq!(payload["evidence"]["verdict"], "current");
+    assert_eq!(payload["evidence"]["state"], check::STATE_TRUSTWORTHY);
+    assert_eq!(payload["evidence"]["trustworthy"], true);
+    let report = &payload[tool::UNTRUSTED_CONTENT_FIELD]["check"];
+    assert_eq!(report["verdict"], "current");
+    assert_eq!(report["swept"], true);
+    assert!(report["sweep"]["fresh"].as_u64().unwrap() > 0, "{report}");
+    assert_eq!(report["tree"]["added"], 0);
+    assert_eq!(report["evidence"]["observed"]["total"], 0);
+    assert_eq!(report["evidence"]["not_established"]["total"], 0);
+    assert_eq!(report["remedy"]["required"], false);
+
+    // A tracked file changed. This is a *measurement*, and the observed family carries it.
+    let math = root.join("src/math.ts");
+    let original = std::fs::read(&math).unwrap();
+    std::fs::write(&math, "export const changed = 1;\n").unwrap();
+    let stale = result_of(&root, check::TOOL_NAME, json!({}));
+    let payload = &stale["structuredContent"];
+    assert_eq!(payload["evidence"]["verdict"], "stale");
+    assert_eq!(payload["evidence"]["state"], check::STATE_NOT_TRUSTWORTHY);
+    assert_eq!(payload["evidence"]["trustworthy"], false);
+    assert_eq!(payload["evidence"]["observed"]["changed"], 1);
+    assert_eq!(
+        payload["evidence"]["not_established"]["total"], 0,
+        "a changed file is not an unchecked one"
+    );
+    let report = &payload[tool::UNTRUSTED_CONTENT_FIELD]["check"];
+    assert_eq!(report["remedy"]["required"], true);
+    assert_eq!(report["remedy"]["command"], "nerve index");
+
+    // An added file, with the touched file restored byte for byte so the sweep is clean again.
+    // The sweep still reports every row it has as fresh; only the walk sees the new file.
+    std::fs::write(&math, &original).unwrap();
+    std::fs::write(root.join("src/brandnew.ts"), "export const brandNew = 1;\n").unwrap();
+    let added = result_of(&root, check::TOOL_NAME, json!({}));
+    let report = &added["structuredContent"][tool::UNTRUSTED_CONTENT_FIELD]["check"];
+    assert_eq!(report["verdict"], "stale", "{report}");
+    assert_eq!(report["tree"]["added"], 1, "{report}");
+    assert_eq!(
+        report["tree"]["added_paths"],
+        json!(["src/brandnew.ts"]),
+        "{report}"
+    );
+    assert_eq!(
+        report["sweep"]["stale"], 0,
+        "the sweep itself sees nothing wrong; only the tree walk does"
+    );
+    assert_eq!(report["evidence"]["observed"]["added"], 1);
+}
+
+/// `unverified` reaches the wire as itself, and never as `stale`.
+///
+/// Driven through the vocabulary rather than through a repository, because forcing the sweep's cap
+/// needs a repository larger than 5000 files. What is asserted here is the part a fixture cannot
+/// reach: every verdict is advertised with its own sentence, so a client meeting `unverified` for
+/// the first time can render it as something other than a bare token or as its neighbour.
+#[test]
+fn the_trust_tool_advertises_all_five_verdicts_and_keeps_the_two_unreliable_ones_apart() {
+    let (_dir, root) = common::fixture_copy("ts-basic");
+    common::index(&root);
+    let answer = result_of(&root, check::TOOL_NAME, json!({}));
+    let terms = answer["structuredContent"]["evidence"]["verdicts"]
+        .as_array()
+        .expect("the answer carries the verdict vocabulary");
+    assert_eq!(terms.len(), 5, "{terms:#?}");
+
+    let named: Vec<&str> = terms
+        .iter()
+        .map(|term| term["verdict"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        named,
+        vec!["current", "no_index", "unusable", "stale", "unverified"]
+    );
+    // Exactly one is a clearance, and no two share a sentence — which is what stops a client
+    // rendering `unverified` with `stale`'s wording.
+    let trustworthy: Vec<&str> = terms
+        .iter()
+        .filter(|term| term["trustworthy"] == json!(true))
+        .map(|term| term["verdict"].as_str().unwrap())
+        .collect();
+    assert_eq!(trustworthy, vec!["current"]);
+    for (index, term) in terms.iter().enumerate() {
+        assert!(!term["note"].as_str().unwrap().is_empty());
+        for other in &terms[index + 1..] {
+            assert_ne!(term["note"], other["note"], "{term} shares a note");
+        }
+    }
+
+    // And the answer says, in prose, why the two must not be collapsed.
+    let statement = answer["structuredContent"]["evidence"]["stale_is_not_unverified"]
+        .as_str()
+        .unwrap();
+    assert!(
+        statement.contains("absence of a measurement"),
+        "{statement}"
+    );
+}
+
+/// A tool that takes no argument refuses every one rather than ignoring it.
+#[test]
+fn the_trust_tool_refuses_an_argument_rather_than_answering_a_narrower_question() {
+    let (_dir, root) = common::fixture_copy("ts-basic");
+    common::index(&root);
+    let error = protocol_error(
+        &root,
+        call_tool(check::TOOL_NAME, json!({ "selector": "src/math.ts#add" })),
+    );
+    assert_eq!(error["code"], -32602, "{error}");
+    assert_eq!(error["data"]["argument"], "selector");
+    assert_eq!(error["data"]["accepted"], json!([]));
 }

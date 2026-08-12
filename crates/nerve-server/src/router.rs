@@ -181,6 +181,12 @@ fn route(target: &Target, ctx: &Context<'_>) -> Outcome {
         // method check above refuses it — so there is no route to forget to make read-only.
         "/api/memory" => api::memory::list(ctx, target),
         "/api/memory/record" => api::memory::one(ctx, target),
+        // The functional UI parity slice. It takes no argument at all — the question is about this
+        // index and there is nothing to narrow — and it answers `200` for every one of its five
+        // verdicts. The status code is not the verdict: a `4xx` for a stale index would make the
+        // most useful answer on this server indistinguishable from a malformed request, and a
+        // client that branches on the status would throw it away. See `api::check`.
+        "/api/check" => api::check::verdict(ctx),
         other => {
             return match assets::lookup(other) {
                 Some(asset) => Outcome::Asset(asset),
@@ -229,8 +235,9 @@ fn wrap(value: serde_json::Value) -> serde_json::Value {
 /// Nothing checked this before Slice 12c-iii-a. `no_api_route_answers_without_a_token` iterates this
 /// table, but the guard runs *before* dispatch, so an entry naming no arm still answered `401` and
 /// passed.
-pub const ROUTES: [&str; 23] = [
+pub const ROUTES: [&str; 24] = [
     "/api/overview",
+    "/api/check",
     "/api/search",
     "/api/entity",
     "/api/neighbourhood",

@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
+import { checkFragment } from './check';
 import { historyFragment, isHistoryTab, type HistoryTab } from './history';
 import { impactFragment } from './impact';
 import { memoryFragment } from './memory';
@@ -51,6 +52,12 @@ export type Route =
   | { view: 'entity'; id: string; tab: EntityTab; options: Record<string, string> }
   | { view: 'unresolved' }
   | { view: 'coverage' }
+  // Its own route rather than a panel on the overview, and the split is the same one `unresolved`
+  // and `coverage` make. The overview reports the freshness sweep, which walks the index's own
+  // cache and therefore cannot see a file that was *added*; this route walks the repository too and
+  // answers a five-valued verdict over both. Folding them would put the smaller answer's two states
+  // where the larger answer's five belong.
+  | { view: 'check' }
   | { view: 'history'; tab: HistoryTab; options: Record<string, string> }
   | { view: 'contracts'; tab: ContractTab; options: Record<string, string> }
   // One route with free options rather than two, and `record` names the one being read. A
@@ -87,6 +94,8 @@ function parse(hash: string): Route {
       return { view: 'unresolved' };
     case 'coverage':
       return { view: 'coverage' };
+    case 'check':
+      return { view: 'check' };
     case 'history': {
       const tab = isHistoryTab(segments[1]) ? segments[1] : 'commits';
       const options: Record<string, string> = {};
@@ -144,6 +153,8 @@ export function href(route: Route): string {
       return '#/unresolved';
     case 'coverage':
       return '#/coverage';
+    case 'check':
+      return checkFragment();
     // Built in `history.ts` rather than here, because the encoding is the part that matters: a
     // path may hold a `#`, and a raw one would be dropped by the browser before the request left.
     case 'history':

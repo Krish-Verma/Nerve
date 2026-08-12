@@ -15,10 +15,12 @@ import { useEffect } from 'react';
 
 import { sessionToken } from './api/client';
 import type { Overview as OverviewData } from './api/types';
+import { sweepLabel } from './check';
 import { count } from './format';
 import { useApi } from './hooks';
 import { href, useRoute, type Route } from './routing';
 import { Omnibox } from './ui/Omnibox';
+import { Check } from './views/Check';
 import { Contracts } from './views/Contracts';
 import { Coverage } from './views/Coverage';
 import { Entity } from './views/Entity';
@@ -110,10 +112,10 @@ export function App() {
 
   if (sessionToken() === null) return <Gate />;
 
-  const drifted =
-    data?.freshness && data.freshness.stale + data.freshness.missing > 0
-      ? data.freshness.stale + data.freshness.missing
-      : 0;
+  // Read off the sweep and labelled as the sweep. `/api/overview` re-hashes the files the index has
+  // a row for and cannot see a file that was *added*, so the rail says what was measured and points
+  // at the screen that judges it rather than pronouncing a verdict it does not have.
+  const sweep = sweepLabel(data?.freshness ?? null);
 
   return (
     <div className="shell">
@@ -147,6 +149,14 @@ export function App() {
             label="Symbols"
             note={data ? count(data.symbols_total) : undefined}
           />
+          {/*
+            Beside the overview rather than in a group of its own, because it is the same subject
+            asked as a judgement: the overview says what the index holds, this says whether any of
+            it can be believed. No count beside it — a verdict is not a number, and the one number
+            a rail could show is the sweep's, which is the half of the answer that cannot see a
+            file the index has never heard of.
+          */}
+          <RailLink to={{ view: 'check' }} current={route.view === 'check'} label="Trust" />
         </div>
 
         {/*
@@ -235,14 +245,20 @@ export function App() {
 
         {data ? (
           <div className="rail__focus">
-            <div className="micro">index state</div>
-            <div className="fact__value">
-              {drifted > 0 ? `${count(drifted)} files have drifted` : 'every file still matches'}
-            </div>
+            <div className="micro">freshness sweep</div>
+            <div className="fact__value">{sweep.label}</div>
             <div className="hash">
               {count(data.assertions_total)} assertions · {count(data.observations_total)}{' '}
               observations
             </div>
+            {/*
+              The sweep is not the verdict, and saying so here is the point. It compares the files
+              the index has a row for, so it cannot see one that was added — an index that grew a
+              hundred modules would show "every indexed file matches" and be out of date.
+            */}
+            <a className="link" href={href({ view: 'check' })}>
+              the verdict
+            </a>
           </div>
         ) : null}
       </nav>
@@ -256,6 +272,8 @@ export function App() {
           <Entity id={route.id} tab={route.tab} options={route.options} />
         ) : route.view === 'coverage' ? (
           <Coverage />
+        ) : route.view === 'check' ? (
+          <Check />
         ) : route.view === 'history' ? (
           <History tab={route.tab} options={route.options} />
         ) : route.view === 'contracts' ? (

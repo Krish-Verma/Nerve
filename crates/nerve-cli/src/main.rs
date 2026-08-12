@@ -17,6 +17,9 @@ use nerve_core::vocab::{MemoryScope, MemoryStatus};
 use nerve_core::Relation;
 use nerve_index::config;
 use nerve_index::error::IndexError;
+// The five-valued trust verdict, and the judgement behind it, are `nerve-index`'s — so `check`,
+// `/api/check` and `nerve_check` cannot drift into three answers to *can I trust this index?*
+use nerve_index::Verdict;
 // The one history *judgment* — whether an earlier change may exist and not be recorded — is derived
 // in `nerve-store` beside `IngestRow` and never here. See the note above `print_refusals`.
 use nerve_store::earlier_changes_may_exist;
@@ -1999,212 +2002,62 @@ fn run_status(output: &Output, path: &Path) -> i32 {
 //
 // One question — *can I trust this index right now?* — and no new analysis to answer it. Every
 // fact below is already produced by `nerve_store::status`, `nerve_index::index_freshness` and
-// `nerve_index::untracked_files`; what this section adds is the judgement over them and the exit
-// code that carries it.
+// `nerve_index::untracked_files`.
+//
+// The **judgement** over them moved to `nerve_index::trust` when `/api/check` and `nerve_check`
+// arrived: three copies of a five-valued verdict is three places for one of them to answer `stale`
+// where another answers `unverified`, and a cross-surface disagreement about whether an answer can
+// be believed is worse than any disagreement about the answer itself. What is left in this section
+// is what only a command has — where it was pointed, whether there is a database to judge, the
+// human rendering, and the exit code.
 
 /// How many indexed files `nerve check` re-hashes before it reports a partial sweep.
 ///
 /// The bound `/api/overview` already uses, for the same reason: a repository can hold a hundred
 /// thousand files and this answer is wanted in a pre-commit hook. When the cap bites, the sweep
-/// is deliberately **not** reported as clean — see [`judge_freshness`].
-const CHECK_PROBE_CAP: usize = 5_000;
+/// is deliberately **not** reported as clean — see [`nerve_index::trust::judge_freshness`].
+///
+/// The constant itself lives in `nerve-index` now, beside the judgement it bounds, so `check`,
+/// `/api/check` and `nerve_check` sweep the same amount of tree before they report a partial one.
+const CHECK_PROBE_CAP: usize = nerve_index::TRUST_PROBE_CAP;
 
 /// How many added paths the human output names before it stops and gives a count.
 const CHECK_ADDED_SHOWN: usize = 10;
 
-/// What `nerve check` decided.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Verdict {
-    /// Every indexed file still hashes to what was extracted, and nothing new is untracked.
-    Current,
-    /// There is nothing to judge: no database, no schema, or nothing ever indexed.
-    NoIndex,
-    /// An index exists but cannot be used as it stands: the schema is behind, or a run is open.
-    Unusable,
-    /// The index is internally sound and describes a tree that has moved on.
-    Stale,
-    /// The index is internally sound and the sweep could not establish whether it is current.
-    ///
-    /// Separate from [`Verdict::Stale`] because the evidence is different — nothing was observed
-    /// to have changed, some of the tree was simply never looked at — and identical to it in exit
-    /// code, because "I could not check" is not a clean bill of health.
-    Unverified,
-}
-
-impl Verdict {
-    /// Canonical name used in rendered and `--json` output.
-    fn as_str(self) -> &'static str {
-        match self {
-            Verdict::Current => "current",
-            Verdict::NoIndex => "no_index",
-            Verdict::Unusable => "unusable",
-            Verdict::Stale => "stale",
-            Verdict::Unverified => "unverified",
-        }
-    }
-
-    /// The exit code this verdict carries. The only place the mapping exists.
-    fn exit_code(self, allow_stale: bool) -> i32 {
-        match self {
-            Verdict::Current => exit::SUCCESS,
-            Verdict::NoIndex => exit::NO_INDEX,
-            Verdict::Unusable => exit::PARTIAL_INDEX,
-            Verdict::Stale | Verdict::Unverified => {
-                if allow_stale {
-                    exit::SUCCESS
-                } else {
-                    exit::STALE_INDEX
-                }
+/// The exit code a verdict carries. **The only place that mapping exists.**
+///
+/// It stays in the CLI rather than moving to `nerve-index` with the verdict, because an exit code
+/// is a shell's vocabulary: HTTP has none, MCP has none, and a `Verdict::exit_code` on the shared
+/// type would invite a surface with a payload to encode staleness as a failure status. The
+/// judgement is shared; what is done about it is each surface's own.
+///
+/// `--allow-stale` downgrades the two freshness verdicts and nothing else. A missing index is
+/// still a missing index however confident the caller is that the tree has not moved.
+fn verdict_exit_code(verdict: Verdict, allow_stale: bool) -> i32 {
+    match verdict {
+        Verdict::Current => exit::SUCCESS,
+        Verdict::NoIndex => exit::NO_INDEX,
+        Verdict::Unusable => exit::PARTIAL_INDEX,
+        Verdict::Stale | Verdict::Unverified => {
+            if allow_stale {
+                exit::SUCCESS
+            } else {
+                exit::STALE_INDEX
             }
         }
     }
 }
 
-/// Whether the schema on disk is one this build can read at all.
-///
-/// Answered on its own, and answered first, because every other question below reads a table:
-/// a database written by an older or newer build may not have the tables `status` queries, and
-/// reporting that as an internal error would tell a script Nerve broke when in fact the index
-/// needs migrating.
-fn judge_schema(schema_version: Option<i64>) -> Option<(Verdict, String)> {
-    let Some(version) = schema_version else {
-        return Some((
-            Verdict::NoIndex,
-            "the database has never been migrated; run `nerve init`".to_string(),
-        ));
-    };
-    if version != nerve_store::SCHEMA_VERSION {
-        return Some((
-            Verdict::Unusable,
-            format!(
-                "schema version {version} is not the supported version {}; \
-                 run `nerve index` to migrate",
-                nerve_store::SCHEMA_VERSION
-            ),
-        ));
-    }
-    None
-}
-
-/// Whether the index is usable at all, before anything is compared against the disk.
-///
-/// `None` means there is an index worth measuring the tree against; anything else is a refusal
-/// and the freshness sweep is not run, because re-hashing a tree to compare it with a graph that
-/// cannot be read would be work in service of an answer nobody can use.
-fn judge_index(
-    schema_version: Option<i64>,
-    ever_indexed: bool,
-    runs_running: usize,
-) -> Option<(Verdict, String)> {
-    if let Some(refusal) = judge_schema(schema_version) {
-        return Some(refusal);
-    }
-    if !ever_indexed {
-        return Some((
-            Verdict::NoIndex,
-            "the database is initialized and nothing has been indexed; run `nerve index`"
-                .to_string(),
-        ));
-    }
-    if runs_running > 0 {
-        return Some((
-            Verdict::Unusable,
-            format!(
-                "{runs_running} extractor run(s) are still marked running; the last index did \
-                 not finish, so the graph is a half-written one"
-            ),
-        ));
-    }
-    None
-}
-
-/// Whether the index still describes the tree, given the sweep and the untracked walk.
-///
-/// The five freshness counts and the added count fall into two families, and they are kept apart
-/// because the evidence behind them is different:
-///
-/// - **observed divergence** — `stale` (the file changed), `missing` (the indexed file is gone)
-///   and `added` (a file exists that no row describes). Each is a measurement, and any of them
-///   means the graph and the tree disagree.
-/// - **not established** — `refused` (the path-safety check would not read it), `unreadable`
-///   (allowed but the bytes would not come) and `truncated` (the cap stopped the sweep). Nothing
-///   here says the index is wrong; it says this run did not find out.
-///
-/// Both exit non-zero. The second family is the reason a truncated sweep can never report a clean
-/// result: a partial sweep that returned `0` would be a clean bill of health issued without
-/// looking, which is exactly the failure mode `check` exists to prevent.
-fn judge_freshness(freshness: &nerve_index::IndexFreshness, added: usize) -> (Verdict, String) {
-    if freshness.stale + freshness.missing + added > 0 {
-        return (
-            Verdict::Stale,
-            format!(
-                "{} indexed file(s) changed, {} no longer exist and {} file(s) are not indexed \
-                 at all",
-                freshness.stale, freshness.missing, added
-            ),
-        );
-    }
-    if freshness.truncated {
-        return (
-            Verdict::Unverified,
-            format!(
-                "the sweep compared {} of {} indexed file(s) before reaching its {CHECK_PROBE_CAP}-file \
-                 cap; the rest were never looked at",
-                freshness.files_probed, freshness.files_total
-            ),
-        );
-    }
-    if freshness.refused + freshness.unreadable > 0 {
-        return (
-            Verdict::Unverified,
-            format!(
-                "{} indexed file(s) were refused by the path-safety check and {} could not be \
-                 read, so they were never compared",
-                freshness.refused, freshness.unreadable
-            ),
-        );
-    }
-    (
-        Verdict::Current,
-        format!(
-            "{} indexed file(s) still hash to what was extracted, and nothing in the tree is \
-             untracked",
-            freshness.fresh
-        ),
-    )
-}
-
-/// Runs left open, counted once whether they reach us through `runs` or through `last_run`.
-fn runs_still_running(report: &nerve_store::StatusReport) -> usize {
-    let mut count = report
-        .runs
-        .iter()
-        .filter(|run| run.status == "running")
-        .count();
-    if let Some(last) = &report.last_run {
-        if last.status == "running" && !report.runs.iter().any(|run| run.run_id == last.run_id) {
-            count += 1;
-        }
-    }
-    count
-}
-
-/// What the sweep measured, or nothing when there was no index to sweep.
-struct CheckMeasurement {
-    freshness: nerve_index::IndexFreshness,
-    untracked: nerve_index::UntrackedFiles,
-}
-
 /// One complete answer from `nerve check`, in the shape the renderer needs it.
+///
+/// The judgement itself is [`nerve_index::TrustReport`], produced by `nerve-index` and rendered
+/// here. What this adds is what only a command has: where it was pointed, whether a database was
+/// found at all, and the `--allow-stale` flag.
 struct CheckAnswer<'a> {
     root: &'a Path,
     db_path: Option<&'a Path>,
-    verdict: Verdict,
-    reason: String,
     allow_stale: bool,
-    schema_version: Option<i64>,
-    runs_running: usize,
-    measured: Option<CheckMeasurement>,
+    report: nerve_index::TrustReport,
 }
 
 /// Render one verdict and return its exit code.
@@ -2216,14 +2069,14 @@ struct CheckAnswer<'a> {
 fn render_check(output: &Output, answer: &CheckAnswer<'_>) -> i32 {
     let root = answer.root;
     let db_path = answer.db_path;
-    let verdict = answer.verdict;
-    let reason = answer.reason.as_str();
+    let verdict = answer.report.verdict;
+    let reason = answer.report.reason.as_str();
     let allow_stale = answer.allow_stale;
-    let schema_version = answer.schema_version;
-    let runs_running = answer.runs_running;
-    let measured = answer.measured.as_ref();
+    let schema_version = answer.report.schema_version;
+    let runs_running = answer.report.runs_running;
+    let measured = answer.report.measured.as_ref();
 
-    let code = verdict.exit_code(allow_stale);
+    let code = verdict_exit_code(verdict, allow_stale);
     let downgraded = code == exit::SUCCESS && verdict != Verdict::Current;
 
     match db_path {
@@ -2324,26 +2177,25 @@ fn render_check(output: &Output, answer: &CheckAnswer<'_>) -> i32 {
 }
 
 /// Judge whether the index can be trusted, and exit with the answer.
+///
+/// The judgement is [`nerve_index::trust`]'s, not this function's. What is left here is what only a
+/// command has to decide: where it was pointed, whether a database exists to judge at all, opening
+/// that database `query_only`, and turning the verdict into an exit code.
 fn run_check(output: &Output, path: &Path, allow_stale: bool) -> i32 {
-    /// One unmeasured verdict: reached before, or instead of, the freshness sweep.
-    fn unmeasured<'a>(
-        root: &'a Path,
-        db_path: Option<&'a Path>,
-        verdict: Verdict,
-        reason: String,
-        allow_stale: bool,
-        schema_version: Option<i64>,
-        runs_running: usize,
-    ) -> CheckAnswer<'a> {
+    /// The one refusal reached before there is anything to judge.
+    fn nothing_to_judge<'a>(root: &'a Path, allow_stale: bool, reason: String) -> CheckAnswer<'a> {
         CheckAnswer {
             root,
-            db_path,
-            verdict,
-            reason,
+            db_path: None,
             allow_stale,
-            schema_version,
-            runs_running,
-            measured: None,
+            report: nerve_index::TrustReport {
+                verdict: Verdict::NoIndex,
+                reason,
+                schema_version: None,
+                runs_running: 0,
+                probe_cap: CHECK_PROBE_CAP,
+                measured: None,
+            },
         }
     }
 
@@ -2352,15 +2204,7 @@ fn run_check(output: &Output, path: &Path, allow_stale: bool) -> i32 {
         Err(err) => {
             return render_check(
                 output,
-                &unmeasured(
-                    path,
-                    None,
-                    Verdict::NoIndex,
-                    format!("{}: {err}", path.display()),
-                    allow_stale,
-                    None,
-                    0,
-                ),
+                &nothing_to_judge(path, allow_stale, format!("{}: {err}", path.display())),
             )
         }
     };
@@ -2368,14 +2212,10 @@ fn run_check(output: &Output, path: &Path, allow_stale: bool) -> i32 {
     if !db_path.exists() {
         return render_check(
             output,
-            &unmeasured(
+            &nothing_to_judge(
                 &root,
-                None,
-                Verdict::NoIndex,
-                "there is no Nerve database here; run `nerve init` then `nerve index`".to_string(),
                 allow_stale,
-                None,
-                0,
+                "there is no Nerve database here; run `nerve init` then `nerve index`".to_string(),
             ),
         );
     }
@@ -2390,85 +2230,17 @@ fn run_check(output: &Output, path: &Path, allow_stale: bool) -> i32 {
         Err(err) => return output.failure("check", exit::INTERNAL, &err.to_string()),
     };
 
-    let schema_version = match nerve_store::schema_version(&conn) {
-        Ok(version) => version,
-        Err(err) => return output.failure("check", exit::INTERNAL, &err.to_string()),
-    };
-    if let Some((verdict, reason)) = judge_schema(schema_version) {
-        return render_check(
-            output,
-            &unmeasured(
-                &root,
-                Some(&db_path),
-                verdict,
-                reason,
-                allow_stale,
-                schema_version,
-                0,
-            ),
-        );
-    }
-
-    let report = match nerve_store::status(&conn) {
+    let report = match nerve_index::trust(&conn, &root, CHECK_PROBE_CAP) {
         Ok(report) => report,
-        Err(err) => return output.failure("check", exit::INTERNAL, &err.to_string()),
-    };
-    let runs_running = runs_still_running(&report);
-    let repository = match nerve_store::repository(&conn) {
-        Ok(repository) => repository,
-        Err(err) => return output.failure("check", exit::INTERNAL, &err.to_string()),
-    };
-    let ever_indexed = report.last_run.is_some() && repository.is_some();
-    if let Some((verdict, reason)) = judge_index(schema_version, ever_indexed, runs_running) {
-        return render_check(
-            output,
-            &unmeasured(
-                &root,
-                Some(&db_path),
-                verdict,
-                reason,
-                allow_stale,
-                schema_version,
-                runs_running,
-            ),
-        );
-    }
-    let repo_id = repository
-        .expect("ever_indexed implies a repository row")
-        .repo_id;
-
-    // Freshness is computed by re-reading the repository, so the reader is built from the
-    // repository root and enforces the Slice 1 path rules on every path the database supplies.
-    let prober = match nerve_index::RepositoryProber::new(&root) {
-        Ok(prober) => prober,
         Err(err) => return output.failure("check", error_exit_code(&err), &err.to_string()),
     };
-    let freshness = match nerve_index::index_freshness(&conn, &repo_id, &prober, CHECK_PROBE_CAP) {
-        Ok(freshness) => freshness,
-        Err(err) => return output.failure("check", exit::INTERNAL, &err.to_string()),
-    };
-    // The sweep above walks the cache, so it can only ask about files the index already knows.
-    // A file added since the last index has no row to compare and would otherwise be invisible.
-    let untracked = match nerve_index::untracked_files(&root, &conn, &repo_id) {
-        Ok(untracked) => untracked,
-        Err(err) => return output.failure("check", error_exit_code(&err), &err.to_string()),
-    };
-
-    let (verdict, reason) = judge_freshness(&freshness, untracked.added.len());
     render_check(
         output,
         &CheckAnswer {
             root: &root,
             db_path: Some(&db_path),
-            verdict,
-            reason,
             allow_stale,
-            schema_version,
-            runs_running,
-            measured: Some(CheckMeasurement {
-                freshness,
-                untracked,
-            }),
+            report,
         },
     )
 }
@@ -7431,163 +7203,69 @@ mod tests {
         assert_eq!(exit::INTERNAL, 70);
     }
 
-    fn swept(fresh: usize) -> nerve_index::IndexFreshness {
-        nerve_index::IndexFreshness {
-            files_total: fresh,
-            files_probed: fresh,
-            fresh,
-            ..nerve_index::IndexFreshness::default()
-        }
-    }
-
+    /// The verdict-to-exit-code mapping, which is the only part of `check`'s judgement that is
+    /// still the CLI's.
+    ///
+    /// The judgements themselves — schema, index, freshness — moved to `nerve_index::trust` with
+    /// their tests, because `/api/check` and `nerve_check` answer the same question and three
+    /// copies of a five-valued verdict is three places for one to drift. What could not move is
+    /// this: an exit code is a shell's vocabulary and no other surface has one.
     #[test]
     fn every_verdict_maps_to_exactly_one_exit_code() {
-        assert_eq!(Verdict::Current.exit_code(false), exit::SUCCESS);
-        assert_eq!(Verdict::NoIndex.exit_code(false), exit::NO_INDEX);
-        assert_eq!(Verdict::Unusable.exit_code(false), exit::PARTIAL_INDEX);
-        assert_eq!(Verdict::Stale.exit_code(false), exit::STALE_INDEX);
-        assert_eq!(Verdict::Unverified.exit_code(false), exit::STALE_INDEX);
+        assert_eq!(verdict_exit_code(Verdict::Current, false), exit::SUCCESS);
+        assert_eq!(verdict_exit_code(Verdict::NoIndex, false), exit::NO_INDEX);
+        assert_eq!(
+            verdict_exit_code(Verdict::Unusable, false),
+            exit::PARTIAL_INDEX
+        );
+        assert_eq!(verdict_exit_code(Verdict::Stale, false), exit::STALE_INDEX);
+        assert_eq!(
+            verdict_exit_code(Verdict::Unverified, false),
+            exit::STALE_INDEX
+        );
+
+        // Every verdict the vocabulary has is mapped, so a sixth one cannot arrive and be
+        // silently reported as a success by a `_` arm nobody noticed.
+        for verdict in Verdict::ALL {
+            let code = verdict_exit_code(verdict, false);
+            assert_eq!(
+                code == exit::SUCCESS,
+                verdict.is_current(),
+                "{verdict} exits {code}"
+            );
+        }
     }
 
     /// `--allow-stale` downgrades staleness and nothing else. A missing index is still a missing
     /// index however confident the caller is that the tree has not moved.
+    ///
+    /// **The two it downgrades keep different verdicts.** They share an exit code because a shell
+    /// has one way to say "do not proceed"; that is a property of exit codes, and the surfaces
+    /// with a payload report `stale` and `unverified` apart.
     #[test]
     fn allow_stale_downgrades_only_the_two_freshness_verdicts() {
-        assert_eq!(Verdict::Stale.exit_code(true), exit::SUCCESS);
-        assert_eq!(Verdict::Unverified.exit_code(true), exit::SUCCESS);
-        assert_eq!(Verdict::NoIndex.exit_code(true), exit::NO_INDEX);
-        assert_eq!(Verdict::Unusable.exit_code(true), exit::PARTIAL_INDEX);
-        assert_eq!(Verdict::Current.exit_code(true), exit::SUCCESS);
-    }
-
-    #[test]
-    fn an_index_that_matches_the_tree_is_current() {
-        let (verdict, _) = judge_freshness(&swept(12), 0);
-        assert_eq!(verdict, Verdict::Current);
-        assert_eq!(verdict.exit_code(false), exit::SUCCESS);
-    }
-
-    /// Changed, deleted and added are three different observations and one verdict. Each is
-    /// asserted on its own so that dropping any single one from the sum is a test failure.
-    #[test]
-    fn changed_deleted_and_added_each_make_the_index_stale() {
-        let mut changed = swept(12);
-        changed.fresh = 11;
-        changed.stale = 1;
-        assert_eq!(judge_freshness(&changed, 0).0, Verdict::Stale);
-
-        let mut deleted = swept(12);
-        deleted.fresh = 11;
-        deleted.missing = 1;
-        assert_eq!(judge_freshness(&deleted, 0).0, Verdict::Stale);
+        assert_eq!(verdict_exit_code(Verdict::Stale, true), exit::SUCCESS);
+        assert_eq!(verdict_exit_code(Verdict::Unverified, true), exit::SUCCESS);
+        assert_eq!(verdict_exit_code(Verdict::NoIndex, true), exit::NO_INDEX);
+        assert_eq!(
+            verdict_exit_code(Verdict::Unusable, true),
+            exit::PARTIAL_INDEX
+        );
+        assert_eq!(verdict_exit_code(Verdict::Current, true), exit::SUCCESS);
 
         assert_eq!(
-            judge_freshness(&swept(12), 1).0,
-            Verdict::Stale,
-            "an added file is not in the cache the sweep walks, so only the untracked walk sees it"
+            verdict_exit_code(Verdict::Stale, false),
+            verdict_exit_code(Verdict::Unverified, false),
+            "the shared exit code is the thing that makes the two names load-bearing elsewhere"
         );
+        assert_ne!(Verdict::Stale.as_str(), Verdict::Unverified.as_str());
     }
 
-    /// The rule the whole command rests on: a sweep that stopped early has not seen the tree, so
-    /// it cannot certify it. Exercised here rather than end to end because forcing the cap needs
-    /// a repository larger than the probe cap.
+    /// The probe cap `check` sweeps with is the shared one, not a second constant beside it.
     #[test]
-    fn a_truncated_sweep_is_never_a_clean_result() {
-        let truncated = nerve_index::IndexFreshness {
-            files_total: CHECK_PROBE_CAP * 2,
-            files_probed: CHECK_PROBE_CAP,
-            fresh: CHECK_PROBE_CAP,
-            truncated: true,
-            ..nerve_index::IndexFreshness::default()
-        };
-        let (verdict, reason) = judge_freshness(&truncated, 0);
-        assert_ne!(verdict, Verdict::Current);
-        assert_eq!(verdict, Verdict::Unverified);
-        assert_ne!(verdict.exit_code(false), exit::SUCCESS);
-        assert_eq!(verdict.exit_code(false), exit::STALE_INDEX);
-        assert!(reason.contains("never looked at"), "{reason}");
-    }
-
-    /// A file the sweep was not allowed to read, or could not, is not a fresh file.
-    #[test]
-    fn a_file_the_sweep_could_not_compare_is_not_counted_as_fresh() {
-        let mut refused = swept(12);
-        refused.fresh = 11;
-        refused.refused = 1;
-        assert_eq!(judge_freshness(&refused, 0).0, Verdict::Unverified);
-
-        let mut unreadable = swept(12);
-        unreadable.fresh = 11;
-        unreadable.unreadable = 1;
-        assert_eq!(judge_freshness(&unreadable, 0).0, Verdict::Unverified);
-    }
-
-    /// Observed divergence outranks "could not tell": the caller can act on the first.
-    #[test]
-    fn observed_staleness_outranks_an_incomplete_sweep() {
-        let mut both = swept(12);
-        both.fresh = 10;
-        both.stale = 1;
-        both.refused = 1;
-        both.truncated = true;
-        assert_eq!(judge_freshness(&both, 0).0, Verdict::Stale);
-    }
-
-    /// The schema gate is the one question answered before any table is read, so it is asserted
-    /// on its own as well as through [`judge_index`].
-    #[test]
-    fn the_schema_is_judged_before_any_table_is_queried() {
-        assert_eq!(judge_schema(Some(nerve_store::SCHEMA_VERSION)), None);
-        assert_eq!(judge_schema(None).unwrap().0, Verdict::NoIndex);
-        assert_eq!(
-            judge_schema(Some(nerve_store::SCHEMA_VERSION + 1))
-                .unwrap()
-                .0,
-            Verdict::Unusable,
-            "a database from a newer build is unusable, not merely stale"
-        );
-    }
-
-    #[test]
-    fn an_index_is_judged_before_the_tree_is_swept() {
-        assert_eq!(
-            judge_index(Some(nerve_store::SCHEMA_VERSION), true, 0),
-            None
-        );
-
-        let (verdict, _) = judge_index(None, false, 0).expect("no schema is not judgeable");
-        assert_eq!(verdict, Verdict::NoIndex);
-
-        let (verdict, reason) = judge_index(Some(nerve_store::SCHEMA_VERSION - 1), true, 0)
-            .expect("an old schema is not judgeable");
-        assert_eq!(verdict, Verdict::Unusable);
-        assert_eq!(verdict.exit_code(false), exit::PARTIAL_INDEX);
-        assert!(reason.contains("migrate"), "{reason}");
-
-        let (verdict, _) = judge_index(Some(nerve_store::SCHEMA_VERSION), false, 0)
-            .expect("an empty index is not judgeable");
-        assert_eq!(verdict, Verdict::NoIndex);
-        assert_eq!(verdict.exit_code(false), exit::NO_INDEX);
-
-        let (verdict, reason) = judge_index(Some(nerve_store::SCHEMA_VERSION), true, 1)
-            .expect("an open run is not judgeable");
-        assert_eq!(verdict, Verdict::Unusable);
-        assert!(reason.contains("did not finish"), "{reason}");
-    }
-
-    #[test]
-    fn verdict_names_are_distinct_and_stable() {
-        let names = [
-            Verdict::Current.as_str(),
-            Verdict::NoIndex.as_str(),
-            Verdict::Unusable.as_str(),
-            Verdict::Stale.as_str(),
-            Verdict::Unverified.as_str(),
-        ];
-        assert_eq!(
-            names,
-            ["current", "no_index", "unusable", "stale", "unverified"]
-        );
+    fn the_probe_cap_is_the_one_every_surface_sweeps_with() {
+        assert_eq!(CHECK_PROBE_CAP, nerve_index::TRUST_PROBE_CAP);
+        assert_eq!(CHECK_PROBE_CAP, 5_000);
     }
 
     #[test]

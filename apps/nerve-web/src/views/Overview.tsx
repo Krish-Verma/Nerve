@@ -8,7 +8,9 @@
 
 import type { Resource } from '../hooks';
 import type { FreshnessReport, Overview as OverviewData, RunSummary } from '../api/types';
+import { sweepLabel } from '../check';
 import { ago, bytes, count, stamp } from '../format';
+import { href } from '../routing';
 import { Chip, Def, Defs, Empty, Failure, Figure, Loading, Panel, Tally } from '../ui/parts';
 
 function basename(path: string | null): string {
@@ -105,6 +107,7 @@ export function Overview({ resource }: { resource: Resource<OverviewData> }) {
 
   const data = state.data;
   const reading = verdict(data.freshness);
+  const sweep = sweepLabel(data.freshness);
   const kinds = sorted(data.entities_by_kind);
   const relations = sorted(data.assertions_by_relation);
 
@@ -140,13 +143,24 @@ export function Overview({ resource }: { resource: Resource<OverviewData> }) {
       <div className="stack">
         <section className="panel">
           <div className="panel__body" style={{ display: 'grid', gap: 12 }}>
+            {/*
+              The chip says what was *swept*, and deliberately claims no verdict about the index.
+              This endpoint re-hashes the files the index has a row for; a file added since the last
+              index has no row, is never probed, and is invisible here — so an index that grew a
+              hundred modules would light this chip green while being out of date. The verdict that
+              walks the repository as well lives one screen over, and the link goes there rather
+              than this panel guessing at it.
+
+              The three labels also keep `refused`/`unreadable` from reading as drift: those files
+              were never compared, which is not the same finding as a file that changed.
+            */}
             <div className="row row--wrap">
-              <Chip tone={reading.ok ? 'fresh' : 'stale'}>
+              <Chip tone={sweep.tone}>
                 <span className="chip__dot" />
-                {reading.ok ? 'index is current' : 'index has drifted'}
+                {sweep.label}
               </Chip>
               {data.freshness?.truncated ? (
-                <Chip tone="quiet">
+                <Chip tone="unknown">
                   partial sweep · {count(data.freshness.files_probed)} of{' '}
                   {count(data.freshness.files_total)} files
                 </Chip>
@@ -158,6 +172,12 @@ export function Overview({ resource }: { resource: Resource<OverviewData> }) {
             </div>
             <p style={{ fontSize: 17, lineHeight: 1.45 }}>{reading.text}</p>
             {data.freshness ? <Gauge freshness={data.freshness} /> : null}
+            <p className="prose">
+              This is the freshness sweep and not the verdict: it compares the files the index has a
+              row for, so a file added since the last index has nothing to compare and does not
+              appear here. <a className="link" href={href({ view: 'check' })}>Can this index be
+              trusted?</a> walks the repository too and answers one of five verdicts.
+            </p>
           </div>
         </section>
 
