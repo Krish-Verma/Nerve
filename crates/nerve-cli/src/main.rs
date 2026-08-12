@@ -337,8 +337,15 @@ enum Command {
     },
     /// Speak the Model Context Protocol on stdin and stdout, for an agent.
     ///
-    /// One tool, `nerve_investigate`: the MCP counterpart of `nerve why`. Read-only, offline,
-    /// stdio only — no socket, no port, no outbound connection.
+    /// Eight tools, listed by `tools/list` and pinned by `nerve_server::mcp::TOOL_NAMES`. The
+    /// first was `nerve_investigate`, the MCP counterpart of `nerve why`; the rest were admitted
+    /// one at a time, each having to show a materially different input/output contract rather than
+    /// being an existing tool with a flag. Read-only, offline, stdio only — no socket, no port, no
+    /// outbound connection.
+    ///
+    /// The count is deliberately not repeated as a list here. This comment said "One tool" from
+    /// Slice 8a until 2026-08-11, four slices after that stopped being true, because a prose count
+    /// beside a vocabulary is a second copy of it that nothing checks.
     ///
     /// Stdout is the protocol stream for the lifetime of the process, so nothing else is
     /// written to it. Responses are bounded and say when they were cut, and every value that
